@@ -59,6 +59,68 @@
         <span class="meta-badge consolidated" title="Зафиксированный релиз Версия 1.0">v1.0</span>
       </header>
 
+      <!-- Live Meta-Plasticity & Learning Status Card -->
+      <section class="card" id="metaLearningCard">
+        <div class="card-title">
+          <span>Мета-Чутьё ИИ (Контроль дообучения)</span>
+          <span id="metaActiveBadge" class="meta-badge learning">● ОБУЧЕНИЕ ИДЁТ</span>
+        </div>
+
+        <div id="metaModeBanner" class="meta-mode-banner learning">
+          🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ
+        </div>
+
+        <div class="meta-bars-grid">
+          <div class="meta-bar-item">
+            <div class="meta-bar-header">
+              <span>Потребность в дообучении (Чутьё):</span>
+              <strong id="metaNeedVal">88%</strong>
+            </div>
+            <div class="meta-bar-track">
+              <div id="metaNeedFill" class="meta-bar-fill" style="inline-size: 88%;"></div>
+            </div>
+          </div>
+
+          <div class="meta-bar-item">
+            <div class="meta-bar-header">
+              <span>Навык «Рефлекс жука» (Переворот со спины):</span>
+              <strong id="metaRightingVal">20% (0 раз)</strong>
+            </div>
+            <div class="meta-bar-track">
+              <div id="metaRightingFill" class="meta-bar-fill beetle" style="inline-size: 20%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="metaReasonBox" class="meta-reason-box">
+          Формирование базового моторного навыка шага и наведения на цель
+        </div>
+
+        <div class="control-field" style="margin-block-start: 4px;">
+          <label>Амбиция обучения (баланс минимум / скачок / максимум):</label>
+          <div class="speed-row" id="ambitionButtons">
+            <button class="btn active" data-ambition="min" title="Минимум (0.18 м/с): заморозить веса сразу после освоения базового аккуратного шага">🐢 Минимум</button>
+            <button class="btn" data-ambition="bound" title="Бодрый скачок (0.34 м/с): учить энергичный пружинистый прыжок к цели перед фиксацией навыка">🐇 Скачок</button>
+            <button class="btn" data-ambition="turbo" title="Турбо-галоп (0.46 м/с): доучивать мощный скоростной галоп с высокой частотой шага">🚀 Галоп</button>
+            <button class="btn" data-ambition="infinite" title="Вечное ИИ: никогда не выключать обучение — непрерывный поиск максимальной скорости">♾️ Вечное</button>
+          </div>
+        </div>
+
+        <div class="control-field">
+          <label for="rangeAmbition">
+            <span>Порог мастерства (откл. обучения):</span>
+            <strong id="labelAmbitionVal">0.18 м/с (Минимум / Шаг)</strong>
+          </label>
+          <input type="range" id="rangeAmbition" min="0.15" max="0.55" step="0.02" value="0.18">
+        </div>
+
+        <div class="btn-row">
+          <button id="btnToggleFreeze" class="btn" title="Принудительно зафиксировать текущую походку ИИ или вручную разбудить дообучение">
+            🔒 Заморозить веса сейчас
+          </button>
+        </div>
+      </section>
+
       <!-- Experiment Configuration Card -->
       <section class="card">
         <div class="card-title">
@@ -135,68 +197,6 @@
         <div class="checkbox-row">
           <label><input type="checkbox" id="chkFollowLeader" checked> Камера за шагоходом + целью</label>
           <label><input type="checkbox" id="chkShowForces" checked> Векторы сил (N, F_тр)</label>
-        </div>
-      </section>
-
-      <!-- Live Meta-Plasticity & Learning Status Card -->
-      <section class="card" id="metaLearningCard">
-        <div class="card-title">
-          <span>Мета-Чутьё ИИ (Контроль дообучения)</span>
-          <span id="metaActiveBadge" class="meta-badge learning">● ОБУЧЕНИЕ ИДЁТ</span>
-        </div>
-
-        <div id="metaModeBanner" class="meta-mode-banner learning">
-          🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ
-        </div>
-
-        <div class="meta-bars-grid">
-          <div class="meta-bar-item">
-            <div class="meta-bar-header">
-              <span>Потребность в дообучении (Чутьё):</span>
-              <strong id="metaNeedVal">88%</strong>
-            </div>
-            <div class="meta-bar-track">
-              <div id="metaNeedFill" class="meta-bar-fill" style="inline-size: 88%;"></div>
-            </div>
-          </div>
-
-          <div class="meta-bar-item">
-            <div class="meta-bar-header">
-              <span>Навык «Рефлекс жука» (Переворот со спины):</span>
-              <strong id="metaRightingVal">20% (0 раз)</strong>
-            </div>
-            <div class="meta-bar-track">
-              <div id="metaRightingFill" class="meta-bar-fill beetle" style="inline-size: 20%;"></div>
-            </div>
-          </div>
-        </div>
-
-        <div id="metaReasonBox" class="meta-reason-box">
-          Формирование базового моторного навыка шага и наведения на цель
-        </div>
-
-        <div class="control-field" style="margin-block-start: 4px;">
-          <label>Амбиция обучения (баланс минимум / скачок / максимум):</label>
-          <div class="speed-row" id="ambitionButtons">
-            <button class="btn active" data-ambition="min" title="Минимум (0.18 м/с): заморозить веса сразу после освоения базового аккуратного шага">🐢 Минимум</button>
-            <button class="btn" data-ambition="bound" title="Бодрый скачок (0.34 м/с): учить энергичный пружинистый прыжок к цели перед фиксацией навыка">🐇 Скачок</button>
-            <button class="btn" data-ambition="turbo" title="Турбо-галоп (0.46 м/с): доучивать мощный скоростной галоп с высокой частотой шага">🚀 Галоп</button>
-            <button class="btn" data-ambition="infinite" title="Вечное ИИ: никогда не выключать обучение — непрерывный поиск максимальной скорости">♾️ Вечное</button>
-          </div>
-        </div>
-
-        <div class="control-field">
-          <label for="rangeAmbition">
-            <span>Порог мастерства (откл. обучения):</span>
-            <strong id="labelAmbitionVal">0.18 м/с (Минимум / Шаг)</strong>
-          </label>
-          <input type="range" id="rangeAmbition" min="0.15" max="0.55" step="0.02" value="0.18">
-        </div>
-
-        <div class="btn-row">
-          <button id="btnToggleFreeze" class="btn" title="Принудительно зафиксировать текущую походку ИИ или вручную разбудить дообучение">
-            🔒 Заморозить веса сейчас
-          </button>
         </div>
       </section>
 
