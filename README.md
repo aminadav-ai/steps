@@ -1,4 +1,4 @@
-# STEPS // 3D Physics & Neural Locomotion Laboratory
+# STEPS // 3D Physics & AI Lab
 
 [![Live Demo](https://img.shields.io/badge/Live_Demo-GitHub_Pages-10b981?style=for-the-badge&logo=github)](https://aminadav-ai.github.io/steps/)
 [![Release](https://img.shields.io/badge/Release-v1.0.0-38bdf8?style=for-the-badge)](https://github.com/aminadav-ai/steps/releases/tag/v1.0.0)
@@ -9,7 +9,7 @@
 
 > **🌐 Live Interactive Laboratory:** **[https://aminadav-ai.github.io/steps/](https://aminadav-ai.github.io/steps/)**
 
-![STEPS — 3D Physics & Neural Locomotion Laboratory](./assets/screenshot.png)
+![STEPS // 3D Physics & AI Lab](./assets/screenshot.png)
 
 **STEPS** is an interactive, zero-dependency 3D physics and reinforcement learning laboratory running directly in the browser. A single multi-legged creature learns from scratch in real time how to coordinate its muscles, push against the floor using true Coulomb friction, steer toward food targets, and self-right when overturned—with **zero keyframed animations or hidden external forces**.
 
