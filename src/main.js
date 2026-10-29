@@ -25,6 +25,7 @@ const nnDimLabel = document.getElementById('nnDimLabel');
 const btnNewExperiment = document.getElementById('btnNewExperiment');
 const btnPause = document.getElementById('btnPause');
 const btnStepOnce = document.getElementById('btnStepOnce');
+const btnUprightWalker = document.getElementById('btnUprightWalker');
 const btnFastTrain = document.getElementById('btnFastTrain');
 const speedButtons = document.getElementById('speedButtons');
 const rangeFriction = document.getElementById('rangeFriction');
@@ -90,6 +91,7 @@ async function startNewExperiment() {
     arenaHalfSize: 11.0,
     floorFriction
   });
+  renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
 
   chartRenderer.render(sim.history);
 
@@ -135,6 +137,20 @@ function handleUpdateEntry(updateEntry) {
 
 btnPause.addEventListener('click', () => {
   setPausedState(!paused);
+});
+
+// Single click on the 3D arena canvas toggles pause/resume
+renderer3D.onTogglePause = () => {
+  setPausedState(!paused);
+};
+
+btnUprightWalker.addEventListener('click', () => {
+  if (!sim) return;
+  const focusIdx = renderer3D.showAllPopulation ? (sim.bestCreatureIdx || 0) : 0;
+  sim.uprightCreature(focusIdx);
+  // Trigger smooth camera stage re-framing around the uprighted walker and its current food
+  renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
+  updateHUD();
 });
 
 btnStepOnce.addEventListener('click', () => {
@@ -246,6 +262,9 @@ rangeFriction.addEventListener('input', () => {
 
 chkFollowLeader.addEventListener('change', () => {
   renderer3D.followLeader = chkFollowLeader.checked;
+  if (renderer3D.followLeader) {
+    renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
+  }
 });
 
 chkShowForces.addEventListener('change', () => {
@@ -278,6 +297,14 @@ function updateHUD() {
   metricMeanVel.textContent = `${meanVel.toFixed(3)} м/с`;
   metricMeanRew.textContent = meanRew.toFixed(3);
   metricPower.textContent = `${leader.lastMechanicalPower.toFixed(1)} Вт`;
+
+  // Highlight the "Help Stand Up" button if the walker is tilted onto its side or back
+  const { up } = leader.getTorsoFrame();
+  const isOverturned = up.y < 0.35;
+  btnUprightWalker.classList.toggle('amber-alert', isOverturned);
+  btnUprightWalker.textContent = isOverturned
+    ? '⚠️ Перевернулся — Помочь встать!'
+    : '🤚 Помочь встать на ноги';
 }
 
 let frameCounter = 0;

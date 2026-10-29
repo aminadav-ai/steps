@@ -13,28 +13,43 @@ export class Renderer3D {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
 
-    // 3D Orbit Camera state (focused closely on the single main creature)
+    // 3D Orbit & Stage-Framing Camera state
     this.camYaw = -0.75;
     this.camPitch = 0.44;
-    this.camDist = 3.1;
+    this.camDist = 3.6;
     this.camTarget = new Vec3(0, 0.18, 0);
+
+    // Goal camera state for smooth stage transitions when a new food target spawns
+    this.goalCamYaw = -0.75;
+    this.goalCamDist = 3.6;
+    this.goalCamTarget = new Vec3(0, 0.18, 0);
+    this.lockedFoodPos = new Vec3(NaN, NaN, NaN);
     this.filteredLeaderPos = new Vec3(0, 0.18, 0);
+
     this.followLeader = true;
     this.showForceVectors = true;
     this.showAllPopulation = false;
+    this.onTogglePause = null;
 
     this._initPointerControls();
   }
 
   _initPointerControls() {
     let dragging = false;
+    let downX = 0;
+    let downY = 0;
     let lastX = 0;
     let lastY = 0;
+    let maxDragDist = 0;
 
     this.canvas.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
       dragging = true;
+      downX = e.clientX;
+      downY = e.clientY;
       lastX = e.clientX;
       lastY = e.clientY;
+      maxDragDist = 0;
       this.canvas.setPointerCapture(e.pointerId);
     });
 
@@ -44,22 +59,52 @@ export class Renderer3D {
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
-      this.camYaw -= dx * 0.007;
-      this.camPitch = Math.max(0.12, Math.min(1.42, this.camPitch + dy * 0.006));
+      maxDragDist = Math.max(maxDragDist, Math.hypot(e.clientX - downX, e.clientY - downY));
+
+      if (e.shiftKey) {
+        // Quake-style strafe pan in the camera's horizontal / screen plane
+        const cosP = Math.cos(this.camPitch);
+        const sinP = Math.sin(this.camPitch);
+        const cosY = Math.cos(this.camYaw);
+        const sinY = Math.sin(this.camYaw);
+        const camForward = new Vec3(-cosP * cosY, -sinP, -cosP * sinY).normalize();
+        const worldUp = new Vec3(0, 1, 0);
+        const camRight = Vec3.cross(camForward, worldUp).normalize();
+        const horizFwd = new Vec3(camForward.x, 0, camForward.z).normalize();
+
+        const panScale = this.camDist * 0.0018;
+        const shiftX = (-dx * camRight.x + dy * horizFwd.x) * panScale;
+        const shiftZ = (-dx * camRight.z + dy * horizFwd.z) * panScale;
+
+        this.camTarget.x += shiftX;
+        this.camTarget.z += shiftZ;
+        this.goalCamTarget.x = this.camTarget.x;
+        this.goalCamTarget.z = this.camTarget.z;
+      } else {
+        this.camYaw -= dx * 0.007;
+        this.goalCamYaw = this.camYaw;
+        this.camPitch = Math.max(0.12, Math.min(1.42, this.camPitch + dy * 0.006));
+      }
     });
 
     this.canvas.addEventListener('pointerup', e => {
+      if (!dragging) return;
       dragging = false;
       try {
         this.canvas.releasePointerCapture(e.pointerId);
       } catch {
         // ignore
       }
+      // Single click (without dragging) toggles simulation pause/resume
+      if (maxDragDist < 5 && typeof this.onTogglePause === 'function') {
+        this.onTogglePause();
+      }
     });
 
     this.canvas.addEventListener('wheel', e => {
       e.preventDefault();
       this.camDist = Math.max(1.3, Math.min(22.0, this.camDist * (1 + e.deltaY * 0.001)));
+      this.goalCamDist = this.camDist;
     }, { passive: false });
   }
 
@@ -108,29 +153,59 @@ export class Renderer3D {
     const leader = sim.creatures[focusIdx] || sim.creatures[0];
 
     if (this.followLeader && leader) {
-      const com = leader.body.getCenterOfMass();
-      // Stage 1: Heavy low-pass filter on CoM removes 1.45 Hz stepping sway
-      this.filteredLeaderPos.x += (com.x - this.filteredLeaderPos.x) * 0.025;
-      this.filteredLeaderPos.z += (com.z - this.filteredLeaderPos.z) * 0.025;
+      const food = leader.foodPos;
+      const foodChanged =
+        Number.isNaN(this.lockedFoodPos.x) ||
+        Math.hypot(food.x - this.lockedFoodPos.x, food.z - this.lockedFoodPos.z) > 0.01;
 
-      // Stage 2: Soft deadzone radius (0.45 m) so floor grid stays completely still
-      // while the creature steps inside the focus zone, gliding only when it walks further
-      const dx = this.filteredLeaderPos.x - this.camTarget.x;
-      const dz = this.filteredLeaderPos.z - this.camTarget.z;
-      const dist = Math.hypot(dx, dz);
-      const deadzone = 0.45;
-      if (dist > deadzone) {
-        const excess = dist - deadzone;
-        const nx = dx / dist;
-        const nz = dz / dist;
-        this.camTarget.x += nx * excess * 0.04;
-        this.camTarget.z += nz * excess * 0.04;
+      if (foodChanged) {
+        this.lockedFoodPos.copy(food);
+        const com = leader.body.getCenterOfMass();
+
+        // Center the stage between the walker's current position and the new food target
+        const midX = 0.5 * (com.x + food.x);
+        const midZ = 0.5 * (com.z + food.z);
+        this.goalCamTarget.set(midX, 0.18, midZ);
+
+        // Choose distance so both walker and food target fit comfortably inside the frame
+        const span = Math.hypot(food.x - com.x, food.z - com.z);
+        this.goalCamDist = Math.max(3.1, Math.min(8.0, span * 1.15 + 1.9));
+
+        // Choose a clean 3/4 side-angle viewpoint relative to the walker->food line
+        // picking the side closest to current camYaw for a gentle, minimal rotation
+        const pathAngle = Math.atan2(food.z - com.z, food.x - com.x);
+        const candA = pathAngle + Math.PI * 0.62;
+        const candB = pathAngle - Math.PI * 0.62;
+        const diffA = Math.atan2(Math.sin(candA - this.camYaw), Math.cos(candA - this.camYaw));
+        const diffB = Math.atan2(Math.sin(candB - this.camYaw), Math.cos(candB - this.camYaw));
+        this.goalCamYaw = Math.abs(diffA) <= Math.abs(diffB) ? this.camYaw + diffA : this.camYaw + diffB;
+      }
+
+      // Smoothly glide camera to the locked stage framing, and remain 100% stationary once settled!
+      const dxT = this.goalCamTarget.x - this.camTarget.x;
+      const dzT = this.goalCamTarget.z - this.camTarget.z;
+      if (Math.hypot(dxT, dzT) > 0.0005) {
+        this.camTarget.x += dxT * 0.065;
+        this.camTarget.z += dzT * 0.065;
+      } else {
+        this.camTarget.x = this.goalCamTarget.x;
+        this.camTarget.z = this.goalCamTarget.z;
       }
       this.camTarget.y = 0.18;
-    } else {
-      this.camTarget.x += (0 - this.camTarget.x) * 0.05;
-      this.camTarget.y = 0.18;
-      this.camTarget.z += (0 - this.camTarget.z) * 0.05;
+
+      const dDist = this.goalCamDist - this.camDist;
+      if (Math.abs(dDist) > 0.0005) {
+        this.camDist += dDist * 0.065;
+      } else {
+        this.camDist = this.goalCamDist;
+      }
+
+      const dYaw = Math.atan2(Math.sin(this.goalCamYaw - this.camYaw), Math.cos(this.goalCamYaw - this.camYaw));
+      if (Math.abs(dYaw) > 0.0005) {
+        this.camYaw += dYaw * 0.055;
+      } else {
+        this.camYaw = this.goalCamYaw;
+      }
     }
 
     const cosP = Math.cos(this.camPitch);

@@ -137,6 +137,67 @@ export class ArenaSimulation {
     this._spawnFoodForCreature(fresh, false);
   }
 
+  /**
+   * Gently flips an overturned or stuck creature right back onto its feet at its exact current
+   * (x, z) floor location and horizontal heading, preserving 100% of its learned neural network,
+   * statistics, and current food target!
+   */
+  uprightCreature(idx = 0) {
+    const c = this.creatures[idx];
+    if (!c) return;
+
+    const com = c.body.getCenterOfMass();
+    // Compute horizontal heading (preserve current horizontal nose->tail direction, or face toward food)
+    const nose = c.frameRefs.front.pos;
+    const tail = c.frameRefs.tail ? c.frameRefs.tail.pos : com;
+    let hx = nose.x - tail.x;
+    let hz = nose.z - tail.z;
+    if (Math.hypot(hx, hz) < 0.05) {
+      hx = c.foodPos.x - com.x;
+      hz = c.foodPos.z - com.z;
+    }
+    const yaw = Math.atan2(hz, hx);
+    const cosY = Math.cos(yaw);
+    const sinY = Math.sin(yaw);
+
+    // Build a temporary canonical reference at (0, 0, 0) to get exact upright node offsets
+    const template = this.morphSpec.build({
+      id: idx,
+      origin: new Vec3(0, 0, 0),
+      color: c.color
+    });
+
+    // Apply Euclidean rigid rotation (around Y) + translation to (com.x, 0.015, com.z)
+    const margin = 0.6;
+    const bound = this.arenaHalfSize - margin;
+    const cx = Math.max(-bound, Math.min(bound, com.x));
+    const cz = Math.max(-bound, Math.min(bound, com.z));
+
+    for (let i = 0; i < c.body.nodes.length; i++) {
+      const refPos = template.body.nodes[i].pos;
+      const rx = refPos.x * cosY - refPos.z * sinY;
+      const rz = refPos.x * sinY + refPos.z * cosY;
+      const ry = refPos.y + 0.01;
+
+      const node = c.body.nodes[i];
+      node.pos.set(cx + rx, ry, cz + rz);
+      node.prevPos.copy(node.pos);
+      node.vel.set(0, 0, 0);
+      node.inContact = false;
+      node.normalForce = 0;
+      node.frictionForceVec.set(0, 0, 0);
+    }
+
+    for (let m = 0; m < c.body.muscles.length; m++) {
+      const mus = c.body.muscles[m];
+      mus.targetLength = mus.baseLength;
+      mus.smoothedAction = 0;
+      mus.lambda = 0;
+    }
+
+    c.prevFoodDist = Math.hypot(c.foodPos.x - cx, c.foodPos.z - cz);
+  }
+
   setFloorFriction(mu) {
     this.floorFriction = Math.max(0, Math.min(2.0, mu));
     this.world.floorFriction = this.floorFriction;

@@ -302,6 +302,12 @@ select {
   background: #047857;
 }
 
+.btn.amber-alert {
+  background: #d97706;
+  border-color: #fbbf24;
+  color: #ffffff;
+}
+
 .btn:disabled {
   opacity: 0.6;
   cursor: wait;
