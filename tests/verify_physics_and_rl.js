@@ -215,35 +215,45 @@ for (let i = 0; i < 6; i++) trainSim.stepControl();
 const afterThrowCom = walker.body.getCenterOfMass();
 console.log(`Шагоход схвачен и брошен мышью в новую точку: (${afterThrowCom.x.toFixed(2)}, ${afterThrowCom.z.toFixed(2)}), сглаженная скорость HUD=${walker.smoothedVelocityTowardFood.toFixed(2)} м/с`);
 
-console.log('\n=== 5. Проверка пробуждения дообучения при включении скользкого льда и падении скорости ===');
+console.log('\n=== 5. Проверка строгой фиксации навыка (CONSOLIDATED) и ручного/пользовательского пробуждения ===');
 trainSim.uprightCreature(0);
 trainSim.trainer.metaState.mode = 'CONSOLIDATED';
 trainSim.trainer.metaState.isLearningActive = false;
-trainSim.setFloorFriction(0.15);
-console.log(`После перевода ползунка трения на скользкий лёд (mu=0.15): mode=${trainSim.trainer.metaState.mode}, isLearningActive=${trainSim.trainer.metaState.isLearningActive}`);
-if (trainSim.trainer.metaState.mode !== 'LEARNING_WALK' || !trainSim.trainer.metaState.isLearningActive) {
-  console.error('ОШИБКА: При включении скользкого льда дообучение должно сразу пробуждаться!');
+trainSim.trainer.metaState.needToLearnPct = 0;
+
+// 5а: Передвигаем шарик еды мышью и имитируем разворот с низкой скоростью — обучение НЕ должно просыпаться!
+trainSim.moveFoodTo(0, 3.0, -3.0, false);
+walker.smoothedVelocityTowardFood = 0.01;
+for (let s = 0; s < 35; s++) {
+  walker.smoothedVelocityTowardFood = 0.01;
+  trainSim.stepControl();
+}
+console.log(`После перемещения цели мышью и разворота на месте (35 шагов): mode=${trainSim.trainer.metaState.mode}, isLearningActive=${trainSim.trainer.metaState.isLearningActive}`);
+if (trainSim.trainer.metaState.mode !== 'CONSOLIDATED' || trainSim.trainer.metaState.isLearningActive) {
+  console.error('ОШИБКА: После освоения походки (CONSOLIDATED) ни перемещение цели, ни падение скорости при развороте не должны включать дообучение!');
   process.exit(1);
 }
 
-// Проверим также автоматическое пробуждение мета-чутья чисто по падению скорости из CONSOLIDATED при движении прямо к цели
-trainSim.trainer.metaState.mode = 'CONSOLIDATED';
-trainSim.trainer.metaState.isLearningActive = false;
-trainSim.trainer.metaState.stallStepsCount = 0;
-trainSim.trainer.metaState.lowVelEpochsCount = 0;
-walker.postFoodTurnGraceTimer = 0;
-walker.isPausedOrTurningToFood = false;
-walker.smoothedVelocityTowardFood = 0.05;
-for (let s = 0; s < 32; s++) {
-  walker.postFoodTurnGraceTimer = 0;
-  trainSim.stepControl();
-}
-console.log(`После просадки скорости на льду: mode=${trainSim.trainer.metaState.mode}, isLearningActive=${trainSim.trainer.metaState.isLearningActive}, comp=${trainSim.trainer.metaState.competenceEMA} м/с`);
+// 5б: Включаем скользкий лёд ползунком трения — дообучение должно включиться
+trainSim.setFloorFriction(0.15);
+console.log(`После перевода ползунка трения на скользкий лёд (mu=0.15): mode=${trainSim.trainer.metaState.mode}, isLearningActive=${trainSim.trainer.metaState.isLearningActive}`);
 if (trainSim.trainer.metaState.mode !== 'LEARNING_WALK' || !trainSim.trainer.metaState.isLearningActive) {
-  console.error('ОШИБКА: При падении скорости на скользком льду мета-чутьё должно автоматически включать дообучение!');
+  console.error('ОШИБКА: При изменении ползунка трения пользователем дообучение должно пробуждаться!');
   process.exit(1);
 }
-console.log('ОК: Дообучение надёжно пробуждается при переходе на скользкий лёд и при просадке скорости.');
+
+// 5в: Проверяем кнопку ручной заморозки / разморозки (toggleManualFreeze)
+trainSim.trainer.toggleManualFreeze();
+if (trainSim.trainer.metaState.mode !== 'CONSOLIDATED' || trainSim.trainer.metaState.isLearningActive) {
+  console.error('ОШИБКА: Нажатие кнопки заморозки должно переводить в CONSOLIDATED!');
+  process.exit(1);
+}
+trainSim.trainer.toggleManualFreeze();
+if (trainSim.trainer.metaState.mode !== 'LEARNING_WALK' || !trainSim.trainer.metaState.isLearningActive) {
+  console.error('ОШИБКА: Повторное нажатие кнопки должно вручную включать дообучение (LEARNING_WALK)!');
+  process.exit(1);
+}
+console.log('ОК: Строгая фиксация после освоения работает: шагоход действует сам без авто-дообучения, пока пользователь не нажмёт кнопку или не изменит ползунок.');
 
 console.log('\n=== 6. Проверка переключателя режима приводов: servo (по умолчанию) <-> muscle (v1) ===');
 const leg0 = walker.legControllers[0];
