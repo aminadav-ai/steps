@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- MANDATORY: Declare support for both light and dark themes -->
+  <meta name="color-scheme" content="light dark">
+  <title>STEPS — Лаборатория 3D-Физики и Нейрообучения (PPO Actor-Critic &amp; NES)</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="lab-layout">
+    <!-- Left 3D Physics Arena Viewport -->
+    <section class="viewport-pane" aria-label="3D Физическая арена">
+      <canvas id="arenaCanvas"></canvas>
+
+      <div class="hud-overlay">
+        <div class="hud-badge-group">
+          <div class="hud-pill">
+            Обновление ИИ: <strong id="hudUpdate">0</strong>
+          </div>
+          <div class="hud-pill">
+            Физ. время: <strong id="hudSimTime">0.0 с</strong>
+          </div>
+          <div class="hud-pill emerald">
+            Собрано еды (популяция): <strong id="hudTotalFood">0</strong>
+          </div>
+          <div class="hud-pill gold">
+            Лидер (№<span id="hudLeaderId">0</span>): <strong id="hudLeaderFood">0</strong> еды | <strong id="hudLeaderVel">0.00 м/с</strong>
+          </div>
+        </div>
+
+        <div class="hud-badge-group">
+          <div class="hud-pill">
+            Трение пола μ = <strong id="hudFriction">1.00</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-bottom-bar">
+        <div class="hud-legend">
+          <span><i class="legend-dot" style="background:#fbbf24"></i>Золотой контур: Лидер (чистая политика μ(s))</span>
+          <span><i class="legend-dot" style="background:#10b981"></i>Зелёная сфера: Еда</span>
+          <span><i class="legend-dot" style="background:#4ade80"></i>Зелёный вектор: Нормальная реакция опоры N</span>
+          <span><i class="legend-dot" style="background:#facc15"></i>Жёлтый вектор: Сила трения толчка F_тр</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Scientific Control & Telemetry Sidebar -->
+    <aside class="sidebar-pane">
+      <header class="lab-header">
+        <div>
+          <h1>STEPS // 3D Physics &amp; RL Lab</h1>
+          <div class="lab-subtitle">Честная 3D-динамика (XPBD + трение Кулона) без анимаций</div>
+        </div>
+      </header>
+
+      <!-- Experiment Configuration Card -->
+      <section class="card">
+        <div class="card-title">
+          <span>Конструкция и Алгоритм</span>
+          <span id="expStatusBadge" style="color:#4ade80;font-size:11px;">● АКТИВЕН</span>
+        </div>
+
+        <div class="control-grid">
+          <div class="control-field full">
+            <label for="selectMorphology">Морфология тела (Конструкция):</label>
+            <select id="selectMorphology">
+              <option value="tripod" selected>Конструкция №1: 3-лучевой шагоход («Трипод», 6 DoF)</option>
+              <option value="quadruped">Конструкция №2: 4-лучевой шагоход («Квадрупод», 8 DoF)</option>
+            </select>
+          </div>
+
+          <div class="control-field full">
+            <label for="selectAlgorithm">Алгоритм обучения нейросети:</label>
+            <select id="selectAlgorithm">
+              <option value="ppo" selected>PPO (Actor-Critic + GAE + Adam Backpropagation)</option>
+              <option value="nes">SEP-CMA-ES / OpenAI-ES (Естественный градиент)</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="morphDescription" class="morph-desc">
+          Жёсткий 3D-каркас торса + 3 двухстепенные лапы (передняя левая, передняя правая и задняя толчковая). Каждая лапа управляется сгибом колена (подъём/опора) и продольным махом бедра (тяга вперёд/назад).
+        </div>
+
+        <div class="btn-row">
+          <button id="btnNewExperiment" class="btn primary" title="Сохраняет текущий лог в архив и запускает обучение с нуля">
+            Новый эксперимент (Сброс ИИ)
+          </button>
+          <button id="btnPause" class="btn">Пауза</button>
+        </div>
+      </section>
+
+      <!-- Physics & Speed Controls -->
+      <section class="card">
+        <div class="card-title">
+          <span>Физический мир и Скорость времени</span>
+        </div>
+
+        <div class="control-field">
+          <label>Ускорение симуляции (чистая физика):</label>
+          <div class="speed-row" id="speedButtons">
+            <button class="btn active" data-speed="1">1×</button>
+            <button class="btn" data-speed="2">2×</button>
+            <button class="btn" data-speed="5">5×</button>
+            <button class="btn" data-speed="12">12×</button>
+            <button class="btn" data-speed="25">25×</button>
+          </div>
+        </div>
+
+        <div class="control-field">
+          <label for="rangeFriction">
+            <span>Коэффициент трения пола (μ):</span>
+            <strong id="labelFrictionVal">1.00 (Резина / Бетон)</strong>
+          </label>
+          <input type="range" id="rangeFriction" min="0" max="1.6" step="0.05" value="1.0">
+        </div>
+
+        <div class="checkbox-row">
+          <label><input type="checkbox" id="chkFollowLeader" checked> Камера за лидером</label>
+          <label><input type="checkbox" id="chkShowForces" checked> Векторы сил (N, F_тр)</label>
+          <label><input type="checkbox" id="chkShowAllPop" checked> Вся популяция (16)</label>
+        </div>
+      </section>
+
+      <!-- Live Neural Network Visualization -->
+      <section class="card">
+        <div class="card-title">
+          <span>Нейросеть Лидера (Actor-Critic + CPG Skip)</span>
+          <span id="nnDimLabel" style="color:#94a3b8;font-size:11px;">31 → 32 → 24 → 6</span>
+        </div>
+        <div class="canvas-box">
+          <canvas id="nnCanvas"></canvas>
+        </div>
+      </section>
+
+      <!-- Live Learning Curve & Metrics -->
+      <section class="card">
+        <div class="card-title">
+          <span>Динамика обучения</span>
+        </div>
+        <div class="metrics-grid">
+          <div class="metric-item">
+            <div class="metric-label">Скор. к еде (ср.)</div>
+            <div class="metric-val" id="metricMeanVel">0.000 м/с</div>
+          </div>
+          <div class="metric-item">
+            <div class="metric-label">Награда / шаг</div>
+            <div class="metric-val" id="metricMeanRew">0.000</div>
+          </div>
+          <div class="metric-item">
+            <div class="metric-label">Мощность мышц</div>
+            <div class="metric-val" id="metricPower">0.0 Вт</div>
+          </div>
+        </div>
+        <div class="canvas-box chart">
+          <canvas id="chartCanvas"></canvas>
+        </div>
+      </section>
+
+      <!-- Preserved Experiment Logs History -->
+      <section class="card">
+        <div class="card-title">
+          <span>Архив логов экспериментов (logs/)</span>
+          <span id="logsCountBadge" style="color:#94a3b8;font-size:11px;">0 файлов</span>
+        </div>
+        <div id="logsContainer" class="logs-list">
+          <div class="log-entry"><span>Инициализация журнала...</span></div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

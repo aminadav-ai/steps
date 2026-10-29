@@ -1,0 +1,10 @@
+{
+  "name": "steps",
+  "version": "1.0.0",
+  "description": "Steps: 3D Rigid-Body Physics & Reinforcement Learning Laboratory (PPO Actor-Critic + GAE + Adam & NES)",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/verify_physics_and_rl.js"
+  }
+}
