@@ -214,6 +214,9 @@ function applyLanguage(lang, { persist = false } = {}) {
   }
   const t = getT();
   document.documentElement.lang = lang;
+  if (t.labTitle) {
+    document.title = t.labTitle;
+  }
   if (sidebarPane) {
     sidebarPane.dir = lang === 'he' ? 'rtl' : 'ltr';
   }

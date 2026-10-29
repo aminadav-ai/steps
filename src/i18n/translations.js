@@ -17,6 +17,7 @@ export const SUPPORTED_LANGUAGES = [
 
 export const TRANSLATIONS = {
   ru: {
+    labTitle: 'STEPS // Лаборатория 3D-физики и ИИ',
     labSubtitle: 'Честная 3D-динамика (XPBD + трение Кулона) без анимаций',
     hudEpoch: 'Эпоха ИИ:',
     hudSimTime: 'Физ. время:',
@@ -134,6 +135,7 @@ export const TRANSLATIONS = {
   },
 
   en: {
+    labTitle: 'STEPS // 3D Physics & AI Lab',
     labSubtitle: 'True 3D Dynamics (XPBD + Coulomb Friction) — Zero Keyframed Animations',
     hudEpoch: 'AI Epoch:',
     hudSimTime: 'Sim Time:',
@@ -251,6 +253,7 @@ export const TRANSLATIONS = {
   },
 
   he: {
+    labTitle: 'STEPS // מעבדת פיזיקה תלת-ממדית ו-AI',
     labSubtitle: 'דינמיקה תלת-ממדית אמיתית (XPBD + חיכוך קולון) ללא אנימציות מוכנות',
     hudEpoch: 'תקופת AI:',
     hudSimTime: 'זמן פיזיקלי:',
@@ -368,6 +371,7 @@ export const TRANSLATIONS = {
   },
 
   es: {
+    labTitle: 'STEPS // Laboratorio de Física 3D e IA',
     labSubtitle: 'Dinámica 3D real (XPBD + fricción de Coulomb) sin animaciones pregrabadas',
     hudEpoch: 'Época IA:',
     hudSimTime: 'Tiempo fís.:',
@@ -485,6 +489,7 @@ export const TRANSLATIONS = {
   },
 
   de: {
+    labTitle: 'STEPS // 3D-Physik- & KI-Labor',
     labSubtitle: 'Echte 3D-Physik (XPBD + Coulomb-Reibung) ohne vorgefertigte Animationen',
     hudEpoch: 'KI-Epoche:',
     hudSimTime: 'Sim-Zeit:',
@@ -602,6 +607,7 @@ export const TRANSLATIONS = {
   },
 
   fr: {
+    labTitle: 'STEPS // Labo Physique 3D & IA',
     labSubtitle: 'Dynamique 3D réelle (XPBD + friction de Coulomb) sans animations précalculées',
     hudEpoch: 'Époque IA :',
     hudSimTime: 'Temps phys. :',
@@ -719,6 +725,7 @@ export const TRANSLATIONS = {
   },
 
   zh: {
+    labTitle: 'STEPS // 3D 物理与 AI 实验室',
     labSubtitle: '真实 3D 物理动力学（XPBD + 库仑摩擦）— 无预制动画',
     hudEpoch: 'AI 轮次:',
     hudSimTime: '物理时间:',
@@ -836,6 +843,7 @@ export const TRANSLATIONS = {
   },
 
   ja: {
+    labTitle: 'STEPS // 3D物理 & AIラボ',
     labSubtitle: '純粋な3D物理演算（XPBD + クーロン摩擦）— 事前アニメーションなし',
     hudEpoch: 'AIエポック:',
     hudSimTime: '物理時間:',
