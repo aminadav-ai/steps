@@ -288,8 +288,8 @@ export class ActorCriticBrain {
     this.rightingAsym = Math.min(1.0, this.rightingAsym + gainStep * (1.0 - this.rightingAsym * 0.65));
     this.rightingSweep = Math.min(0.95, this.rightingSweep + 0.22 * (1.0 - this.rightingSweep * 0.7));
 
-    // If an attempt with high gain still didn't roll over (e.g. blocked by wall on that side), flip roll side!
-    if (progress < 0.08 && this.rightingAttempts % 2 === 0) {
+    // If an attempt with high gain still didn't complete the roll over the edge, try rolling to the other side!
+    if (endUpY < 0.25 && this.rightingAttempts >= 2) {
       this.rightingSideSign *= -1.0;
     }
 
@@ -596,20 +596,20 @@ export class PPOTrainer {
 
     // Homeostatic Meta-Plasticity Sense ("Чутьё нейросети: нужно ли дообучаться или нет")
     // Default ambition = 'bound' ("Бодрый скачок": trains energetic bounding gallop up to ~0.34+ m/s)
-    this.maxCpgGain = 3.25;
-    this.minFoodsToConsolidate = 4;
+    this.maxCpgGain = 1.95;
+    this.minFoodsToConsolidate = 2;
     this.alwaysLearn = false;
     this.manualFreeze = false;
 
     this.metaState = {
       mode: 'LEARNING_WALK', // 'LEARNING_WALK' | 'CONSOLIDATED' | 'LEARNING_RIGHTING'
-      ambitionPreset: 'bound',
+      ambitionPreset: 'min',
       isLearningActive: true,
-      modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ: РАЗГОН СКАЧКА К ЦЕЛИ',
-      reasonText: 'Формирование бодрого пружинистого скачка и точного наведения на цель',
+      modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ: БАЗОВЫЙ ШАГ К ЦЕЛИ',
+      reasonText: 'Формирование стабильного базового навыка ходьбы и наведения на цель',
       competenceEMA: 0.04,
-      targetCompetence: 0.34,
-      relearnThreshold: 0.16,
+      targetCompetence: 0.18,
+      relearnThreshold: 0.085,
       surpriseEMA: 0.25,
       needToLearnPct: 88,
       stableEpochsCount: 0,
@@ -656,11 +656,11 @@ export class PPOTrainer {
     this.manualFreeze = false;
     if (presetOrTarget === 'min') {
       this.metaState.ambitionPreset = 'min';
-      this.metaState.targetCompetence = 0.17;
+      this.metaState.targetCompetence = 0.18;
       this.metaState.relearnThreshold = 0.085;
       this.minFoodsToConsolidate = 2;
-      this.maxCpgGain = 1.65;
-      this.brain.maxSkipRowNorm = 1.18;
+      this.maxCpgGain = 1.95;
+      this.brain.maxSkipRowNorm = 1.30;
       this.alwaysLearn = false;
     } else if (presetOrTarget === 'bound') {
       this.metaState.ambitionPreset = 'bound';
@@ -799,7 +799,7 @@ export class PPOTrainer {
 
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
-    const isOverturned0 = upY0 < 0.35;
+    const isOverturned0 = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < 0.35;
 
     // 1. Check if main walker is overturned on its back -> engage Beetle Self-Righting Reflex!
     if (isOverturned0) {
@@ -926,9 +926,9 @@ export class PPOTrainer {
       return null;
     }
 
-    // If walker suddenly tipped over OR is in the 2-second pause between food orbs (DISSOLVING / WAITING),
+    // If walker suddenly tipped over, is held by user's mouse, OR is in the 2-second pause between food orbs (DISSOLVING / WAITING),
     // do not push non-locomotion steps into the walking rollout buffer!
-    if (upY0 < 0.32 || c0.foodState === 'DISSOLVING' || c0.foodState === 'WAITING') {
+    if (c0.isGrabbed || c0.postThrowTimer > 0 || upY0 < 0.32 || c0.foodState === 'DISSOLVING' || c0.foodState === 'WAITING') {
       return null;
     }
 
@@ -1369,9 +1369,9 @@ export class NESTrainer {
       modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): ХОДЬБА К ЦЕЛИ',
       reasonText: 'Эволюционный поиск моторного навыка шага и руления',
       competenceEMA: 0.03,
-      targetCompetence: 0.34,
-      relearnThreshold: 0.15,
-      ambitionPreset: 'bound',
+      targetCompetence: 0.18,
+      relearnThreshold: 0.085,
+      ambitionPreset: 'min',
       surpriseEMA: 0.20,
       needToLearnPct: 85,
       stableEpochsCount: 0,
@@ -1383,7 +1383,7 @@ export class NESTrainer {
     };
     this.alwaysLearn = false;
     this.manualFreeze = false;
-    this.minFoodsToConsolidate = 4;
+    this.minFoodsToConsolidate = 2;
 
     this._sampleWorkerPopulation();
   }

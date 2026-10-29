@@ -102,12 +102,27 @@ console.log('ОК: Трёхфазный цикл шарика еды (1с рас
 console.log('\n=== 3. Проверка «Рефлекса жука» (обучение перевороту со спины на ноги без участия еды) ===');
 const walker = trainSim.creatures[0];
 const com = walker.body.getCenterOfMass();
+const { right, up } = walker.getTorsoFrame();
 const flipAngle = Math.PI * 0.94;
+const cosA = Math.cos(flipAngle);
+const sinA = Math.sin(flipAngle);
 for (const n of walker.body.nodes) {
-  const dy = n.pos.y - com.y;
-  const dz = n.pos.z - com.z;
-  n.pos.y = 0.35 + dy * Math.cos(flipAngle) - dz * Math.sin(flipAngle);
-  n.pos.z = com.z + dy * Math.sin(flipAngle) + dz * Math.cos(flipAngle);
+  const rx = n.pos.x - com.x;
+  const ry = n.pos.y - com.y;
+  const rz = n.pos.z - com.z;
+  // Project onto local (right, up) plane and rotate by flipAngle around local forward axis
+  const uCoord = rx * right.x + ry * right.y + rz * right.z;
+  const vCoord = rx * up.x + ry * up.y + rz * up.z;
+  const fCoordX = rx - uCoord * right.x - vCoord * up.x;
+  const fCoordY = ry - uCoord * right.y - vCoord * up.y;
+  const fCoordZ = rz - uCoord * right.z - vCoord * up.z;
+  const newU = uCoord * cosA - vCoord * sinA;
+  const newV = uCoord * sinA + vCoord * cosA;
+  n.pos.set(
+    com.x + fCoordX + newU * right.x + newV * up.x,
+    0.35 + fCoordY + newU * right.y + newV * up.y,
+    com.z + fCoordZ + newU * right.z + newV * up.z
+  );
   n.prevPos.copy(n.pos);
 }
 
@@ -123,6 +138,22 @@ for (let step = 1; step <= 60; step++) {
     }
   }
 }
+
+console.log('\n=== 4. Проверка перетаскивания шарика еды и броска шагохода мышью ===');
+if (trainSim.trainer.metaState.ambitionPreset !== 'min' || trainSim.trainer.metaState.targetCompetence !== 0.18) {
+  console.error('ОШИБКА: По умолчанию амбиция обучения должна быть min (0.18 м/с)!');
+  process.exit(1);
+}
+console.log(`ОК: Амбиция обучения по умолчанию = ${trainSim.trainer.metaState.ambitionPreset} (${trainSim.trainer.metaState.targetCompetence} м/с)`);
+
+trainSim.moveFoodTo(0, -2.5, 3.2, false);
+console.log(`Шарик еды переставлен мышью в: (${walker.foodPos.x.toFixed(2)}, ${walker.foodPos.z.toFixed(2)})`);
+trainSim.grabCreature(0);
+trainSim.dragCreatureTo(0, 1.5, -1.2, 2.2, -1.8);
+trainSim.releaseCreature(0, 2.2, -1.8);
+for (let i = 0; i < 6; i++) trainSim.stepControl();
+const afterThrowCom = walker.body.getCenterOfMass();
+console.log(`Шагоход схвачен и брошен мышью в новую точку: (${afterThrowCom.x.toFixed(2)}, ${afterThrowCom.z.toFixed(2)}), сглаженная скорость HUD=${walker.smoothedVelocityTowardFood.toFixed(2)} м/с`);
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);

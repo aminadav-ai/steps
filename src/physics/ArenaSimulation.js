@@ -203,6 +203,131 @@ export class ArenaSimulation {
     c.prevFoodDist = Math.hypot(c.foodPos.x - cx, c.foodPos.z - cz);
   }
 
+  /**
+   * Moves the food orb to a new floor coordinate (fx, fz), clamped inside the arena walls.
+   */
+  moveFoodTo(idx = 0, fx, fz, isDragging = false) {
+    const c = this.creatures[idx];
+    if (!c) return;
+    const bound = this.arenaHalfSize - 0.65;
+    const clampedX = Math.max(-bound, Math.min(bound, fx));
+    const clampedZ = Math.max(-bound, Math.min(bound, fz));
+    c.foodPos.set(clampedX, isDragging ? 0.24 : 0.16, clampedZ);
+    c.foodState = 'ACTIVE';
+    c.foodStateTimer = 0.0;
+    const com = c.body.getCenterOfMass();
+    c.prevFoodDist = Math.hypot(clampedX - com.x, clampedZ - com.z);
+  }
+
+  /**
+   * Picks up the walker with the user's mouse cursor, lifting it gently above the floor.
+   */
+  grabCreature(idx = 0) {
+    const c = this.creatures[idx];
+    if (!c) return;
+    c.isGrabbed = true;
+    const com = c.body.getCenterOfMass();
+    c.grabSavedOffsets = c.body.nodes.map(n => new Vec3(
+      n.pos.x - com.x,
+      n.pos.y - com.y,
+      n.pos.z - com.z
+    ));
+    c.grabTargetPos = new Vec3(com.x, Math.max(0.46, com.y + 0.28), com.z);
+    for (let i = 0; i < c.body.nodes.length; i++) {
+      const n = c.body.nodes[i];
+      const off = c.grabSavedOffsets[i];
+      n.pos.set(c.grabTargetPos.x + off.x, Math.max(0.06, c.grabTargetPos.y + off.y), c.grabTargetPos.z + off.z);
+      n.prevPos.copy(n.pos);
+      n.vel.set(0, 0, 0);
+      n.inContact = false;
+      n.normalForce = 0;
+    }
+    c.prevFoodDist = Math.hypot(c.foodPos.x - c.grabTargetPos.x, c.foodPos.z - c.grabTargetPos.z);
+  }
+
+  /**
+   * Drags the grabbed walker to (targetX, targetZ) in mid-air with dynamic inertial tilt from pointer velocity (vx, vz).
+   */
+  dragCreatureTo(idx = 0, targetX, targetZ, vx = 0, vz = 0) {
+    const c = this.creatures[idx];
+    if (!c || !c.isGrabbed) return;
+    const bound = this.arenaHalfSize - 0.65;
+    const cx = Math.max(-bound, Math.min(bound, targetX));
+    const cz = Math.max(-bound, Math.min(bound, targetZ));
+    const cy = 0.48;
+    if (!c.grabTargetPos) c.grabTargetPos = new Vec3(cx, cy, cz);
+    c.grabTargetPos.set(cx, cy, cz);
+    c.grabDragVel = { vx, vz };
+
+    if (c.grabSavedOffsets) {
+      // Subtle pendulum swing tilt when dragging fast with the mouse
+      const tiltX = Math.max(-0.55, Math.min(0.55, vx * 0.09));
+      const tiltZ = Math.max(-0.55, Math.min(0.55, vz * 0.09));
+      for (let i = 0; i < c.body.nodes.length; i++) {
+        const n = c.body.nodes[i];
+        const off = c.grabSavedOffsets[i];
+        const rx = off.x - off.y * tiltX;
+        const rz = off.z - off.y * tiltZ;
+        const ry = off.y + (off.x * tiltX + off.z * tiltZ) * 0.5;
+        n.pos.set(cx + rx, Math.max(0.06, cy + ry), cz + rz);
+        n.prevPos.copy(n.pos);
+        n.vel.set(0, 0, 0);
+        n.inContact = false;
+        n.normalForce = 0;
+      }
+    }
+    c.prevFoodDist = Math.hypot(c.foodPos.x - cx, c.foodPos.z - cz);
+  }
+
+  /**
+   * Releases the grabbed walker at its current mid-air position, imparting the mouse throw velocity
+   * and (if tossed briskly) an angular tumble impulse so it can roll or land on its back/side.
+   */
+  releaseCreature(idx = 0, throwVx = 0, throwVz = 0) {
+    const c = this.creatures[idx];
+    if (!c) return;
+    c.isGrabbed = false;
+    const subDt = this.subDt;
+    const rawSpeed = Math.hypot(throwVx, throwVz);
+    const maxThrowSpeed = 4.2;
+    const scale = rawSpeed > maxThrowSpeed ? maxThrowSpeed / rawSpeed : 1.0;
+    const vx = throwVx * scale;
+    const vz = throwVz * scale;
+    const speed = Math.hypot(vx, vz);
+    const vy = speed > 0.6 ? Math.min(1.35, speed * 0.26) : -0.15;
+
+    const com = c.body.getCenterOfMass();
+    // If tossed briskly (speed > 0.65 m/s), impart angular tumble so the walker flips in the air
+    const tumbleOmega = speed > 0.65 ? Math.min(10.5, (speed - 0.45) * 4.2) : 0.0;
+    const dirX = speed > 1e-4 ? vx / speed : 1.0;
+    const dirZ = speed > 1e-4 ? vz / speed : 0.0;
+
+    for (let i = 0; i < c.body.nodes.length; i++) {
+      const n = c.body.nodes[i];
+      const rx = n.pos.x - com.x;
+      const ry = n.pos.y - com.y;
+      const rz = n.pos.z - com.z;
+      // Rotational velocity v_rot = omega_vec x r, where omega_vec rolls the body along the throw direction
+      const rotVx = dirX * (ry * tumbleOmega);
+      const rotVz = dirZ * (ry * tumbleOmega);
+      const rotVy = -(rx * dirX + rz * dirZ) * tumbleOmega;
+
+      const nodeVx = vx + rotVx;
+      const nodeVy = vy + rotVy;
+      const nodeVz = vz + rotVz;
+      n.prevPos.set(
+        n.pos.x - nodeVx * subDt,
+        n.pos.y - nodeVy * subDt,
+        n.pos.z - nodeVz * subDt
+      );
+      n.vel.set(nodeVx, nodeVy, nodeVz);
+    }
+    c.grabSavedOffsets = null;
+    c.grabTargetPos = null;
+    c.postThrowTimer = 0.55;
+    c.prevFoodDist = Math.hypot(c.foodPos.x - com.x, c.foodPos.z - com.z);
+  }
+
   setFloorFriction(mu) {
     const nextMu = Math.max(0, Math.min(2.0, mu));
     if (Math.abs(nextMu - this.floorFriction) >= 0.04 && this.trainer && this.trainer.notifyEnvironmentChange) {
@@ -241,6 +366,17 @@ export class ArenaSimulation {
     }
 
     this.world.stepSingleSubstep(subDt);
+    // Keep any mouse-grabbed creature suspended at the user's cursor in mid-air
+    for (let i = 0; i < this.populationSize; i++) {
+      const c = this.creatures[i];
+      if (c.isGrabbed && c.grabTargetPos && c.grabSavedOffsets) {
+        const vx = c.grabDragVel ? c.grabDragVel.vx : 0;
+        const vz = c.grabDragVel ? c.grabDragVel.vz : 0;
+        this.dragCreatureTo(i, c.grabTargetPos.x, c.grabTargetPos.z, vx, vz);
+      } else if (c.postThrowTimer > 0) {
+        c.postThrowTimer = Math.max(0, c.postThrowTimer - subDt);
+      }
+    }
     this.simTime += subDt;
     this.substepCursor += 1;
 
@@ -317,22 +453,35 @@ export class ArenaSimulation {
       const newDist = Math.hypot(dx, dz);
 
       // Velocity toward food (m/s)
-      const velToward = (c.prevFoodDist - newDist) / dt;
+      const isInThrowFlight = (c.postThrowTimer || 0) > 0;
+      const isOverturnedNow = !c.isGrabbed && !isInThrowFlight && up.y < 0.35;
+      const isWaitingForFood = c.foodState === 'DISSOLVING' || c.foodState === 'WAITING';
+      const rawVelToward = (c.isGrabbed || isInThrowFlight || isWaitingForFood || isOverturnedNow)
+        ? 0
+        : (c.prevFoodDist - newDist) / dt;
       c.prevFoodDist = newDist;
-      c.lastVelocityTowardFood = velToward;
+      c.lastVelocityTowardFood = rawVelToward;
+      // Smooth low-pass filtered velocity toward target (tau ~ 0.75 s) so HUD readout never jumps per leg stroke
+      if (c.isGrabbed || isInThrowFlight || isWaitingForFood || isOverturnedNow) {
+        c.smoothedVelocityTowardFood = 0.92 * c.smoothedVelocityTowardFood;
+      } else {
+        c.smoothedVelocityTowardFood = 0.93 * c.smoothedVelocityTowardFood + 0.07 * rawVelToward;
+      }
+      const velToward = rawVelToward;
       stepVelSum += velToward;
 
       // Heading alignment toward food
       const invD = 1 / Math.max(1e-5, newDist);
       const alignCos = (dx * invD) * forward.x + (dz * invD) * forward.z;
 
-      const isOverturnedNow = up.y < 0.35;
-      const isWaitingForFood = c.foodState === 'DISSOLVING' || c.foodState === 'WAITING';
       const prevUpY = c.prevUpY !== undefined ? c.prevUpY : up.y;
       c.prevUpY = up.y;
 
       let r = 0;
-      if (isOverturnedNow) {
+      if (c.isGrabbed || isInThrowFlight) {
+        c.lastVelocityTowardFood = 0;
+        r = 0;
+      } else if (isOverturnedNow) {
         // When overturned on its back: ZERO thoughts about food or walking!
         // Reward is 100% dedicated to the Beetle Self-Righting task: increasing up.y toward +1
         // and leveraging feet against the floor to roll back onto its feet.

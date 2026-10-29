@@ -31,8 +31,93 @@ export class Renderer3D {
     this.showAllPopulation = false;
     this.onTogglePause = null;
     this.onCameraAction = null;
+    this.onSceneInteract = null;
+
+    this._sim = null;
+    this._lastCam = null;
+    this.hoveredObject = null; // 'food' | 'walker' | null
+    this.activeDragMode = null; // 'food' | 'walker' | 'camera' | null
 
     this._initPointerControls();
+  }
+
+  _clientToCanvas(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = this.canvas.width / Math.max(1, rect.width);
+    return {
+      px: (clientX - rect.left) * dpr,
+      py: (clientY - rect.top) * dpr,
+      dpr
+    };
+  }
+
+  _intersectHorizontalPlane(px, py, planeY = 0.16) {
+    if (!this._lastCam) return null;
+    const { camPos, camForward, camRight, camUp, width, height, fovScale } = this._lastCam;
+    const cx = (px - width * 0.5) / fovScale;
+    const cy = (height * 0.5 - py) / fovScale;
+    const rayDir = new Vec3(
+      camForward.x + cx * camRight.x + cy * camUp.x,
+      camForward.y + cx * camRight.y + cy * camUp.y,
+      camForward.z + cx * camRight.z + cy * camUp.z
+    ).normalize();
+
+    if (Math.abs(rayDir.y) < 1e-4) return null;
+    const t = (planeY - camPos.y) / rayDir.y;
+    if (t <= 0.1 || t > 65.0) return null;
+
+    const half = this._sim ? this._sim.arenaHalfSize - 0.65 : 10.35;
+    return new Vec3(
+      Math.max(-half, Math.min(half, camPos.x + rayDir.x * t)),
+      planeY,
+      Math.max(-half, Math.min(half, camPos.z + rayDir.z * t))
+    );
+  }
+
+  _hitTestScene(clientX, clientY) {
+    if (!this._sim || !this._lastCam) return null;
+    const c0 = this._sim.creatures[0];
+    if (!c0) return null;
+    const { px, py, dpr } = this._clientToCanvas(clientX, clientY);
+    const { camPos, camForward, camRight, camUp, width, height, fovScale } = this._lastCam;
+    const proj = pt => this.project(pt, camPos, camForward, camRight, camUp, width, height, fovScale);
+
+    // 1. Check distance to Food Orb
+    let foodDistPx = Infinity;
+    const foodTargetPt = c0.foodState === 'DISSOLVING' ? c0.dissolvePos : c0.foodPos;
+    const pFood = proj(foodTargetPt);
+    if (pFood && c0.foodState !== 'WAITING') {
+      const foodHitRad = Math.max(24 * dpr, 0.24 * pFood.scale);
+      const d = Math.hypot(px - pFood.sx, py - pFood.sy);
+      if (d <= foodHitRad) {
+        foodDistPx = d;
+      }
+    }
+
+    // 2. Check distance to Walker (Torso center + body nodes)
+    let walkerDistPx = Infinity;
+    const com = c0.body.getCenterOfMass();
+    const pCom = proj(com);
+    if (pCom) {
+      const comHitRad = Math.max(30 * dpr, 0.34 * pCom.scale);
+      const dCom = Math.hypot(px - pCom.sx, py - pCom.sy);
+      if (dCom <= comHitRad) {
+        walkerDistPx = dCom;
+      }
+    }
+    for (const n of c0.body.nodes) {
+      const pn = proj(n.pos);
+      if (!pn) continue;
+      const nodeHitRad = Math.max(18 * dpr, (n.radius + 0.08) * pn.scale);
+      const dn = Math.hypot(px - pn.sx, py - pn.sy);
+      if (dn <= nodeHitRad && dn < walkerDistPx) {
+        walkerDistPx = dn;
+      }
+    }
+
+    if (foodDistPx < Infinity && foodDistPx <= walkerDistPx) return 'food';
+    if (walkerDistPx < Infinity) return 'walker';
+    return null;
   }
 
   getCameraTelemetry() {
@@ -64,6 +149,100 @@ export class Renderer3D {
     let wheelTimer = null;
     let wheelStartDist = null;
 
+    // State for 3D object dragging (food orb or walker)
+    let dragOffsetXZ = { x: 0, z: 0 };
+    let dragStartWorldPos = null;
+    let lastWorldX = 0;
+    let lastWorldZ = 0;
+    let lastMoveTime = 0;
+    let throwVx = 0;
+    let throwVz = 0;
+
+    const finishPointerInteraction = (pointerId = null, wasCancelled = false) => {
+      if (!dragging) return;
+      const mode = this.activeDragMode;
+      dragging = false;
+      this.activeDragMode = null;
+      this.canvas.classList.remove('dragging');
+      if (pointerId !== null) {
+        try {
+          if (this.canvas.hasPointerCapture(pointerId)) {
+            this.canvas.releasePointerCapture(pointerId);
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const c0 = this._sim && this._sim.creatures[0];
+      if (mode === 'food' && this._sim && c0) {
+        this._sim.moveFoodTo(0, c0.foodPos.x, c0.foodPos.z, false);
+        this.lockedFoodPos.set(NaN, NaN, NaN);
+        if (this._sim.trainer && this._sim.trainer.notifyEnvironmentChange) {
+          this._sim.trainer.notifyEnvironmentChange('Шарик еды переставлен мышью — наведение на новую точку');
+        }
+        if (typeof this.onSceneInteract === 'function' && dragStartWorldPos) {
+          this.onSceneInteract({
+            action: 'drag_food',
+            fromPos: [Number(dragStartWorldPos.x.toFixed(2)), Number(dragStartWorldPos.z.toFixed(2))],
+            toPos: [Number(c0.foodPos.x.toFixed(2)), Number(c0.foodPos.z.toFixed(2))]
+          });
+        }
+        return;
+      }
+
+      if (mode === 'walker' && this._sim && c0) {
+        // Decay velocity if mouse stood still for > 90 ms before release (gentle drop vs brisk throw)
+        const idleMs = performance.now() - lastMoveTime;
+        const decay = idleMs > 110 ? 0.0 : Math.max(0.0, 1.0 - idleMs / 140);
+        const finalVx = wasCancelled ? 0 : throwVx * decay;
+        const finalVz = wasCancelled ? 0 : throwVz * decay;
+        this._sim.releaseCreature(0, finalVx, finalVz);
+        this.lockedFoodPos.set(NaN, NaN, NaN);
+        const com = c0.body.getCenterOfMass();
+        if (typeof this.onSceneInteract === 'function' && dragStartWorldPos) {
+          this.onSceneInteract({
+            action: 'drag_throw_walker',
+            fromPos: [Number(dragStartWorldPos.x.toFixed(2)), Number(dragStartWorldPos.z.toFixed(2))],
+            toPos: [Number(com.x.toFixed(2)), Number(com.z.toFixed(2))],
+            throwVel: [Number(finalVx.toFixed(2)), Number(finalVz.toFixed(2))],
+            throwSpeed: Number(Math.hypot(finalVx, finalVz).toFixed(2))
+          });
+        }
+        return;
+      }
+
+      if (wasCancelled) return;
+
+      // Single click on background (without dragging) toggles simulation pause/resume
+      if (maxDragDist < 5) {
+        if (typeof this.onTogglePause === 'function') {
+          this.onTogglePause('canvas_click');
+        }
+      } else if (typeof this.onCameraAction === 'function') {
+        if (usedShiftStrafe) {
+          this.onCameraAction({
+            action: 'camera_strafe',
+            dragPx: Math.round(maxDragDist),
+            fromTarget: [Number(startTargetX.toFixed(2)), Number(startTargetZ.toFixed(2))],
+            toTarget: [Number(this.camTarget.x.toFixed(2)), Number(this.camTarget.z.toFixed(2))],
+            strafeMeters: Number(Math.hypot(this.camTarget.x - startTargetX, this.camTarget.z - startTargetZ).toFixed(2)),
+            camera: this.getCameraTelemetry()
+          });
+        } else {
+          this.onCameraAction({
+            action: 'camera_orbit',
+            dragPx: Math.round(maxDragDist),
+            fromYawDeg: Number(((startYaw * 180) / Math.PI).toFixed(1)),
+            toYawDeg: Number(((this.camYaw * 180) / Math.PI).toFixed(1)),
+            fromPitchDeg: Number(((startPitch * 180) / Math.PI).toFixed(1)),
+            toPitchDeg: Number(((this.camPitch * 180) / Math.PI).toFixed(1)),
+            camera: this.getCameraTelemetry()
+          });
+        }
+      }
+    };
+
     this.canvas.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
       dragging = true;
@@ -77,16 +256,87 @@ export class Renderer3D {
       startPitch = this.camPitch;
       startTargetX = this.camTarget.x;
       startTargetZ = this.camTarget.z;
+
+      const hit = !e.shiftKey ? this._hitTestScene(e.clientX, e.clientY) : null;
+      const c0 = this._sim && this._sim.creatures[0];
+      const { px, py } = this._clientToCanvas(e.clientX, e.clientY);
+
+      if (hit === 'food' && c0) {
+        this.activeDragMode = 'food';
+        this.canvas.classList.add('dragging');
+        const planeHit = this._intersectHorizontalPlane(px, py, 0.16);
+        const startFood = c0.foodState === 'DISSOLVING' ? c0.dissolvePos : c0.foodPos;
+        dragStartWorldPos = startFood.clone();
+        dragOffsetXZ = planeHit
+          ? { x: startFood.x - planeHit.x, z: startFood.z - planeHit.z }
+          : { x: 0, z: 0 };
+        this._sim.moveFoodTo(0, startFood.x, startFood.z, true);
+      } else if (hit === 'walker' && c0) {
+        this.activeDragMode = 'walker';
+        this.canvas.classList.add('dragging');
+        const com = c0.body.getCenterOfMass();
+        dragStartWorldPos = com.clone();
+        const planeHit = this._intersectHorizontalPlane(px, py, 0.25);
+        dragOffsetXZ = planeHit
+          ? { x: com.x - planeHit.x, z: com.z - planeHit.z }
+          : { x: 0, z: 0 };
+        lastWorldX = com.x;
+        lastWorldZ = com.z;
+        lastMoveTime = performance.now();
+        throwVx = 0;
+        throwVz = 0;
+        this._sim.grabCreature(0);
+      } else {
+        this.activeDragMode = 'camera';
+      }
+
       this.canvas.setPointerCapture(e.pointerId);
     });
 
     this.canvas.addEventListener('pointermove', e => {
-      if (!dragging) return;
+      if (!dragging) {
+        const hover = this._hitTestScene(e.clientX, e.clientY);
+        this.hoveredObject = hover;
+        this.canvas.classList.toggle('grab-hover', Boolean(hover));
+        return;
+      }
+
+      if (!this.canvas.hasPointerCapture(e.pointerId)) return;
+
       const dx = e.clientX - lastX;
       const dy = e.clientY - lastY;
       lastX = e.clientX;
       lastY = e.clientY;
       maxDragDist = Math.max(maxDragDist, Math.hypot(e.clientX - downX, e.clientY - downY));
+
+      if (this.activeDragMode === 'food' && this._sim) {
+        const { px, py } = this._clientToCanvas(e.clientX, e.clientY);
+        const planeHit = this._intersectHorizontalPlane(px, py, 0.16);
+        if (planeHit) {
+          this._sim.moveFoodTo(0, planeHit.x + dragOffsetXZ.x, planeHit.z + dragOffsetXZ.z, true);
+        }
+        return;
+      }
+
+      if (this.activeDragMode === 'walker' && this._sim) {
+        const { px, py } = this._clientToCanvas(e.clientX, e.clientY);
+        const planeHit = this._intersectHorizontalPlane(px, py, 0.25);
+        if (planeHit) {
+          const now = performance.now();
+          const dtMove = Math.max(0.008, Math.min(0.12, (now - lastMoveTime) / 1000));
+          const nextX = planeHit.x + dragOffsetXZ.x;
+          const nextZ = planeHit.z + dragOffsetXZ.z;
+          const instVx = (nextX - lastWorldX) / dtMove;
+          const instVz = (nextZ - lastWorldZ) / dtMove;
+          throwVx = 0.55 * throwVx + 0.45 * instVx;
+          throwVz = 0.55 * throwVz + 0.45 * instVz;
+          lastWorldX = nextX;
+          lastWorldZ = nextZ;
+          lastMoveTime = now;
+          this._sim.dragCreatureTo(0, nextX, nextZ, throwVx, throwVz);
+        }
+        return;
+      }
 
       if (e.shiftKey) {
         usedShiftStrafe = true;
@@ -116,40 +366,15 @@ export class Renderer3D {
     });
 
     this.canvas.addEventListener('pointerup', e => {
-      if (!dragging) return;
-      dragging = false;
-      try {
-        this.canvas.releasePointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
-      // Single click (without dragging) toggles simulation pause/resume
-      if (maxDragDist < 5) {
-        if (typeof this.onTogglePause === 'function') {
-          this.onTogglePause('canvas_click');
-        }
-      } else if (typeof this.onCameraAction === 'function') {
-        if (usedShiftStrafe) {
-          this.onCameraAction({
-            action: 'camera_strafe',
-            dragPx: Math.round(maxDragDist),
-            fromTarget: [Number(startTargetX.toFixed(2)), Number(startTargetZ.toFixed(2))],
-            toTarget: [Number(this.camTarget.x.toFixed(2)), Number(this.camTarget.z.toFixed(2))],
-            strafeMeters: Number(Math.hypot(this.camTarget.x - startTargetX, this.camTarget.z - startTargetZ).toFixed(2)),
-            camera: this.getCameraTelemetry()
-          });
-        } else {
-          this.onCameraAction({
-            action: 'camera_orbit',
-            dragPx: Math.round(maxDragDist),
-            fromYawDeg: Number(((startYaw * 180) / Math.PI).toFixed(1)),
-            toYawDeg: Number(((this.camYaw * 180) / Math.PI).toFixed(1)),
-            fromPitchDeg: Number(((startPitch * 180) / Math.PI).toFixed(1)),
-            toPitchDeg: Number(((this.camPitch * 180) / Math.PI).toFixed(1)),
-            camera: this.getCameraTelemetry()
-          });
-        }
-      }
+      finishPointerInteraction(e.pointerId, false);
+    });
+
+    this.canvas.addEventListener('pointercancel', e => {
+      finishPointerInteraction(e.pointerId, true);
+    });
+
+    this.canvas.addEventListener('lostpointercapture', () => {
+      finishPointerInteraction(null, true);
     });
 
     this.canvas.addEventListener('wheel', e => {
@@ -211,6 +436,7 @@ export class Renderer3D {
 
   render(sim, interpAlpha = 1.0) {
     this.resize();
+    this._sim = sim;
     const ctx = this.ctx;
     const width = this.canvas.width;
     const height = this.canvas.height;
@@ -219,7 +445,7 @@ export class Renderer3D {
     const focusIdx = this.showAllPopulation ? (sim.bestCreatureIdx || 0) : 0;
     const leader = sim.creatures[focusIdx] || sim.creatures[0];
 
-    if (this.followLeader && leader) {
+    if (this.followLeader && leader && !this.activeDragMode) {
       const food = leader.foodPos;
       // Only re-frame camera when a new food target is ACTIVE or begins DROPPING from the sky
       const hasVisibleTarget = leader.foodState === 'ACTIVE' || leader.foodState === 'DROPPING';
@@ -295,6 +521,7 @@ export class Renderer3D {
     const camRight = Vec3.cross(camForward, worldUp).normalize();
     const camUp = Vec3.cross(camRight, camForward).normalize();
 
+    this._lastCam = { camPos, camForward, camRight, camUp, width, height, fovScale };
     const proj = pt => this.project(pt, camPos, camForward, camRight, camUp, width, height, fovScale);
 
     // 1. Background sky/lab gradient
@@ -593,28 +820,64 @@ export class Renderer3D {
         ctx.arc(pFood.sx, pFood.sy, rPx, 0, Math.PI * 2);
         ctx.fill();
         if (isLeader) {
-          ctx.strokeStyle = '#fbbf24';
-          ctx.lineWidth = 1.8;
+          ctx.strokeStyle = (this.hoveredObject === 'food' || this.activeDragMode === 'food') ? '#38bdf8' : '#fbbf24';
+          ctx.lineWidth = (this.hoveredObject === 'food' || this.activeDragMode === 'food') ? 2.8 : 1.8;
           ctx.stroke();
+        }
+        if ((this.hoveredObject === 'food' || this.activeDragMode === 'food') && pFoodShadow) {
+          const grabR = Math.max(8, 0.30 * pFoodShadow.scale);
+          ctx.strokeStyle = this.activeDragMode === 'food' ? '#38bdf8' : 'rgba(56, 189, 248, 0.78)';
+          ctx.lineWidth = 2.0;
+          ctx.setLineDash([4, 3]);
+          ctx.beginPath();
+          ctx.ellipse(pFoodShadow.sx, pFoodShadow.sy, grabR, grabR * 0.48, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
         }
       }
     }
 
-    // 2. Ground shadow of torso CoM and feet
+    // 2. Ground shadow of torso CoM and feet (+ interactive hover/grab drop-target ring)
     const pComShadow = proj(new Vec3(com.x, 0.004, com.z));
     if (pComShadow) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.38)';
+      const liftFactor = Math.max(0.45, 1.0 - Math.max(0, com.y - 0.18) * 0.85);
+      ctx.fillStyle = `rgba(0, 0, 0, ${(0.38 * liftFactor).toFixed(2)})`;
       ctx.beginPath();
       ctx.ellipse(
         pComShadow.sx,
         pComShadow.sy,
-        Math.max(6, 0.30 * pComShadow.scale),
-        Math.max(3, 0.16 * pComShadow.scale),
+        Math.max(6, 0.30 * pComShadow.scale * liftFactor),
+        Math.max(3, 0.16 * pComShadow.scale * liftFactor),
         0,
         0,
         Math.PI * 2
       );
       ctx.fill();
+
+      if (this.hoveredObject === 'walker' || this.activeDragMode === 'walker') {
+        const ringRad = Math.max(12, 0.38 * pComShadow.scale);
+        ctx.strokeStyle = this.activeDragMode === 'walker' ? '#38bdf8' : 'rgba(56, 189, 248, 0.75)';
+        ctx.lineWidth = 2.2;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.ellipse(pComShadow.sx, pComShadow.sy, ringRad, ringRad * 0.50, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (creature.isGrabbed) {
+          const pComAir = proj(com);
+          if (pComAir) {
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.65)';
+            ctx.lineWidth = 1.6;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(pComAir.sx, pComAir.sy);
+            ctx.lineTo(pComShadow.sx, pComShadow.sy);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+        }
+      }
     }
 
     // 3. Render Rigid Torso Structural Frame

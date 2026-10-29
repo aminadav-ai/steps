@@ -52,7 +52,7 @@ const rangeAmbition = document.getElementById('rangeAmbition');
 const labelAmbitionVal = document.getElementById('labelAmbitionVal');
 const btnToggleFreeze = document.getElementById('btnToggleFreeze');
 
-let currentAmbitionPreset = 'bound';
+let currentAmbitionPreset = 'min';
 
 function formatAmbitionLabel(val, preset) {
   if (preset === 'infinite' || val >= 0.54) return '∞ (Вечное обучение — 100%)';
@@ -191,6 +191,12 @@ renderer3D.onTogglePause = (source = 'canvas_click') => {
 // Camera orbit, Shift+drag strafe, and wheel zoom events
 renderer3D.onCameraAction = camEvent => {
   logger.recordCameraEvent(camEvent, sim, renderer3D, getUIState());
+};
+
+// Direct 3D mouse manipulation of food orb (drag & drop) and walker (grab, move, throw)
+renderer3D.onSceneInteract = interactEvent => {
+  logger.recordUserEvent(interactEvent.action, interactEvent, sim, renderer3D, getUIState());
+  updateHUD();
 };
 
 btnUprightWalker.addEventListener('click', () => {
@@ -367,7 +373,7 @@ function updateHUD() {
   hudUpdate.textContent = sim.trainer.updateCount;
   hudSimTime.textContent = `${sim.simTime.toFixed(1)} с`;
   hudTotalFood.textContent = leader.foodCollected;
-  hudLeaderVel.textContent = `${leader.lastVelocityTowardFood.toFixed(2)} м/с`;
+  hudLeaderVel.textContent = `${(leader.smoothedVelocityTowardFood || 0).toFixed(2)} м/с`;
 
   const meanVel = sim.recentVelocities.length > 0
     ? sim.recentVelocities.reduce((a, b) => a + b, 0) / sim.recentVelocities.length

@@ -33,9 +33,12 @@ export class CreatureInstance {
     this.cumulativeReward = 0;
     this.lastStepReward = 0;
     this.lastVelocityTowardFood = 0;
+    this.smoothedVelocityTowardFood = 0;
     this.lastMechanicalPower = 0;
     this.lastState = null;
     this.lastAction = null;
+    this.isGrabbed = false;
+    this.grabSavedOffsets = null;
   }
 
   /**

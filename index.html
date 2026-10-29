@@ -39,11 +39,12 @@
 
       <div class="hud-bottom-bar">
         <div class="hud-legend">
-          <span><strong>Клик по арене:</strong> Пауза/Пуск</span>
-          <span><strong>Drag:</strong> Вращение</span>
-          <span><strong>Shift + Drag:</strong> Стрейф камеры</span>
-          <span><i class="legend-dot" style="background:#4ade80"></i>Вектор опоры N</span>
-          <span><i class="legend-dot" style="background:#facc15"></i>Вектор трения F_тр</span>
+          <span><strong>Drag шарик / шагохода:</strong> Переставить / Бросить</span>
+          <span><strong>Клик по фону:</strong> Пауза/Пуск</span>
+          <span><strong>Drag фон:</strong> Вращение</span>
+          <span><strong>Shift + Drag:</strong> Стрейф</span>
+          <span><i class="legend-dot" style="background:#4ade80"></i>Опора N</span>
+          <span><i class="legend-dot" style="background:#facc15"></i>Трение F_тр</span>
         </div>
       </div>
     </section>
@@ -176,8 +177,8 @@
         <div class="control-field" style="margin-block-start: 4px;">
           <label>Амбиция обучения (баланс минимум / скачок / максимум):</label>
           <div class="speed-row" id="ambitionButtons">
-            <button class="btn" data-ambition="min" title="Минимум (0.18 м/с): заморозить веса сразу после освоения базового аккуратного шага">🐢 Минимум</button>
-            <button class="btn active" data-ambition="bound" title="Бодрый скачок (0.34 м/с): учить энергичный пружинистый прыжок к цели перед фиксацией навыка">🐇 Скачок</button>
+            <button class="btn active" data-ambition="min" title="Минимум (0.18 м/с): заморозить веса сразу после освоения базового аккуратного шага">🐢 Минимум</button>
+            <button class="btn" data-ambition="bound" title="Бодрый скачок (0.34 м/с): учить энергичный пружинистый прыжок к цели перед фиксацией навыка">🐇 Скачок</button>
             <button class="btn" data-ambition="turbo" title="Турбо-галоп (0.46 м/с): доучивать мощный скоростной галоп с высокой частотой шага">🚀 Галоп</button>
             <button class="btn" data-ambition="infinite" title="Вечное ИИ: никогда не выключать обучение — непрерывный поиск максимальной скорости">♾️ Вечное</button>
           </div>
@@ -186,9 +187,9 @@
         <div class="control-field">
           <label for="rangeAmbition">
             <span>Порог мастерства (откл. обучения):</span>
-            <strong id="labelAmbitionVal">0.34 м/с (Бодрый скачок)</strong>
+            <strong id="labelAmbitionVal">0.18 м/с (Минимум / Шаг)</strong>
           </label>
-          <input type="range" id="rangeAmbition" min="0.15" max="0.55" step="0.02" value="0.34">
+          <input type="range" id="rangeAmbition" min="0.15" max="0.55" step="0.02" value="0.18">
         </div>
 
         <div class="btn-row">

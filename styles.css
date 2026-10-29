@@ -85,6 +85,20 @@ canvas {
   block-size: 100%;
 }
 
+#arenaCanvas {
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#arenaCanvas.grab-hover {
+  cursor: grab;
+}
+
+#arenaCanvas.dragging {
+  cursor: grabbing;
+}
+
 .hud-overlay {
   position: absolute;
   inset-block-start: 14px;
