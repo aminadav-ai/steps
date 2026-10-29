@@ -369,14 +369,21 @@ if (btnToggleFreeze) {
   });
 }
 
-function updateHUD() {
+let lastVelHudUpdateNow = 0;
+
+function updateHUD(forceVelUpdate = false) {
   if (!sim) return;
   const leader = sim.creatures[0];
 
   hudUpdate.textContent = sim.trainer.updateCount;
   hudSimTime.textContent = `${sim.simTime.toFixed(1)} с`;
   hudTotalFood.textContent = leader.foodCollected;
-  hudLeaderVel.textContent = `${(leader.smoothedVelocityTowardFood || 0).toFixed(2)} м/с`;
+
+  const now = performance.now();
+  if (forceVelUpdate || now - lastVelHudUpdateNow >= 280) {
+    lastVelHudUpdateNow = now;
+    hudLeaderVel.textContent = `${(leader.smoothedVelocityTowardFood || 0).toFixed(2)} м/с`;
+  }
 
   const meanVel = sim.recentVelocities.length > 0
     ? sim.recentVelocities.reduce((a, b) => a + b, 0) / sim.recentVelocities.length

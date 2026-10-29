@@ -474,11 +474,11 @@ export class ArenaSimulation {
         : (c.prevFoodDist - newDist) / dt;
       c.prevFoodDist = newDist;
       c.lastVelocityTowardFood = rawVelToward;
-      // Smooth low-pass filtered velocity toward target (tau ~ 0.75 s) so HUD readout never jumps per leg stroke
+      // Smooth low-pass filtered velocity toward target (tau ~ 1.5 s, 2x smoother) so HUD readout never jumps per leg stroke
       if (c.isGrabbed || isInThrowFlight || isWaitingForFood || isOverturnedNow) {
-        c.smoothedVelocityTowardFood = 0.92 * c.smoothedVelocityTowardFood;
+        c.smoothedVelocityTowardFood = 0.96 * c.smoothedVelocityTowardFood;
       } else {
-        c.smoothedVelocityTowardFood = 0.93 * c.smoothedVelocityTowardFood + 0.07 * rawVelToward;
+        c.smoothedVelocityTowardFood = 0.965 * c.smoothedVelocityTowardFood + 0.035 * rawVelToward;
       }
       const velToward = rawVelToward;
       stepVelSum += velToward;

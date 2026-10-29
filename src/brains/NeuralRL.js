@@ -1157,9 +1157,8 @@ export class PPOTrainer {
     // Update Homeostatic Meta-Plasticity Sense
     this._evaluateMetaPlasticity(creatures, workerLocomotionScore[0], meanTdSurprise);
 
-    // If in CONSOLIDATED mode (learning paused by meta-sense), skip weight updates completely!
+    // If in CONSOLIDATED mode (learning paused by meta-sense), skip weight updates and do NOT increment epoch counter!
     if (!wasLearningActive && this.metaState.mode === 'CONSOLIDATED') {
-      this.updateCount += 1;
       this.lastMeanStepReward = rewardSum / totalSamples;
       this._resetBuffers();
       return {
@@ -1653,8 +1652,8 @@ export class NESTrainer {
       }
     }
 
-    this.updateCount += 1;
     if (this.metaState.isLearningActive) {
+      this.updateCount += 1;
       const adv = meanStepRew - this.baselineReturn;
       this.baselineReturn = 0.8 * this.baselineReturn + 0.2 * meanStepRew;
       const stepScale = Math.max(-1.0, Math.min(1.0, adv * 2.5)) * this.lr;
