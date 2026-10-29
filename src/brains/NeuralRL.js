@@ -222,9 +222,8 @@ export class ActorCriticBrain {
     const zRight = new Float64Array(this.actDim);
     this.rightingLayer.forward(obs, zRight);
 
-    const rollTilt = obs[8] || 0;
-    // Choose roll direction that works WITH gravity/current tilt if tilted, or learned side
-    const side = Math.abs(rollTilt) > 0.18 ? Math.sign(rollTilt) : this.rightingSideSign;
+    // Keep roll direction consistent throughout the attempt so it rolls all the way over the edge!
+    const side = this.rightingSideSign;
     const s = Math.sin(this.rightingPhase);
     const c = Math.cos(this.rightingPhase);
 
@@ -238,23 +237,23 @@ export class ActorCriticBrain {
       if (leg === 0) {
         // Front-Left leg: if side >= 0, hyper-extend dorsally (-1) into floor to lever shell up; else tuck (+1)
         liftCmd = side >= 0
-          ? -this.rightingGain * (0.75 + 0.25 * Math.max(0, s))
+          ? -this.rightingGain * (0.82 + 0.18 * Math.max(0, s))
           : +this.rightingAsym;
         strideCmd = this.rightingSweep * s;
       } else if (leg === 1) {
         // Front-Right leg: opposite of Front-Left to create maximum roll torque across torso edge
         liftCmd = side >= 0
           ? +this.rightingAsym
-          : -this.rightingGain * (0.75 + 0.25 * Math.max(0, s));
+          : -this.rightingGain * (0.82 + 0.18 * Math.max(0, s));
         strideCmd = -this.rightingSweep * s;
       } else {
         // Rear leg(s): rhythmic dorsal rocking lever
-        liftCmd = -this.rightingGain * (0.65 * c + 0.35);
+        liftCmd = -this.rightingGain * (0.75 * c + 0.25);
         strideCmd = this.rightingSweep * c;
       }
 
-      mu[liftIdx] = Math.tanh(liftCmd + 0.25 * zRight[liftIdx]);
-      mu[strideIdx] = Math.tanh(strideCmd + 0.25 * zRight[strideIdx]);
+      mu[liftIdx] = Math.tanh(liftCmd + 0.15 * zRight[liftIdx]);
+      mu[strideIdx] = Math.tanh(strideCmd + 0.15 * zRight[strideIdx]);
     }
 
     if (recordVis) {
@@ -457,27 +456,27 @@ export class ActorCriticBrain {
     this.criticOut.zeroGrad();
   }
 
-  stepAdam(actorLr = 0.003, criticLr = 0.0045) {
+  stepAdam(actorLr = 0.003, criticLr = 0.0045, deepScale = 0.25) {
     this.adamStepCount += 1;
     const s = this.adamStepCount;
-    this.actorL1.adamStep(actorLr, 0.9, 0.999, 1e-8, s, 0.8);
-    this.actorL2.adamStep(actorLr, 0.9, 0.999, 1e-8, s, 0.8);
-    this.actorOut.adamStep(actorLr, 0.9, 0.999, 1e-8, s, 0.8);
-    this.actorSkip.adamStep(actorLr * 1.35, 0.9, 0.999, 1e-8, s, 0.8);
+    this.actorL1.adamStep(actorLr * deepScale, 0.9, 0.999, 1e-8, s, 0.5);
+    this.actorL2.adamStep(actorLr * deepScale, 0.9, 0.999, 1e-8, s, 0.5);
+    this.actorOut.adamStep(actorLr * deepScale, 0.9, 0.999, 1e-8, s, 0.5);
+    this.actorSkip.adamStep(actorLr * 0.85, 0.9, 0.999, 1e-8, s, 0.6);
 
     // Gentle L2 weight decay on deep residual MLP layers + bias centering + row norm bounding on actorSkip.W
     // so single-walker trajectories never accumulate directional bias or post-convergence saturation
     for (const layer of [this.actorL1, this.actorL2, this.actorOut]) {
       const W = layer.W;
       for (let i = 0; i < W.length; i++) {
-        W[i] *= 0.9985;
+        W[i] *= 0.992;
       }
       for (let o = 0; o < layer.b.length; o++) {
-        layer.b[o] *= 0.96;
+        layer.b[o] *= 0.90;
       }
     }
     for (let o = 0; o < this.actorSkip.b.length; o++) {
-      this.actorSkip.b[o] *= 0.92;
+      this.actorSkip.b[o] = 0;
     }
     const skipW = this.actorSkip.W;
     for (let a = 0; a < this.actDim; a++) {
@@ -1008,6 +1007,7 @@ export class PPOTrainer {
 
     // Single-Walker (or Multi-Worker) Parameter-Space Natural Step on actorSkip.W:
     const skipW = this.brain.actorSkip.W;
+    const tpl = this.brain.cpgTemplate;
     if (!this.bestSkipW) {
       this.bestSkipW = Float64Array.from(skipW);
       this.bestScore = 0.14;
@@ -1016,8 +1016,8 @@ export class PPOTrainer {
     if (W === 1) {
       const pert0 = this.workerSkipPerturbs[0];
       if (pert0) {
-        if (score0 >= this.baselineLocomotionScore - 0.01) {
-          const alpha = score0 > this.bestScore ? 0.45 : 0.22;
+        if (score0 >= this.baselineLocomotionScore - 0.02) {
+          const alpha = score0 > this.bestScore ? 0.42 : 0.20;
           for (let i = 0; i < skipW.length; i++) {
             skipW[i] += alpha * pert0[i];
           }
@@ -1025,10 +1025,19 @@ export class PPOTrainer {
             this.bestScore = 0.65 * this.bestScore + 0.35 * score0;
             this.bestSkipW = Float64Array.from(skipW);
           }
-        } else if (score0 < this.bestScore * 0.65) {
-          // Restore toward best known CPG gait matrix so a poor exploration rollout never degrades locomotion
+        } else if (score0 < this.bestScore * 0.70) {
+          // Restore toward best known CPG gait matrix + resonance template so a poor exploration rollout never degrades locomotion
           for (let i = 0; i < skipW.length; i++) {
-            skipW[i] = 0.80 * this.bestSkipW[i] + 0.20 * skipW[i];
+            skipW[i] = 0.85 * this.bestSkipW[i] + 0.15 * skipW[i];
+          }
+        }
+        // Ensure resonance CPG drive & steering gain stay healthy and bilaterally symmetric
+        if (tpl) {
+          const targetGain = Math.min(2.6, 1.15 + 0.10 * this.updateCount);
+          for (let i = 0; i < skipW.length; i++) {
+            if (Math.abs(tpl[i]) > 1e-4) {
+              skipW[i] = 0.78 * skipW[i] + 0.22 * (tpl[i] * targetGain);
+            }
           }
         }
         this.baselineLocomotionScore = 0.75 * this.baselineLocomotionScore + 0.25 * Math.max(0.08, score0);

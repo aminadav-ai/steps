@@ -336,6 +336,7 @@ function attachOrthogonalLeg({
         oppLatMuscle.setTargetLengthDirect(Vec3.dist(restOppLatPos, targetPos));
       }
       if (dorsalMuscle && restDorsalPos) {
+        dorsalMuscle.maxForce = isRightingMode ? 155.0 : 0.0;
         dorsalMuscle.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetPos));
       }
 
