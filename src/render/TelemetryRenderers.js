@@ -193,7 +193,7 @@ export class LearningChartRenderer {
     this.ctx = canvas.getContext('2d');
   }
 
-  render(history) {
+  render(history, isLearningActive = true) {
     const dpr = window.devicePixelRatio || 1;
     const rect = this.canvas.getBoundingClientRect();
     const w = Math.max(260, Math.floor(rect.width * dpr));
@@ -290,5 +290,11 @@ export class LearningChartRenderer {
     ctx.fillText('● Скорость к еде (м/с)', padL + 4 * dpr, padT - 5 * dpr);
     ctx.fillStyle = '#34d399';
     ctx.fillText('● Средняя награда', padL + 135 * dpr, padT - 5 * dpr);
+
+    if (!isLearningActive) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#94a3b8';
+      ctx.fillText('⏸ Обучение выкл.', padL + plotW, padT + plotH + 14 * dpr);
+    }
   }
 }

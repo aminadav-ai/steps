@@ -1163,6 +1163,7 @@ export class PPOTrainer {
       this._resetBuffers();
       return {
         updateCount: this.updateCount,
+        didUpdateWeights: false,
         meanStepReward: this.lastMeanStepReward,
         policyLoss: 0,
         valueLoss: 0,
@@ -1361,6 +1362,7 @@ export class PPOTrainer {
 
     return {
       updateCount: this.updateCount,
+      didUpdateWeights: true,
       meanStepReward: this.lastMeanStepReward,
       policyLoss: this.lastPolicyLoss,
       valueLoss: this.lastValueLoss,
@@ -1652,7 +1654,8 @@ export class NESTrainer {
       }
     }
 
-    if (this.metaState.isLearningActive) {
+    const didUpdateWeights = Boolean(this.metaState.isLearningActive);
+    if (didUpdateWeights) {
       this.updateCount += 1;
       const adv = meanStepRew - this.baselineReturn;
       this.baselineReturn = 0.8 * this.baselineReturn + 0.2 * meanStepRew;
@@ -1669,6 +1672,7 @@ export class NESTrainer {
 
     return {
       updateCount: this.updateCount,
+      didUpdateWeights,
       meanStepReward: this.lastMeanStepReward,
       policyLoss: 0,
       valueLoss: 0,

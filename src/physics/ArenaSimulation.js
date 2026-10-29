@@ -624,11 +624,14 @@ export class ArenaSimulation {
       }
     }
 
-    this.recentStepRewards.push(stepRewSum / this.populationSize);
-    this.recentVelocities.push(stepVelSum / this.populationSize);
-    if (this.recentStepRewards.length > 64) {
-      this.recentStepRewards.shift();
-      this.recentVelocities.shift();
+    const isLearningNow = !this.trainer.metaState || this.trainer.metaState.isLearningActive;
+    if (isLearningNow) {
+      this.recentStepRewards.push(stepRewSum / this.populationSize);
+      this.recentVelocities.push(stepVelSum / this.populationSize);
+      if (this.recentStepRewards.length > 64) {
+        this.recentStepRewards.shift();
+        this.recentVelocities.shift();
+      }
     }
 
     // 4. Pass transition outcome to PPO / NES trainer
@@ -644,6 +647,7 @@ export class ArenaSimulation {
       const dist0 = Math.hypot(dx0, dz0);
       const entry = {
         update: updateInfo.updateCount,
+        didUpdateWeights: updateInfo.didUpdateWeights !== false,
         simTime: Number(this.simTime.toFixed(1)),
         meanReward: Number(meanRew.toFixed(4)),
         meanVelocity: Number(meanVel.toFixed(4)),
@@ -663,7 +667,10 @@ export class ArenaSimulation {
         valueLoss: Number((updateInfo.valueLoss || 0).toFixed(4)),
         entropy: Number((updateInfo.entropy || 0).toFixed(4))
       };
-      this.history.push(entry);
+      // Only append to learning curve history when an actual learning epoch updated weights!
+      if (entry.didUpdateWeights) {
+        this.history.push(entry);
+      }
       return entry;
     }
     return null;

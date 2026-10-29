@@ -64,6 +64,7 @@ function formatAmbitionLabel(val, preset) {
 const metricMeanVel = document.getElementById('metricMeanVel');
 const metricMeanRew = document.getElementById('metricMeanRew');
 const metricPower = document.getElementById('metricPower');
+const learningChartBadge = document.getElementById('learningChartBadge');
 const logsContainer = document.getElementById('logsContainer');
 const logsCountBadge = document.getElementById('logsCountBadge');
 
@@ -165,7 +166,8 @@ function setPausedState(nextPaused, source = 'ui') {
 
 function handleUpdateEntry(updateEntry) {
   if (!updateEntry) return;
-  chartRenderer.render(sim.history);
+  const isLearningNow = !sim.trainer.metaState || sim.trainer.metaState.isLearningActive;
+  chartRenderer.render(sim.history, isLearningNow);
   const fullSnapshot = logger.buildTelemetrySnapshot(sim, renderer3D, getUIState());
   logger.logUpdate(
     updateEntry,
@@ -385,19 +387,29 @@ function updateHUD(forceVelUpdate = false) {
     hudLeaderVel.textContent = `${(leader.smoothedVelocityTowardFood || 0).toFixed(2)} м/с`;
   }
 
-  const meanVel = sim.recentVelocities.length > 0
-    ? sim.recentVelocities.reduce((a, b) => a + b, 0) / sim.recentVelocities.length
-    : 0;
-  const meanRew = sim.recentStepRewards.length > 0
-    ? sim.recentStepRewards.reduce((a, b) => a + b, 0) / sim.recentStepRewards.length
-    : 0;
+  const m = sim.trainer.metaState;
+  const isLearningNow = !m || m.isLearningActive;
 
-  metricMeanVel.textContent = `${meanVel.toFixed(3)} м/с`;
-  metricMeanRew.textContent = meanRew.toFixed(3);
-  metricPower.textContent = `${leader.lastMechanicalPower.toFixed(1)} Вт`;
+  if (learningChartBadge) {
+    learningChartBadge.textContent = isLearningNow ? '● ИДЁТ ЗАПИСЬ' : '⏸ ЗАФИКСИРОВАНО';
+    learningChartBadge.style.color = isLearningNow ? '#34d399' : '#94a3b8';
+  }
+
+  // Only update "Динамика обучения" metrics while learning is active so the card freezes when CONSOLIDATED
+  if (isLearningNow || forceVelUpdate) {
+    const meanVel = sim.recentVelocities.length > 0
+      ? sim.recentVelocities.reduce((a, b) => a + b, 0) / sim.recentVelocities.length
+      : 0;
+    const meanRew = sim.recentStepRewards.length > 0
+      ? sim.recentStepRewards.reduce((a, b) => a + b, 0) / sim.recentStepRewards.length
+      : 0;
+
+    metricMeanVel.textContent = `${meanVel.toFixed(3)} м/с`;
+    metricMeanRew.textContent = meanRew.toFixed(3);
+    metricPower.textContent = `${leader.lastMechanicalPower.toFixed(1)} Вт`;
+  }
 
   // Update Meta-Plasticity & Beetle Self-Righting Status Card on right panel
-  const m = sim.trainer.metaState;
   if (m && metaActiveBadge) {
     const modeClass = m.mode === 'CONSOLIDATED'
       ? 'consolidated'
