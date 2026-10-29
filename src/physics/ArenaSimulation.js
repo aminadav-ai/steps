@@ -45,10 +45,15 @@ export class ArenaSimulation {
     this.totalFoodCollected = 0;
     this.bestCreatureIdx = 0;
 
-    // Telemetry history for live charts
+    // Telemetry history for live charts and scientific logs
     this.history = [];
     this.recentStepRewards = [];
     this.recentVelocities = [];
+    this.c0Trajectory = [];
+    this.c0FoodEvents = [];
+    this.c0OverturnEvents = [];
+    this.c0LastFoodSpawnTime = 0;
+    this.c0CurrentlyOverturned = false;
 
     this._initSimulation();
   }
@@ -296,6 +301,16 @@ export class ArenaSimulation {
         r += 8.5; // Major foraging reward
         c.foodCollected += 1;
         this.totalFoodCollected += 1;
+        if (i === 0) {
+          this.c0FoodEvents.push({
+            foodNumber: c.foodCollected,
+            simTime: Number(this.simTime.toFixed(2)),
+            update: this.trainer.updateCount,
+            foodPos: [Number(c.foodPos.x.toFixed(2)), Number(c.foodPos.z.toFixed(2))],
+            timeToReachSec: Number((this.simTime - this.c0LastFoodSpawnTime).toFixed(2))
+          });
+          this.c0LastFoodSpawnTime = this.simTime;
+        }
         this._spawnFoodForCreature(c, false);
       }
 
@@ -304,6 +319,29 @@ export class ArenaSimulation {
       const flipped = up.y < 0.12 || center.y < 0.08;
       if (flipped) {
         r -= 2.2;
+      }
+
+      if (i === 0) {
+        const isOverturnedNow = up.y < 0.35;
+        if (isOverturnedNow && !this.c0CurrentlyOverturned) {
+          this.c0CurrentlyOverturned = true;
+          this.c0OverturnEvents.push({
+            event: 'overturned',
+            simTime: Number(this.simTime.toFixed(2)),
+            update: this.trainer.updateCount,
+            pos: [Number(center.x.toFixed(2)), Number(center.z.toFixed(2))],
+            upY: Number(up.y.toFixed(3))
+          });
+        } else if (!isOverturnedNow && this.c0CurrentlyOverturned) {
+          this.c0CurrentlyOverturned = false;
+          this.c0OverturnEvents.push({
+            event: 'recovered',
+            simTime: Number(this.simTime.toFixed(2)),
+            update: this.trainer.updateCount,
+            pos: [Number(center.x.toFixed(2)), Number(center.z.toFixed(2))],
+            upY: Number(up.y.toFixed(3))
+          });
+        }
       }
 
       c.lastStepReward = r;
@@ -324,6 +362,37 @@ export class ArenaSimulation {
       }
     }
 
+    // Record 1 Hz trajectory sample for the main observed creature (c0)
+    if (this.totalSteps % 20 === 0 && this.creatures[0]) {
+      const c0 = this.creatures[0];
+      const com = c0.body.getCenterOfMass();
+      const vel = c0.body.getCenterOfMassVelocity();
+      const { up, forward } = c0.getTorsoFrame();
+      const dx = c0.foodPos.x - com.x;
+      const dz = c0.foodPos.z - com.z;
+      const dist = Math.hypot(dx, dz);
+      const alignCos = (dx * forward.x + dz * forward.z) / Math.max(1e-5, dist);
+      this.c0Trajectory.push({
+        t: Number(this.simTime.toFixed(1)),
+        upd: this.trainer.updateCount,
+        pos: [Number(com.x.toFixed(2)), Number(com.y.toFixed(2)), Number(com.z.toFixed(2))],
+        vel: [Number(vel.x.toFixed(2)), Number(vel.z.toFixed(2))],
+        speed: Number(Math.hypot(vel.x, vel.z).toFixed(3)),
+        velToFood: Number(c0.lastVelocityTowardFood.toFixed(3)),
+        foodPos: [Number(c0.foodPos.x.toFixed(2)), Number(c0.foodPos.z.toFixed(2))],
+        distToFood: Number(dist.toFixed(2)),
+        alignCos: Number(alignCos.toFixed(2)),
+        yawDeg: Number(((Math.atan2(forward.z, forward.x) * 180) / Math.PI).toFixed(1)),
+        upY: Number(up.y.toFixed(3)),
+        contacts: c0.footNodes.map(f => (f.inContact ? 1 : 0)),
+        normalForces: c0.footNodes.map(f => Number(f.normalForce.toFixed(1))),
+        powerW: Number(c0.lastMechanicalPower.toFixed(1))
+      });
+      if (this.c0Trajectory.length > 360) {
+        this.c0Trajectory.shift();
+      }
+    }
+
     this.recentStepRewards.push(stepRewSum / this.populationSize);
     this.recentVelocities.push(stepVelSum / this.populationSize);
     if (this.recentStepRewards.length > 64) {
@@ -336,13 +405,26 @@ export class ArenaSimulation {
     if (updateInfo) {
       const meanVel = this.recentVelocities.reduce((a, b) => a + b, 0) / Math.max(1, this.recentVelocities.length);
       const meanRew = this.recentStepRewards.reduce((a, b) => a + b, 0) / Math.max(1, this.recentStepRewards.length);
+      const c0 = this.creatures[0];
+      const com0 = c0.body.getCenterOfMass();
+      const { up: up0, forward: fwd0 } = c0.getTorsoFrame();
+      const dx0 = c0.foodPos.x - com0.x;
+      const dz0 = c0.foodPos.z - com0.z;
+      const dist0 = Math.hypot(dx0, dz0);
       const entry = {
         update: updateInfo.updateCount,
         simTime: Number(this.simTime.toFixed(1)),
         meanReward: Number(meanRew.toFixed(4)),
         meanVelocity: Number(meanVel.toFixed(4)),
         totalFood: this.totalFoodCollected,
+        c0Food: c0.foodCollected,
         leaderFood: this.creatures[this.bestCreatureIdx].foodCollected,
+        c0Pos: [Number(com0.x.toFixed(2)), Number(com0.z.toFixed(2))],
+        c0FoodPos: [Number(c0.foodPos.x.toFixed(2)), Number(c0.foodPos.z.toFixed(2))],
+        c0DistToFood: Number(dist0.toFixed(2)),
+        c0AlignCos: Number(((dx0 * fwd0.x + dz0 * fwd0.z) / Math.max(1e-5, dist0)).toFixed(2)),
+        c0UpY: Number(up0.y.toFixed(3)),
+        c0VelToFood: Number(c0.lastVelocityTowardFood.toFixed(3)),
         policyLoss: Number((updateInfo.policyLoss || 0).toFixed(4)),
         valueLoss: Number((updateInfo.valueLoss || 0).toFixed(4)),
         entropy: Number((updateInfo.entropy || 0).toFixed(4))
@@ -351,5 +433,58 @@ export class ArenaSimulation {
       return entry;
     }
     return null;
+  }
+
+  getDetailedTelemetry() {
+    const c0 = this.creatures[0];
+    const com = c0.body.getCenterOfMass();
+    const vel = c0.body.getCenterOfMassVelocity();
+    const { up, forward } = c0.getTorsoFrame();
+    const dx = c0.foodPos.x - com.x;
+    const dz = c0.foodPos.z - com.z;
+    const dist = Math.hypot(dx, dz);
+
+    // Compute CPG & sensory-gated weight norms in actorSkip.W to diagnose neural learning progress
+    const skipW = this.brain.actorSkip.W;
+    let cpgDriveNorm = 0;
+    let turnDriveNorm = 0;
+    for (let a = 0; a < this.brain.actDim; a++) {
+      const row = a * this.brain.obsDim;
+      cpgDriveNorm += Math.hypot(skipW[row + 10], skipW[row + 11], skipW[row + 12], skipW[row + 13]);
+      turnDriveNorm += Math.hypot(skipW[row + 14], skipW[row + 15]);
+    }
+
+    return {
+      simTime: Number(this.simTime.toFixed(2)),
+      updateCount: this.trainer.updateCount,
+      floorFriction: this.floorFriction,
+      totalPopulationFood: this.totalFoodCollected,
+      mainWalker: {
+        foodCollected: c0.foodCollected,
+        cumulativeReward: Number(c0.cumulativeReward.toFixed(2)),
+        pos: [Number(com.x.toFixed(2)), Number(com.y.toFixed(2)), Number(com.z.toFixed(2))],
+        vel: [Number(vel.x.toFixed(2)), Number(vel.y.toFixed(2)), Number(vel.z.toFixed(2))],
+        speed: Number(Math.hypot(vel.x, vel.z).toFixed(3)),
+        velTowardFood: Number(c0.lastVelocityTowardFood.toFixed(3)),
+        foodPos: [Number(c0.foodPos.x.toFixed(2)), Number(c0.foodPos.z.toFixed(2))],
+        distToFood: Number(dist.toFixed(2)),
+        headingAlignCos: Number(((dx * forward.x + dz * forward.z) / Math.max(1e-5, dist)).toFixed(3)),
+        yawDeg: Number(((Math.atan2(forward.z, forward.x) * 180) / Math.PI).toFixed(1)),
+        upY: Number(up.y.toFixed(3)),
+        isOverturned: up.y < 0.35,
+        footContacts: c0.footNodes.map(f => f.inContact),
+        footNormalForcesN: c0.footNodes.map(f => Number(f.normalForce.toFixed(1)))
+      },
+      neuralDiagnostics: {
+        cpgForwardWeightNorm: Number(cpgDriveNorm.toFixed(3)),
+        cpgTurnWeightNorm: Number(turnDriveNorm.toFixed(3)),
+        lastPolicyLoss: Number((this.trainer.lastPolicyLoss || 0).toFixed(4)),
+        lastValueLoss: Number((this.trainer.lastValueLoss || 0).toFixed(4)),
+        lastEntropy: Number((this.trainer.lastEntropy || 0).toFixed(4))
+      },
+      c0FoodEvents: this.c0FoodEvents,
+      c0OverturnEvents: this.c0OverturnEvents,
+      recentTrajectory: this.c0Trajectory.slice(-120)
+    };
   }
 }

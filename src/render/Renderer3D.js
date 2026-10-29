@@ -30,8 +30,23 @@ export class Renderer3D {
     this.showForceVectors = true;
     this.showAllPopulation = false;
     this.onTogglePause = null;
+    this.onCameraAction = null;
 
     this._initPointerControls();
+  }
+
+  getCameraTelemetry() {
+    return {
+      yawDeg: Number(((this.camYaw * 180) / Math.PI).toFixed(1)),
+      pitchDeg: Number(((this.camPitch * 180) / Math.PI).toFixed(1)),
+      dist: Number(this.camDist.toFixed(2)),
+      target: [
+        Number(this.camTarget.x.toFixed(2)),
+        Number(this.camTarget.y.toFixed(2)),
+        Number(this.camTarget.z.toFixed(2))
+      ],
+      followLeader: this.followLeader
+    };
   }
 
   _initPointerControls() {
@@ -41,6 +56,13 @@ export class Renderer3D {
     let lastX = 0;
     let lastY = 0;
     let maxDragDist = 0;
+    let usedShiftStrafe = false;
+    let startYaw = 0;
+    let startPitch = 0;
+    let startTargetX = 0;
+    let startTargetZ = 0;
+    let wheelTimer = null;
+    let wheelStartDist = null;
 
     this.canvas.addEventListener('pointerdown', e => {
       if (e.button !== 0) return;
@@ -50,6 +72,11 @@ export class Renderer3D {
       lastX = e.clientX;
       lastY = e.clientY;
       maxDragDist = 0;
+      usedShiftStrafe = e.shiftKey;
+      startYaw = this.camYaw;
+      startPitch = this.camPitch;
+      startTargetX = this.camTarget.x;
+      startTargetZ = this.camTarget.z;
       this.canvas.setPointerCapture(e.pointerId);
     });
 
@@ -62,6 +89,7 @@ export class Renderer3D {
       maxDragDist = Math.max(maxDragDist, Math.hypot(e.clientX - downX, e.clientY - downY));
 
       if (e.shiftKey) {
+        usedShiftStrafe = true;
         // Quake-style strafe pan in the camera's horizontal / screen plane
         const cosP = Math.cos(this.camPitch);
         const sinP = Math.sin(this.camPitch);
@@ -96,15 +124,54 @@ export class Renderer3D {
         // ignore
       }
       // Single click (without dragging) toggles simulation pause/resume
-      if (maxDragDist < 5 && typeof this.onTogglePause === 'function') {
-        this.onTogglePause();
+      if (maxDragDist < 5) {
+        if (typeof this.onTogglePause === 'function') {
+          this.onTogglePause('canvas_click');
+        }
+      } else if (typeof this.onCameraAction === 'function') {
+        if (usedShiftStrafe) {
+          this.onCameraAction({
+            action: 'camera_strafe',
+            dragPx: Math.round(maxDragDist),
+            fromTarget: [Number(startTargetX.toFixed(2)), Number(startTargetZ.toFixed(2))],
+            toTarget: [Number(this.camTarget.x.toFixed(2)), Number(this.camTarget.z.toFixed(2))],
+            strafeMeters: Number(Math.hypot(this.camTarget.x - startTargetX, this.camTarget.z - startTargetZ).toFixed(2)),
+            camera: this.getCameraTelemetry()
+          });
+        } else {
+          this.onCameraAction({
+            action: 'camera_orbit',
+            dragPx: Math.round(maxDragDist),
+            fromYawDeg: Number(((startYaw * 180) / Math.PI).toFixed(1)),
+            toYawDeg: Number(((this.camYaw * 180) / Math.PI).toFixed(1)),
+            fromPitchDeg: Number(((startPitch * 180) / Math.PI).toFixed(1)),
+            toPitchDeg: Number(((this.camPitch * 180) / Math.PI).toFixed(1)),
+            camera: this.getCameraTelemetry()
+          });
+        }
       }
     });
 
     this.canvas.addEventListener('wheel', e => {
       e.preventDefault();
+      if (wheelStartDist === null) {
+        wheelStartDist = this.camDist;
+      }
       this.camDist = Math.max(1.3, Math.min(22.0, this.camDist * (1 + e.deltaY * 0.001)));
       this.goalCamDist = this.camDist;
+
+      if (wheelTimer) clearTimeout(wheelTimer);
+      wheelTimer = setTimeout(() => {
+        if (typeof this.onCameraAction === 'function' && wheelStartDist !== null) {
+          this.onCameraAction({
+            action: 'camera_zoom',
+            fromDist: Number(wheelStartDist.toFixed(2)),
+            toDist: Number(this.camDist.toFixed(2)),
+            camera: this.getCameraTelemetry()
+          });
+        }
+        wheelStartDist = null;
+      }, 280);
     }, { passive: false });
   }
 

@@ -104,30 +104,50 @@ async function startNewExperiment() {
   renderLogsList(logger.savedLogsList);
 }
 
-// Event Listeners
-selectMorphology.addEventListener('change', () => startNewExperiment());
-selectAlgorithm.addEventListener('change', () => startNewExperiment());
-btnNewExperiment.addEventListener('click', () => startNewExperiment());
+function getUIState() {
+  return {
+    paused,
+    simSpeed,
+    floorFriction: parseFloat(rangeFriction.value),
+    followLeader: chkFollowLeader.checked,
+    showForceVectors: chkShowForces.checked,
+    showAllPopulation: chkShowAllPop.checked,
+    morphology: selectMorphology.value,
+    algorithm: selectAlgorithm.value
+  };
+}
 
-function setPausedState(nextPaused) {
+// Event Listeners
+selectMorphology.addEventListener('change', () => {
+  logger.recordUserEvent('select_morphology', { morphology: selectMorphology.value }, sim, renderer3D, getUIState());
+  startNewExperiment();
+});
+selectAlgorithm.addEventListener('change', () => {
+  logger.recordUserEvent('select_algorithm', { algorithm: selectAlgorithm.value }, sim, renderer3D, getUIState());
+  startNewExperiment();
+});
+btnNewExperiment.addEventListener('click', () => {
+  logger.recordUserEvent('btn_new_experiment', { reason: 'user_reset_ai' }, sim, renderer3D, getUIState());
+  startNewExperiment();
+});
+
+function setPausedState(nextPaused, source = 'ui') {
   paused = nextPaused;
   btnPause.textContent = paused ? 'Продолжить' : 'Пауза';
   expStatusBadge.textContent = paused ? '⏸ ПАУЗА' : '● АКТИВЕН';
   expStatusBadge.style.color = paused ? '#fbbf24' : '#4ade80';
+  logger.recordUserEvent(paused ? 'pause' : 'resume', { source }, sim, renderer3D, getUIState());
 }
 
 function handleUpdateEntry(updateEntry) {
   if (!updateEntry) return;
   chartRenderer.render(sim.history);
+  const fullSnapshot = logger.buildTelemetrySnapshot(sim, renderer3D, getUIState());
   logger.logUpdate(
     updateEntry,
     sim.morphologyKey,
     sim.algorithm,
-    {
-      update: updateEntry.update,
-      totalFood: updateEntry.totalFood,
-      meanVelocity: updateEntry.meanVelocity
-    }
+    fullSnapshot
   ).then(() => {
     if (updateEntry.update % 3 === 0) {
       logger.refreshLogsList().then(list => renderLogsList(list));
@@ -136,29 +156,37 @@ function handleUpdateEntry(updateEntry) {
 }
 
 btnPause.addEventListener('click', () => {
-  setPausedState(!paused);
+  setPausedState(!paused, 'btn_pause');
 });
 
 // Single click on the 3D arena canvas toggles pause/resume
-renderer3D.onTogglePause = () => {
-  setPausedState(!paused);
+renderer3D.onTogglePause = (source = 'canvas_click') => {
+  setPausedState(!paused, source);
+};
+
+// Camera orbit, Shift+drag strafe, and wheel zoom events
+renderer3D.onCameraAction = camEvent => {
+  logger.recordCameraEvent(camEvent, sim, renderer3D, getUIState());
 };
 
 btnUprightWalker.addEventListener('click', () => {
   if (!sim) return;
   const focusIdx = renderer3D.showAllPopulation ? (sim.bestCreatureIdx || 0) : 0;
+  const c = sim.creatures[focusIdx] || sim.creatures[0];
+  const wasOverturned = c ? c.getTorsoFrame().up.y < 0.35 : false;
   sim.uprightCreature(focusIdx);
-  // Trigger smooth camera stage re-framing around the uprighted walker and its current food
   renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
+  logger.recordUserEvent('btn_upright_walker', { focusIdx, wasOverturned }, sim, renderer3D, getUIState());
   updateHUD();
 });
 
 btnStepOnce.addEventListener('click', () => {
   if (!sim) return;
-  if (!paused) setPausedState(true);
+  if (!paused) setPausedState(true, 'btn_step_once_auto_pause');
   simTimeAccum = 0;
   const updateEntry = sim.stepControl();
   handleUpdateEntry(updateEntry);
+  logger.recordUserEvent('btn_step_once', {}, sim, renderer3D, getUIState());
   const leader = sim.creatures[sim.bestCreatureIdx || 0];
   nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
   updateHUD();
@@ -239,16 +267,19 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
 }
 
 btnFastTrain.addEventListener('click', () => {
+  logger.recordUserEvent('btn_fast_train', { epochs: 25 }, sim, renderer3D, getUIState());
   runFastHeadlessTraining(25);
 });
 
 speedButtons.addEventListener('click', e => {
   const btn = e.target.closest('button[data-speed]');
   if (!btn) return;
+  const prevSpeed = simSpeed;
   simSpeed = parseFloat(btn.dataset.speed) || 1;
   for (const b of speedButtons.querySelectorAll('button')) {
     b.classList.toggle('active', b === btn);
   }
+  logger.recordUserEvent('speed_change', { fromSpeed: prevSpeed, toSpeed: simSpeed }, sim, renderer3D, getUIState());
 });
 
 rangeFriction.addEventListener('input', () => {
@@ -260,19 +291,27 @@ rangeFriction.addEventListener('input', () => {
   }
 });
 
+rangeFriction.addEventListener('change', () => {
+  const mu = parseFloat(rangeFriction.value);
+  logger.recordUserEvent('friction_change', { floorFriction: mu }, sim, renderer3D, getUIState());
+});
+
 chkFollowLeader.addEventListener('change', () => {
   renderer3D.followLeader = chkFollowLeader.checked;
   if (renderer3D.followLeader) {
     renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
   }
+  logger.recordUserEvent('toggle_follow_camera', { followLeader: chkFollowLeader.checked }, sim, renderer3D, getUIState());
 });
 
 chkShowForces.addEventListener('change', () => {
   renderer3D.showForceVectors = chkShowForces.checked;
+  logger.recordUserEvent('toggle_force_vectors', { showForceVectors: chkShowForces.checked }, sim, renderer3D, getUIState());
 });
 
 chkShowAllPop.addEventListener('change', () => {
   renderer3D.showAllPopulation = chkShowAllPop.checked;
+  logger.recordUserEvent('toggle_population_view', { showAllPopulation: chkShowAllPop.checked }, sim, renderer3D, getUIState());
 });
 
 function updateHUD() {
@@ -343,6 +382,10 @@ function animate(now = performance.now()) {
     const leader = sim.creatures[focusIdx] || sim.creatures[0];
     nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
     updateHUD();
+  }
+  // Periodic telemetry flush every ~2.5 seconds (150 frames) so trajectory & camera state stay up-to-date on disk
+  if (frameCounter % 150 === 0 && !paused) {
+    logger.scheduleSnapshotFlush(sim, renderer3D, getUIState());
   }
 }
 
