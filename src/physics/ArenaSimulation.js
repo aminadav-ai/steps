@@ -196,8 +196,21 @@ export class ArenaSimulation {
     for (let m = 0; m < c.body.muscles.length; m++) {
       const mus = c.body.muscles[m];
       mus.targetLength = mus.baseLength;
+      mus.directTargetLength = mus.baseLength;
+      mus.targetAction = 0;
       mus.smoothedAction = 0;
       mus.lambda = 0;
+    }
+
+    c.postThrowTimer = 0;
+    if (c.lastAction) {
+      c.lastAction.fill(0);
+      c.applyActionVector(c.lastAction, false);
+    }
+    if (this.trainer && this.trainer.wasOverturned) {
+      this.trainer.wasOverturned = false;
+      this.trainer.metaState.mode = this.trainer.modeBeforeOverturn || 'LEARNING_WALK';
+      this.trainer.metaState.isLearningActive = this.trainer.metaState.mode === 'LEARNING_WALK';
     }
 
     c.prevFoodDist = Math.hypot(c.foodPos.x - cx, c.foodPos.z - cz);
@@ -359,7 +372,7 @@ export class ArenaSimulation {
       this.world.resetContactTelemetry((body, idx) => {
         const c = this.creatures[idx];
         if (c && c.lastAction) {
-          const isOverturned = c.getTorsoFrame().up.y < 0.35;
+          const isOverturned = c.getTorsoFrame().up.y < 0.35 || Boolean(this.trainer && this.trainer.wasOverturned);
           c.applyActionVector(c.lastAction, isOverturned);
         }
       });

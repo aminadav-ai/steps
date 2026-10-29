@@ -224,6 +224,13 @@ export class ActorCriticBrain {
     this.rightingLayer.forward(obs, zRight);
 
     // Keep roll direction consistent throughout the attempt so it rolls all the way over the edge!
+    const upY = obs[6];
+    // Choose roll side so the leg that is actually ON THE FLOOR pushes dorsally against the floor:
+    // obs[8] is rollTilt = right.y. When right.y >= 0, hip 1 (-right) is on the floor and hip 0 (+right) is in the air!
+    const rollTilt = obs[8];
+    if (Math.abs(rollTilt) > 0.18) {
+      this.rightingSideSign = rollTilt >= 0 ? -1.0 : 1.0;
+    }
     const side = this.rightingSideSign;
     const s = Math.sin(this.rightingPhase);
     const c = Math.cos(this.rightingPhase);
@@ -235,21 +242,26 @@ export class ActorCriticBrain {
       let liftCmd = 0;
       let strideCmd = 0;
 
-      if (leg === 0) {
-        // Front-Left leg: if side >= 0, hyper-extend dorsally (-1) into floor to lever shell up; else tuck (+1)
+      // Stage 2: Once the torso has rolled past upY >= 0.42,
+      // settle legs to neutral ventral standing pose (+0.12) so dorsalMuscle unfolds any dorsal leg without stilt-propping!
+      if (upY >= 0.42) {
+        liftCmd = +0.12;
+        strideCmd = 0.15 * this.rightingSweep * (leg === 0 ? s : leg === 1 ? -s : c);
+      } else if (leg === 0) {
+        // Stage 1 (upY < 0.42, overturned): Front-Left leg (at +right) is on the floor when right.y < 0 (side > 0)
         liftCmd = side >= 0
-          ? -this.rightingGain * (0.82 + 0.18 * Math.max(0, s))
-          : +this.rightingAsym;
+          ? -this.rightingGain * (0.85 + 0.15 * Math.max(0, s))
+          : +0.15 * this.rightingAsym;
         strideCmd = this.rightingSweep * s;
       } else if (leg === 1) {
-        // Front-Right leg: opposite of Front-Left to create maximum roll torque across torso edge
+        // Front-Right leg (at -right) is on the floor when right.y >= 0 (side < 0)
         liftCmd = side >= 0
-          ? +this.rightingAsym
-          : -this.rightingGain * (0.82 + 0.18 * Math.max(0, s));
+          ? +0.15 * this.rightingAsym
+          : -this.rightingGain * (0.85 + 0.15 * Math.max(0, s));
         strideCmd = -this.rightingSweep * s;
       } else {
         // Rear leg(s): rhythmic dorsal rocking lever
-        liftCmd = -this.rightingGain * (0.75 * c + 0.25);
+        liftCmd = -this.rightingGain * (0.70 + 0.30 * Math.max(0, c));
         strideCmd = this.rightingSweep * c;
       }
 
@@ -288,8 +300,8 @@ export class ActorCriticBrain {
     this.rightingAsym = Math.min(1.0, this.rightingAsym + gainStep * (1.0 - this.rightingAsym * 0.65));
     this.rightingSweep = Math.min(0.95, this.rightingSweep + 0.22 * (1.0 - this.rightingSweep * 0.7));
 
-    // If an attempt with high gain still didn't complete the roll over the edge, try rolling to the other side!
-    if (endUpY < 0.25 && this.rightingAttempts >= 2) {
+    // Only switch roll side if we made near-zero upward progress (< 0.08) during the attempt
+    if (endUpY < -0.35 && (maxUpY - startUpY) < 0.08 && this.rightingAttempts >= 3) {
       this.rightingSideSign *= -1.0;
     }
 
@@ -799,7 +811,7 @@ export class PPOTrainer {
 
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
-    const isOverturned0 = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < 0.35;
+    const isOverturned0 = !c0.isGrabbed && !(c0.postThrowTimer > 0) && (upY0 < 0.35 || (this.wasOverturned && upY0 < 0.65));
 
     // 1. Check if main walker is overturned on its back -> engage Beetle Self-Righting Reflex!
     if (isOverturned0) {
@@ -833,7 +845,7 @@ export class PPOTrainer {
     }
 
     // 2. If walker just recovered from overturned back onto its feet!
-    if (this.wasOverturned && upY0 >= 0.45) {
+    if (this.wasOverturned && upY0 >= 0.65) {
       this.wasOverturned = false;
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
@@ -1474,7 +1486,8 @@ export class NESTrainer {
   selectActions(creatures) {
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
-    if (upY0 < 0.35) {
+    const isOverturned0 = !c0.isGrabbed && !(c0.postThrowTimer > 0) && (upY0 < 0.35 || (this.wasOverturned && upY0 < 0.65));
+    if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
         this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
@@ -1502,7 +1515,7 @@ export class NESTrainer {
       return;
     }
 
-    if (this.wasOverturned && upY0 >= 0.45) {
+    if (this.wasOverturned && upY0 >= 0.65) {
       this.wasOverturned = false;
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;

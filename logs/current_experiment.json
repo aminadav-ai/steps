@@ -2304,12 +2304,255 @@
       "policyLoss": 0,
       "valueLoss": 0,
       "entropy": 0.3689
+    },
+    {
+      "update": 86,
+      "simTime": 178,
+      "meanReward": 0.3083,
+      "meanVelocity": 0.0594,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -2.45,
+        9.32
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 7.04,
+      "c0AlignCos": 0.75,
+      "c0UpY": 0.941,
+      "c0VelToFood": -0.357,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
+    },
+    {
+      "update": 87,
+      "simTime": 179.6,
+      "meanReward": 0.3592,
+      "meanVelocity": 0.0844,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -2.05,
+        8.89
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 6.92,
+      "c0AlignCos": 0.69,
+      "c0UpY": 0.945,
+      "c0VelToFood": 0.421,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
+    },
+    {
+      "update": 88,
+      "simTime": 181.2,
+      "meanReward": 0.2958,
+      "meanVelocity": 0.055,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -1.72,
+        8.55
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 6.86,
+      "c0AlignCos": 0.74,
+      "c0UpY": 0.928,
+      "c0VelToFood": 0.081,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
+    },
+    {
+      "update": 89,
+      "simTime": 182.8,
+      "meanReward": 0.375,
+      "meanVelocity": 0.0861,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -1.44,
+        7.98
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 6.64,
+      "c0AlignCos": 0.77,
+      "c0UpY": 0.947,
+      "c0VelToFood": -0.168,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
+    },
+    {
+      "update": 90,
+      "simTime": 184.4,
+      "meanReward": 0.424,
+      "meanVelocity": 0.1092,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -1.17,
+        7.47
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 6.51,
+      "c0AlignCos": 0.69,
+      "c0UpY": 0.944,
+      "c0VelToFood": 0.632,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
+    },
+    {
+      "update": 91,
+      "simTime": 186,
+      "meanReward": 0.3696,
+      "meanVelocity": 0.0825,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -1,
+        7.01
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 6.38,
+      "c0AlignCos": 0.8,
+      "c0UpY": 0.929,
+      "c0VelToFood": -0.191,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
+    },
+    {
+      "update": 92,
+      "simTime": 187.6,
+      "meanReward": 0.4863,
+      "meanVelocity": 0.1299,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -0.92,
+        6.35
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 6.1,
+      "c0AlignCos": 0.78,
+      "c0UpY": 0.947,
+      "c0VelToFood": -0.011,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
+    },
+    {
+      "update": 93,
+      "simTime": 189.2,
+      "meanReward": 0.4647,
+      "meanVelocity": 0.1235,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -0.78,
+        5.82
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 5.98,
+      "c0AlignCos": 0.7,
+      "c0UpY": 0.94,
+      "c0VelToFood": 0.522,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
+    },
+    {
+      "update": 94,
+      "simTime": 190.8,
+      "meanReward": 0.373,
+      "meanVelocity": 0.0839,
+      "totalFood": 9,
+      "c0Food": 9,
+      "leaderFood": 9,
+      "c0Pos": [
+        -0.74,
+        5.3
+      ],
+      "c0FoodPos": [
+        -6.25,
+        3.39
+      ],
+      "c0DistToFood": 5.83,
+      "c0AlignCos": 0.8,
+      "c0UpY": 0.933,
+      "c0VelToFood": -0.456,
+      "metaMode": "CONSOLIDATED",
+      "isLearningActive": false,
+      "needToLearnPct": 10,
+      "policyLoss": 0,
+      "valueLoss": 0,
+      "entropy": 0.3689
     }
   ],
   "bestSnapshot": {
-    "capturedAt": "2026-10-29T10:30:19.664Z",
+    "capturedAt": "2026-10-29T10:30:34.555Z",
     "uiState": {
-      "paused": false,
+      "paused": true,
       "simSpeed": 1,
       "floorFriction": 1,
       "followLeader": true,
@@ -2329,8 +2572,8 @@
       "followLeader": true
     },
     "walkerAndTraining": {
-      "simTime": 176.78,
-      "updateCount": 85,
+      "simTime": 191.43,
+      "updateCount": 94,
       "floorFriction": 1,
       "totalPopulationFood": 9,
       "metaState": {
@@ -2338,52 +2581,52 @@
         "ambitionPreset": "min",
         "isLearningActive": false,
         "modeTitle": "🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО",
-        "reasonText": "Навык стабилен (эффективность ~0.27 м/с, целей: 9) — нейросеть не меняет веса, защищая походку",
-        "competenceEMA": 0.272,
+        "reasonText": "Навык стабилен (эффективность ~0.25 м/с, целей: 9) — нейросеть не меняет веса, защищая походку",
+        "competenceEMA": 0.252,
         "targetCompetence": 0.18,
         "relearnThreshold": 0.085,
-        "surpriseEMA": 0.866,
+        "surpriseEMA": 0.733,
         "needToLearnPct": 10,
         "stableEpochsCount": 2,
         "lowVelEpochsCount": 0,
-        "stallStepsCount": 1,
+        "stallStepsCount": 3,
         "rightingAttempts": 8,
         "rightingSuccesses": 7,
         "rightingSkillPct": 100
       },
       "mainWalker": {
         "foodCollected": 9,
-        "cumulativeReward": 1626.85,
+        "cumulativeReward": 1741.23,
         "pos": [
-          -2.77,
+          -0.75,
           0.15,
-          9.58
+          5.08
         ],
         "vel": [
-          0.24,
-          0.11,
-          0.11
+          0.43,
+          -0.01,
+          0.26
         ],
-        "speed": 0.266,
-        "velTowardFood": -0.051,
+        "speed": 0.508,
+        "velTowardFood": -0.35,
         "foodPos": [
           -6.25,
           3.39
         ],
-        "distToFood": 7.1,
-        "headingAlignCos": 0.776,
-        "yawDeg": -81.8,
-        "upY": 0.944,
+        "distToFood": 5.76,
+        "headingAlignCos": 0.796,
+        "yawDeg": -126.2,
+        "upY": 0.935,
         "isOverturned": false,
         "footContacts": [
           false,
           true,
-          false
+          true
         ],
         "footNormalForcesN": [
           0,
-          8.6,
-          0
+          5.4,
+          4
         ]
       },
       "neuralDiagnostics": {
@@ -2658,516 +2901,6 @@
         }
       ],
       "recentTrajectory": [
-        {
-          "t": 57,
-          "upd": 28,
-          "pos": [
-            -0.88,
-            0.14,
-            5.37
-          ],
-          "vel": [
-            0.05,
-            0.04
-          ],
-          "speed": 0.071,
-          "velToFood": -0.059,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.47,
-          "alignCos": 0.9,
-          "yawDeg": -88.4,
-          "upY": 0.867,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 14.6
-        },
-        {
-          "t": 58,
-          "upd": 29,
-          "pos": [
-            -0.91,
-            0.15,
-            5.41
-          ],
-          "vel": [
-            -0.09,
-            -0.04
-          ],
-          "speed": 0.095,
-          "velToFood": 0.069,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.49,
-          "alignCos": -0.92,
-          "yawDeg": 89.9,
-          "upY": 0.868,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 17.9
-        },
-        {
-          "t": 59,
-          "upd": 30,
-          "pos": [
-            -0.88,
-            0.15,
-            5.36
-          ],
-          "vel": [
-            0.07,
-            0.04
-          ],
-          "speed": 0.076,
-          "velToFood": -0.054,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.46,
-          "alignCos": 0.91,
-          "yawDeg": -89.3,
-          "upY": 0.868,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 52.2
-        },
-        {
-          "t": 60,
-          "upd": 30,
-          "pos": [
-            -0.92,
-            0.14,
-            5.4
-          ],
-          "vel": [
-            -0.06,
-            -0.04
-          ],
-          "speed": 0.073,
-          "velToFood": 0.053,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.49,
-          "alignCos": -0.95,
-          "yawDeg": 84.4,
-          "upY": 0.868,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 24.1
-        },
-        {
-          "t": 61,
-          "upd": 31,
-          "pos": [
-            -0.89,
-            0.15,
-            5.35
-          ],
-          "vel": [
-            0.08,
-            0.02
-          ],
-          "speed": 0.082,
-          "velToFood": -0.044,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.45,
-          "alignCos": 0.94,
-          "yawDeg": -95.3,
-          "upY": 0.871,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 13.6
-        },
-        {
-          "t": 62,
-          "upd": 32,
-          "pos": [
-            -0.91,
-            0.15,
-            5.4
-          ],
-          "vel": [
-            -0.07,
-            -0.05
-          ],
-          "speed": 0.089,
-          "velToFood": 0.072,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.48,
-          "alignCos": -0.95,
-          "yawDeg": 84.5,
-          "upY": 0.879,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 35.2
-        },
-        {
-          "t": 63,
-          "upd": 32,
-          "pos": [
-            -0.88,
-            0.14,
-            5.35
-          ],
-          "vel": [
-            0.07,
-            0.04
-          ],
-          "speed": 0.077,
-          "velToFood": -0.056,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.45,
-          "alignCos": 0.94,
-          "yawDeg": -95.4,
-          "upY": 0.869,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 29
-        },
-        {
-          "t": 64,
-          "upd": 33,
-          "pos": [
-            -0.91,
-            0.15,
-            5.39
-          ],
-          "vel": [
-            -0.09,
-            -0.04
-          ],
-          "speed": 0.097,
-          "velToFood": 0.069,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.48,
-          "alignCos": -0.95,
-          "yawDeg": 84.1,
-          "upY": 0.873,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 4.7
-        },
-        {
-          "t": 65,
-          "upd": 33,
-          "pos": [
-            -0.89,
-            0.15,
-            5.34
-          ],
-          "vel": [
-            0.06,
-            0.03
-          ],
-          "speed": 0.07,
-          "velToFood": -0.049,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.44,
-          "alignCos": 0.94,
-          "yawDeg": -93.9,
-          "upY": 0.868,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 28.3
-        },
-        {
-          "t": 66,
-          "upd": 34,
-          "pos": [
-            -0.92,
-            0.14,
-            5.38
-          ],
-          "vel": [
-            -0.07,
-            -0.03
-          ],
-          "speed": 0.074,
-          "velToFood": 0.047,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 4.47,
-          "alignCos": -0.96,
-          "yawDeg": 79.9,
-          "upY": 0.869,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 39.5
-        },
-        {
-          "t": 67,
-          "upd": 34,
-          "pos": [
-            -1.92,
-            0.48,
-            4.62
-          ],
-          "vel": [
-            0,
-            0
-          ],
-          "speed": 0,
-          "velToFood": 0,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 3.48,
-          "alignCos": -0.3,
-          "yawDeg": 153.6,
-          "upY": 0.955,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 0
-        },
-        {
-          "t": 68,
-          "upd": 34,
-          "pos": [
-            -1.9,
-            0.15,
-            4.59
-          ],
-          "vel": [
-            0.01,
-            -0.01
-          ],
-          "speed": 0.013,
-          "velToFood": 0.016,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 3.45,
-          "alignCos": -0.13,
-          "yawDeg": 163.4,
-          "upY": 0.902,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 21.8
-        },
-        {
-          "t": 69,
-          "upd": 35,
-          "pos": [
-            -1.92,
-            0.48,
-            4.58
-          ],
-          "vel": [
-            0,
-            0
-          ],
-          "speed": 0,
-          "velToFood": 0,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 3.43,
-          "alignCos": 0.4,
-          "yawDeg": -164.4,
-          "upY": 0.848,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 0
-        },
-        {
-          "t": 70,
-          "upd": 35,
-          "pos": [
-            -2.36,
-            0.15,
-            4.1
-          ],
-          "vel": [
-            -0.03,
-            0
-          ],
-          "speed": 0.031,
-          "velToFood": 0,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 2.92,
-          "alignCos": 0.22,
-          "yawDeg": -168.6,
-          "upY": 0.915,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 24.5
-        },
-        {
-          "t": 71,
-          "upd": 35,
-          "pos": [
-            -2.36,
-            0.15,
-            4.09
-          ],
-          "vel": [
-            0,
-            -0.01
-          ],
-          "speed": 0.011,
-          "velToFood": 0.007,
-          "foodPos": [
-            -2.45,
-            1.18
-          ],
-          "distToFood": 2.91,
-          "alignCos": 0.47,
-          "yawDeg": -153.4,
-          "upY": 0.881,
-          "contacts": [
-            0,
-            0,
-            0
-          ],
-          "normalForces": [
-            0,
-            0,
-            0
-          ],
-          "powerW": 9
-        },
         {
           "t": 72,
           "upd": 35,
@@ -6737,10 +6470,520 @@
             4.6
           ],
           "powerW": 30
+        },
+        {
+          "t": 177,
+          "upd": 85,
+          "pos": [
+            -2.72,
+            0.15,
+            9.62
+          ],
+          "vel": [
+            0.24,
+            -0.19
+          ],
+          "speed": 0.306,
+          "velToFood": 0.022,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 7.16,
+          "alignCos": 0.72,
+          "yawDeg": -75.7,
+          "upY": 0.929,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            3.7,
+            13.4
+          ],
+          "powerW": 8.8
+        },
+        {
+          "t": 178,
+          "upd": 85,
+          "pos": [
+            -2.46,
+            0.15,
+            9.3
+          ],
+          "vel": [
+            0.14,
+            0.25
+          ],
+          "speed": 0.291,
+          "velToFood": -0.195,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 7.02,
+          "alignCos": 0.75,
+          "yawDeg": -82.4,
+          "upY": 0.947,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            9.4,
+            5.2
+          ],
+          "powerW": 8.9
+        },
+        {
+          "t": 179,
+          "upd": 86,
+          "pos": [
+            -2.19,
+            0.14,
+            9.07
+          ],
+          "vel": [
+            0.22,
+            -0.8
+          ],
+          "speed": 0.826,
+          "velToFood": 0.553,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.98,
+          "alignCos": 0.64,
+          "yawDeg": -76.2,
+          "upY": 0.944,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            3.2,
+            8.5
+          ],
+          "powerW": 38.1
+        },
+        {
+          "t": 180,
+          "upd": 87,
+          "pos": [
+            -1.98,
+            0.15,
+            8.91
+          ],
+          "vel": [
+            0.17,
+            -0.03
+          ],
+          "speed": 0.169,
+          "velToFood": -0.113,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.98,
+          "alignCos": 0.73,
+          "yawDeg": -84.7,
+          "upY": 0.929,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            2.1,
+            15.4
+          ],
+          "powerW": 27.2
+        },
+        {
+          "t": 181,
+          "upd": 87,
+          "pos": [
+            -1.78,
+            0.15,
+            8.53
+          ],
+          "vel": [
+            0.14,
+            0.05
+          ],
+          "speed": 0.146,
+          "velToFood": -0.055,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.81,
+          "alignCos": 0.78,
+          "yawDeg": -94.5,
+          "upY": 0.948,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            9.6,
+            5.8
+          ],
+          "powerW": 6.2
+        },
+        {
+          "t": 182,
+          "upd": 88,
+          "pos": [
+            -1.58,
+            0.15,
+            8.24
+          ],
+          "vel": [
+            0.13,
+            -0.79
+          ],
+          "speed": 0.801,
+          "velToFood": 0.53,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.73,
+          "alignCos": 0.71,
+          "yawDeg": -89.9,
+          "upY": 0.943,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            4.6,
+            3.3
+          ],
+          "powerW": 35.2
+        },
+        {
+          "t": 183,
+          "upd": 89,
+          "pos": [
+            -1.41,
+            0.15,
+            8.02
+          ],
+          "vel": [
+            0.17,
+            0.05
+          ],
+          "speed": 0.179,
+          "velToFood": -0.311,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.7,
+          "alignCos": 0.75,
+          "yawDeg": -94.7,
+          "upY": 0.93,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            1.7,
+            16.1
+          ],
+          "powerW": 29.9
+        },
+        {
+          "t": 184,
+          "upd": 89,
+          "pos": [
+            -1.25,
+            0.14,
+            7.61
+          ],
+          "vel": [
+            0.08,
+            -0.06
+          ],
+          "speed": 0.103,
+          "velToFood": 0.025,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.54,
+          "alignCos": 0.76,
+          "yawDeg": -100.8,
+          "upY": 0.946,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            9.5,
+            5
+          ],
+          "powerW": 4.5
+        },
+        {
+          "t": 185,
+          "upd": 90,
+          "pos": [
+            -1.1,
+            0.15,
+            7.31
+          ],
+          "vel": [
+            0.01,
+            -0.89
+          ],
+          "speed": 0.89,
+          "velToFood": 0.576,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.48,
+          "alignCos": 0.73,
+          "yawDeg": -100,
+          "upY": 0.939,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            6.6,
+            6.6
+          ],
+          "powerW": 28
+        },
+        {
+          "t": 186,
+          "upd": 90,
+          "pos": [
+            -1.01,
+            0.15,
+            7.01
+          ],
+          "vel": [
+            0.28,
+            0.28
+          ],
+          "speed": 0.399,
+          "velToFood": -0.442,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.37,
+          "alignCos": 0.81,
+          "yawDeg": -110.1,
+          "upY": 0.933,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            3.6,
+            10
+          ],
+          "powerW": 33.4
+        },
+        {
+          "t": 187,
+          "upd": 91,
+          "pos": [
+            -0.97,
+            0.14,
+            6.56
+          ],
+          "vel": [
+            0.01,
+            -0.15
+          ],
+          "speed": 0.156,
+          "velToFood": 0.116,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.17,
+          "alignCos": 0.78,
+          "yawDeg": -112.8,
+          "upY": 0.945,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            9.6,
+            4.7
+          ],
+          "powerW": 7.8
+        },
+        {
+          "t": 188,
+          "upd": 92,
+          "pos": [
+            -0.86,
+            0.15,
+            6.28
+          ],
+          "vel": [
+            -0.04,
+            -1.05
+          ],
+          "speed": 1.049,
+          "velToFood": 0.522,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.12,
+          "alignCos": 0.7,
+          "yawDeg": -106.7,
+          "upY": 0.935,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            3.1,
+            14.3
+          ],
+          "powerW": 25.7
+        },
+        {
+          "t": 189,
+          "upd": 92,
+          "pos": [
+            -0.79,
+            0.15,
+            5.93
+          ],
+          "vel": [
+            0.39,
+            0.3
+          ],
+          "speed": 0.488,
+          "velToFood": -0.403,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 6.02,
+          "alignCos": 0.78,
+          "yawDeg": -117.1,
+          "upY": 0.936,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            7.8,
+            7.5
+          ],
+          "powerW": 29.7
+        },
+        {
+          "t": 190,
+          "upd": 93,
+          "pos": [
+            -0.8,
+            0.14,
+            5.51
+          ],
+          "vel": [
+            -0.08,
+            -0.32
+          ],
+          "speed": 0.328,
+          "velToFood": 0.226,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 5.85,
+          "alignCos": 0.77,
+          "yawDeg": -121.2,
+          "upY": 0.945,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            9.1,
+            4.8
+          ],
+          "powerW": 18.8
+        },
+        {
+          "t": 191,
+          "upd": 94,
+          "pos": [
+            -0.74,
+            0.15,
+            5.24
+          ],
+          "vel": [
+            -0.2,
+            -0.83
+          ],
+          "speed": 0.855,
+          "velToFood": 0.403,
+          "foodPos": [
+            -6.25,
+            3.39
+          ],
+          "distToFood": 5.82,
+          "alignCos": 0.74,
+          "yawDeg": -119.1,
+          "upY": 0.932,
+          "contacts": [
+            0,
+            1,
+            1
+          ],
+          "normalForces": [
+            0,
+            1.5,
+            16.5
+          ],
+          "powerW": 15.1
         }
       ]
     },
-    "userEventsCount": 15,
+    "userEventsCount": 16,
     "cameraEventsCount": 2,
     "userEvents": [
       {
@@ -7149,6 +7392,24 @@
           "upY": 0.831,
           "isOverturned": false
         }
+      },
+      {
+        "tWall": "2026-10-29T10:30:34.333Z",
+        "simTime": 191.43,
+        "update": 94,
+        "event": "pause",
+        "details": {
+          "source": "canvas_click"
+        },
+        "walkerContext": {
+          "pos": [
+            -0.75,
+            5.08
+          ],
+          "foodCollected": 9,
+          "upY": 0.935,
+          "isOverturned": false
+        }
       }
     ],
     "cameraEvents": [
@@ -7192,5 +7453,5 @@
       }
     ]
   },
-  "updatedAt": "2026-10-29T10:30:19.685Z"
+  "updatedAt": "2026-10-29T10:30:34.563Z"
 }

@@ -171,6 +171,7 @@ export class CreatureInstance {
    */
   applyActionVector(actions, isRightingMode = false) {
     let totalPower = 0;
+    const { up } = this.getTorsoFrame();
     // Differential between front-left (leg 0) and front-right (leg 1) stride commands
     const stride0 = Math.max(-1, Math.min(1, actions[1] || 0));
     const stride1 = Math.max(-1, Math.min(1, actions[3] || 0));
@@ -179,7 +180,7 @@ export class CreatureInstance {
       const ctrl = this.legControllers[i];
       const actLift = Math.max(-1, Math.min(1, actions[i * 2] || 0));
       const actStride = Math.max(-1, Math.min(1, actions[i * 2 + 1] || 0));
-      totalPower += ctrl.applyLegActions(actLift, actStride, diffTurn, isRightingMode);
+      totalPower += ctrl.applyLegActions(actLift, actStride, diffTurn, isRightingMode, up);
     }
     this.lastMechanicalPower = totalPower;
   }
@@ -301,29 +302,35 @@ function attachOrthogonalLeg({
         nodeA: dorsalAnchor,
         nodeB: foot,
         pivotNode: hipNode,
-        minFactor: 0.22,
-        maxFactor: 1.85,
-        maxForce: 145.0,
-        compliance: 0.00011
+        minFactor: 0.12,
+        maxFactor: 1.90,
+        maxForce: 165.0,
+        compliance: 0.00009
       })
     : null;
 
   const controller = {
-    applyLegActions(actLift, actStride, diffTurn = 0, isRightingMode = false) {
+    applyLegActions(actLift, actStride, diffTurn = 0, isRightingMode = false, upVec = null) {
+      const footLocalUp = upVec
+        ? (foot.pos.x - hipNode.pos.x) * upVec.x +
+          (foot.pos.y - hipNode.pos.y) * upVec.y +
+          (foot.pos.z - hipNode.pos.z) * upVec.z
+        : (foot.pos.y - hipNode.pos.y);
+
       let dx, dy, dz;
-      if (!isRightingMode) {
-        // Normal walking mode: pure sagittal stride + vertical lift
+      const needDorsalReach = isRightingMode && actLift < 0 && (!upVec || upVec.y < 0.42);
+      if (!needDorsalReach) {
+        // Ventral mode (normal walking OR stand-up phase once rolled past up.y >= 0.42):
         dx = actStride * strideStroke;
         dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
         dz = 0;
       } else {
-        // Beetle Self-Righting Mode ("Рефлекс жука" when overturned on back):
-        // Unlocks dorsal hyper-flexion (+Y up to +0.58m past torsoTop) and lateral leverage (dz)
-        // so the leg can reach the floor behind the dorsal shell and roll the torso over its edge!
-        dx = actStride * 0.28;
-        dy = actLift < 0 ? -actLift * 0.58 : -actLift * 0.16;
+        // Beetle Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.52, actLift < 0):
+        // Reaches into the dorsal hemisphere (y = 0.38..0.52m, past restHipPos.y = 0.25m) to press against the floor!
+        dx = actStride * 0.26;
+        dy = 0.24 + (-actLift) * 0.28;
         const outSign = restFootPos.z >= 0 ? 1 : -1;
-        dz = isRearCenter ? diffTurn * 0.26 : outSign * Math.max(0, -actLift) * 0.18;
+        dz = isRearCenter ? diffTurn * 0.24 : -outSign * (-actLift) * 0.10;
       }
 
       const targetPos = new Vec3(
@@ -331,6 +338,21 @@ function attachOrthogonalLeg({
         restFootPos.y + dy,
         restFootPos.z + dz
       );
+
+      const targetLocalUp = targetPos.y - restHipPos.y;
+      const crossingHipPlane =
+        (targetLocalUp < -0.03 && footLocalUp > -0.05) ||
+        (targetLocalUp > 0.03 && footLocalUp < 0.05);
+
+      // Relax coplanar hip muscles while foot crosses the hip plane (footLocalUp ≈ 0)
+      // so the 485 N coplanar snap-through barrier vanishes and dorsalMuscle smoothly pushes/pulls the foot across!
+      kneeLift.maxForce = crossingHipPlane ? 14.0 : 135.0;
+      strideFwd.maxForce = crossingHipPlane ? 18.0 : 120.0;
+      strideBwd.maxForce = crossingHipPlane ? 18.0 : 120.0;
+      latMuscle.maxForce = crossingHipPlane ? 18.0 : 110.0;
+      if (oppLatMuscle) {
+        oppLatMuscle.maxForce = crossingHipPlane ? 18.0 : 110.0;
+      }
 
       kneeLift.targetAction = actLift;
       strideFwd.targetAction = actStride;
@@ -343,7 +365,8 @@ function attachOrthogonalLeg({
         oppLatMuscle.setTargetLengthDirect(Vec3.dist(restOppLatPos, targetPos));
       }
       if (dorsalMuscle && restDorsalPos) {
-        dorsalMuscle.maxForce = isRightingMode ? 155.0 : 0.0;
+        const footInverted = footLocalUp > -0.06;
+        dorsalMuscle.maxForce = (isRightingMode || footInverted || crossingHipPlane) ? 195.0 : 0.0;
         dorsalMuscle.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetPos));
       }
 

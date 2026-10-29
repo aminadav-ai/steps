@@ -425,6 +425,9 @@ export class PhysicsWorld3D {
           const penetration = node.radius - node.pos.y;
           if (penetration > 0) {
             node.pos.y = node.radius;
+            if (node.prevPos.y < node.radius) {
+              node.prevPos.y = node.radius;
+            }
             node.inContact = true;
 
             const normalForceIter = penetration * node.mass * invSubDtSq;
