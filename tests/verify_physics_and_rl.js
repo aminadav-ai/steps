@@ -131,18 +131,47 @@ for (const n of walker.body.nodes) {
   n.prevPos.copy(n.pos);
 }
 
-for (let step = 1; step <= 60; step++) {
+let recoveredFromBack = false;
+for (let step = 1; step <= 70; step++) {
   trainSim.stepControl();
   const upY = walker.getTorsoFrame().up.y;
+  const invLegs = walker.hasInvertedLeg();
   const m = trainSim.trainer.metaState;
-  if (step === 1 || step % 14 === 0 || upY > 0.65) {
-    console.log(`Шаг на спине #${step} | up.y=${upY.toFixed(3)} | режим=${m.mode} | попытка=${m.rightingAttempts} | навык=${m.rightingSkillPct}%`);
-    if (upY > 0.65 && step > 5) {
-      console.log('ОК: Шагоход самостоятельно обучился рычагу и перевернулся со спины обратно на лапы!');
+  if (step === 1 || step % 14 === 0 || (upY >= 0.68 && !invLegs)) {
+    console.log(`Шаг на спине #${step} | up.y=${upY.toFixed(3)} | invLegs=${invLegs} | режим=${m.mode} | попытка=${m.rightingAttempts} | навык=${m.rightingSkillPct}%`);
+    if (upY >= 0.68 && !invLegs && step > 5) {
+      console.log('ОК: Шагоход самостоятельно перевернулся со спины и расправил все лапы под корпус!');
+      recoveredFromBack = true;
       break;
     }
   }
 }
+if (!recoveredFromBack) {
+  console.error('ОШИБКА: Шагоход не завершил переворот или оставил лапы запрокинутыми наверх!');
+  process.exit(1);
+}
+
+// Тест 3б: Искусственно запрокидываем 2 лапы выше плоскости бедра при вертикальном корпусе (как на скриншоте пользователя)
+walker.footNodes[0].pos.y = walker.hipNodes[0].pos.y + 0.16;
+walker.footNodes[0].prevPos.copy(walker.footNodes[0].pos);
+walker.kneeNodes[0].pos.y = walker.hipNodes[0].pos.y + 0.15;
+walker.kneeNodes[0].prevPos.copy(walker.kneeNodes[0].pos);
+walker.footNodes[2].pos.y = walker.hipNodes[2].pos.y + 0.16;
+walker.footNodes[2].prevPos.copy(walker.footNodes[2].pos);
+walker.kneeNodes[2].pos.y = walker.hipNodes[2].pos.y + 0.15;
+walker.kneeNodes[2].prevPos.copy(walker.kneeNodes[2].pos);
+
+trainSim.stepControl();
+console.log(`Сразу после запрокидывания 2 лап наверх: hasInvertedLeg=${walker.hasInvertedLeg()}, mode=${trainSim.trainer.metaState.mode}`);
+for (let i = 0; i < 8; i++) {
+  trainSim.stepControl();
+}
+console.log(`Через 8 шагов расправления лап: hasInvertedLeg=${walker.hasInvertedLeg()}, mode=${trainSim.trainer.metaState.mode}`);
+if (walker.hasInvertedLeg()) {
+  console.error('ОШИБКА: Запрокинутые наверх лапы должны автоматически расправляться вниз под корпус!');
+  process.exit(1);
+}
+console.log('ОК: Запрокинутые наверх лапы распознаются и мгновенно возвращаются под бедро на пол.');
 
 console.log('\n=== 4. Проверка перетаскивания шарика еды и броска шагохода мышью ===');
 if (trainSim.trainer.metaState.ambitionPreset !== 'min' || trainSim.trainer.metaState.targetCompetence !== 0.18) {

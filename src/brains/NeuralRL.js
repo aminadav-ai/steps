@@ -926,9 +926,13 @@ export class PPOTrainer {
 
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
-    const isOverturned0 = !c0.isGrabbed && !(c0.postThrowTimer > 0) && (upY0 < 0.35 || (this.wasOverturned && upY0 < 0.65));
+    const hasInvLeg0 = typeof c0.hasInvertedLeg === 'function' && c0.hasInvertedLeg();
+    const isOverturned0 =
+      !c0.isGrabbed &&
+      !(c0.postThrowTimer > 0) &&
+      (upY0 < 0.52 || hasInvLeg0 || (this.wasOverturned && upY0 < 0.68));
 
-    // 1. Check if main walker is overturned on its back -> engage Beetle Self-Righting Reflex!
+    // 1. Check if main walker is overturned on its back/side or has an inverted leg -> engage Self-Righting Reflex!
     if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
@@ -947,7 +951,9 @@ export class PPOTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
-      this.metaState.reasonText = `Корпус на спине (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+      this.metaState.reasonText = upY0 < 0.52
+        ? `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`
+        : `Расправляет запрокинутые лапы под корпус (up.y=${upY0.toFixed(2)}): постановка на опору перед ходьбой`;
 
       const obs = c0.getObservation();
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
@@ -960,7 +966,7 @@ export class PPOTrainer {
     }
 
     // 2. If walker just recovered from overturned back onto its feet!
-    if (this.wasOverturned && upY0 >= 0.65) {
+    if (this.wasOverturned && upY0 >= 0.68 && !hasInvLeg0) {
       this.wasOverturned = false;
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
@@ -1730,7 +1736,11 @@ export class NESTrainer {
   selectActions(creatures) {
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
-    const isOverturned0 = !c0.isGrabbed && !(c0.postThrowTimer > 0) && (upY0 < 0.35 || (this.wasOverturned && upY0 < 0.65));
+    const hasInvLeg0 = typeof c0.hasInvertedLeg === 'function' && c0.hasInvertedLeg();
+    const isOverturned0 =
+      !c0.isGrabbed &&
+      !(c0.postThrowTimer > 0) &&
+      (upY0 < 0.52 || hasInvLeg0 || (this.wasOverturned && upY0 < 0.68));
     if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
@@ -1748,7 +1758,9 @@ export class NESTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
-      this.metaState.reasonText = `Корпус на спине (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`;
+      this.metaState.reasonText = upY0 < 0.52
+        ? `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`
+        : `Расправляет запрокинутые лапы под корпус (up.y=${upY0.toFixed(2)}): постановка на опору перед ходьбой`;
 
       const obs = c0.getObservation();
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
@@ -1759,7 +1771,7 @@ export class NESTrainer {
       return;
     }
 
-    if (this.wasOverturned && upY0 >= 0.65) {
+    if (this.wasOverturned && upY0 >= 0.68 && !hasInvLeg0) {
       this.wasOverturned = false;
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
