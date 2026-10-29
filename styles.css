@@ -292,6 +292,21 @@ select {
   background: #0369a1;
 }
 
+.btn.emerald {
+  background: #059669;
+  border-color: #34d399;
+  color: #ffffff;
+}
+
+.btn.emerald:hover {
+  background: #047857;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .btn.active {
   background: #0ea5e9;
   border-color: #7dd3fc;

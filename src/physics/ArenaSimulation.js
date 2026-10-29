@@ -219,18 +219,19 @@ export class ArenaSimulation {
       const alignCos = (dx * invD) * forward.x + (dz * invD) * forward.z;
 
       // Reward components:
-      // 1) Approach velocity reward
-      let r = velToward * 2.4;
+      // 1) Approach velocity reward (favors moving nose-first toward food)
+      const forwardFactor = Math.max(0.25, 0.65 + 0.35 * alignCos);
+      let r = velToward * forwardFactor * 2.5;
       // 2) Orientation alignment reward
-      r += 0.12 * alignCos;
+      r += 0.22 * alignCos;
       // 3) Upright posture maintenance
       r += 0.08 * Math.max(-1, up.y - 0.55);
       // 4) Mechanical power penalty (smooth, efficient locomotion)
       r -= 0.00035 * c.lastMechanicalPower;
 
       // Check if food reached! (center or front hip within reach radius)
-      const frontDist = Math.hypot(c. foodPos.x - c.frameRefs.front.pos.x, c.foodPos.z - c.frameRefs.front.pos.z);
-      if (newDist < 0.48 || frontDist < 0.36) {
+      const frontDist = Math.hypot(c.foodPos.x - c.frameRefs.front.pos.x, c.foodPos.z - c.frameRefs.front.pos.z);
+      if (newDist < 0.46 || frontDist < 0.38) {
         r += 8.5; // Major foraging reward
         c.foodCollected += 1;
         this.totalFoodCollected += 1;

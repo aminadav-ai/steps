@@ -25,6 +25,7 @@ const nnDimLabel = document.getElementById('nnDimLabel');
 const btnNewExperiment = document.getElementById('btnNewExperiment');
 const btnPause = document.getElementById('btnPause');
 const btnStepOnce = document.getElementById('btnStepOnce');
+const btnFastTrain = document.getElementById('btnFastTrain');
 const speedButtons = document.getElementById('speedButtons');
 const rangeFriction = document.getElementById('rangeFriction');
 const labelFrictionVal = document.getElementById('labelFrictionVal');
@@ -147,6 +148,57 @@ btnStepOnce.addEventListener('click', () => {
   updateHUD();
 });
 
+let isFastTraining = false;
+
+async function runFastHeadlessTraining(targetUpdates = 25) {
+  if (!sim || isFastTraining) return;
+  isFastTraining = true;
+  btnFastTrain.disabled = true;
+  expStatusBadge.textContent = '⚡ ТУРБО-ОБУЧЕНИЕ...';
+  expStatusBadge.style.color = '#38bdf8';
+
+  const startUpd = sim.trainer.updateCount;
+  for (let u = 1; u <= targetUpdates; u++) {
+    let updateEntry = null;
+    while (!updateEntry) {
+      updateEntry = sim.stepControl();
+    }
+    handleUpdateEntry(updateEntry);
+    btnFastTrain.textContent = `⚡ Обучение в фоне: ${u} / ${targetUpdates} эпох...`;
+
+    if (u % 2 === 0) {
+      updateHUD();
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  // Smoothly snap camera to the trained walker's current position and resume at 1x real time
+  const c0 = sim.creatures[0];
+  if (c0) {
+    const com = c0.body.getCenterOfMass();
+    renderer3D.filteredLeaderPos.set(com.x, 0.18, com.z);
+    renderer3D.camTarget.set(com.x, 0.18, com.z);
+  }
+  simTimeAccum = 0;
+  lastFrameTime = performance.now();
+  setPausedState(false);
+
+  // Set speed selector back to 1x so user observes the trained mechanics in real time
+  simSpeed = 1;
+  for (const b of speedButtons.querySelectorAll('button')) {
+    b.classList.toggle('active', b.dataset.speed === '1');
+  }
+
+  btnFastTrain.disabled = false;
+  btnFastTrain.textContent = `⚡ Быстро обучить без рендера (+25 эпох)`;
+  isFastTraining = false;
+  updateHUD();
+}
+
+btnFastTrain.addEventListener('click', () => {
+  runFastHeadlessTraining(25);
+});
+
 speedButtons.addEventListener('click', e => {
   const btn = e.target.closest('button[data-speed]');
   if (!btn) return;
@@ -212,7 +264,7 @@ function animate(now = performance.now()) {
 
   if (!sim) return;
 
-  if (!paused) {
+  if (!paused && !isFastTraining) {
     simTimeAccum += realDt * simSpeed;
     // Cap accumulator to avoid spiral of death if tab was backgrounded
     const maxSubsteps = Math.max(20, Math.ceil(simSpeed * 16));

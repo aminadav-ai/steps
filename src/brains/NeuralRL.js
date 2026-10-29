@@ -150,35 +150,49 @@ export class ActorCriticBrain {
   _seedInitialMotorPrior() {
     // Obs indices:
     // 10 = clockSin, 11 = clockCos
-    // 12 = clockSin * foodForward, 13 = clockCos * foodForward
-    // 14 = clockSin * foodRight,   15 = clockCos * foodRight
+    // 12 = clockSin * forwardGate, 13 = clockCos * forwardGate
+    // 14 = clockSin * turnDrive,   15 = clockCos * turnDrive
     const numLegs = Math.floor(this.actDim / 2);
+    // Resonance phase lag between vertical knee lift and horizontal hip stride (210 deg = 7*pi/6)
+    const psi = (210 * Math.PI) / 180;
+
     for (let leg = 0; leg < numLegs; leg++) {
-      const phaseShift = (2 * Math.PI * leg) / numLegs;
-      const cosDelta = Math.cos(phaseShift);
-      const sinDelta = Math.sin(phaseShift);
+      // Bilaterally symmetric phase schedule:
+      // Tripod (3 legs): Front-Left (0) & Front-Right (0) alternate with Rear-Center (pi)
+      // Quadruped (4 legs): Diagonal trot pairs FL+BR (0) and FR+BL (pi)
+      const delta = numLegs === 3
+        ? (leg === 2 ? Math.PI : 0.0)
+        : (leg === 0 || leg === 3 ? 0.0 : Math.PI);
+
+      const cosLift = Math.cos(delta);
+      const sinLift = Math.sin(delta);
+
+      const thetaStride = delta + psi;
+      const cosStride = Math.cos(thetaStride);
+      const sinStride = Math.sin(thetaStride);
 
       const liftRow = (leg * 2) * this.obsDim;
       const strideRow = (leg * 2 + 1) * this.obsDim;
 
-      // Embryonic 3-phase wave (starts weak at 0.22 so learning is clearly observable):
-      // lift_k   ~ cos(phi + delta_k) = cos(delta_k)*cos(phi) - sin(delta_k)*sin(phi)
-      // stride_k ~ sin(phi + delta_k) = cos(delta_k)*sin(phi) + sin(delta_k)*cos(phi)
-      this.actorSkip.W[liftRow + 11] = 0.16 * cosDelta;
-      this.actorSkip.W[liftRow + 10] = -0.16 * sinDelta;
+      // Embryonic stepping reflex (starts modest at 0.22 so RL rapidly amplifies speed & steering):
+      // lift_k   ~ cos(phi + delta)       = cos(delta)*cos(phi) - sin(delta)*sin(phi)
+      // stride_k ~ cos(phi + delta + psi) = cos(theta)*cos(phi) - sin(theta)*sin(phi)
+      this.actorSkip.W[liftRow + 11] = 0.22 * cosLift;
+      this.actorSkip.W[liftRow + 10] = -0.22 * sinLift;
 
-      this.actorSkip.W[strideRow + 10] = -0.07 * cosDelta;
-      this.actorSkip.W[strideRow + 11] = -0.07 * sinDelta;
-      this.actorSkip.W[strideRow + 12] = -0.07 * cosDelta;
-      this.actorSkip.W[strideRow + 13] = -0.07 * sinDelta;
+      // Forward-gated propulsion (engages when facing food, pauses forward travel while pivoting)
+      this.actorSkip.W[strideRow + 13] = 0.22 * cosStride;
+      this.actorSkip.W[strideRow + 12] = -0.22 * sinStride;
 
-      // Embryonic differential steering on front lateral legs (leg 0 at +right, leg 1 at -right)
-      if (leg === 0) {
-        this.actorSkip.W[strideRow + 14] = +0.06 * cosDelta;
-        this.actorSkip.W[strideRow + 15] = +0.06 * sinDelta;
-      } else if (leg === 1) {
-        this.actorSkip.W[strideRow + 14] = -0.06 * cosDelta;
-        this.actorSkip.W[strideRow + 15] = -0.06 * sinDelta;
+      // Differential yaw steering toward food:
+      // When turnDrive > 0 (food on +Z / left-front leg 0 side):
+      // leg 0 (+Z) reverses stride (-1) and leg 1 (-Z) advances stride (+1), pivoting nose to +Z!
+      if (leg === 0 || (numLegs === 4 && leg === 2)) {
+        this.actorSkip.W[strideRow + 15] = -0.22 * cosStride;
+        this.actorSkip.W[strideRow + 14] = +0.22 * sinStride;
+      } else if (leg === 1 || (numLegs === 4 && leg === 3)) {
+        this.actorSkip.W[strideRow + 15] = +0.22 * cosStride;
+        this.actorSkip.W[strideRow + 14] = -0.22 * sinStride;
       }
     }
   }
@@ -565,18 +579,28 @@ export class PPOTrainer {
       }
     }
 
-    // Parameter-Space Elite Natural Step: if exploring workers outperformed the mean policy,
-    // blend the top 3 worker parameter perturbations into actorSkip.W before PPO fine-tuning!
+    // Parameter-Space Elite Natural Step: rank workers by continuous locomotion reward (excluding 8.5 food bonus spikes)
+    // so a worker that merely started next to food doesn't overwrite the gait with random noise!
+    const workerLocomotionScore = new Float64Array(W);
+    for (let w = 0; w < W; w++) {
+      let score = 0;
+      for (let t = 0; t < T; t++) {
+        const r = this.bufRew[t][w];
+        score += r > 5.0 ? r - 8.5 : r;
+      }
+      workerLocomotionScore[w] = score;
+    }
+
     const rankedWorkers = Array.from({ length: W - 1 }, (_, i) => i + 1).sort(
-      (a, b) => workerTotalReward[b] - workerTotalReward[a]
+      (a, b) => workerLocomotionScore[b] - workerLocomotionScore[a]
     );
     const bestWorker = rankedWorkers[0];
-    if (bestWorker !== undefined && workerTotalReward[bestWorker] > workerTotalReward[0] + 0.25) {
+    if (bestWorker !== undefined && workerLocomotionScore[bestWorker] > workerLocomotionScore[0] + 0.6) {
       const skipW = this.brain.actorSkip.W;
-      const topWeights = [0.52, 0.22, 0.10];
+      const topWeights = [0.22, 0.10, 0.05];
       for (let rank = 0; rank < Math.min(3, rankedWorkers.length); rank++) {
         const wIdx = rankedWorkers[rank];
-        if (workerTotalReward[wIdx] > workerTotalReward[0]) {
+        if (workerLocomotionScore[wIdx] > workerLocomotionScore[0]) {
           const pert = this.workerSkipPerturbs[wIdx];
           const alpha = topWeights[rank];
           for (let i = 0; i < skipW.length; i++) {

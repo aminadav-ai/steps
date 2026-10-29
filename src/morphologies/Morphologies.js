@@ -114,6 +114,12 @@ export class CreatureInstance {
     const clockSin = Math.sin(this.phase);
     const clockCos = Math.cos(this.phase);
 
+    // Non-negative forward gate (0 when food is behind so creature pivots on the spot instead of walking away)
+    // and signed heading angle turnDrive in [-1, 1] (stays strong at +/- 1 even when food is 180 deg behind!)
+    const angleToFood = Math.atan2(foodRight, foodForward);
+    const forwardGate = Math.max(0.0, foodForward);
+    const turnDrive = Math.tanh(2.2 * angleToFood);
+
     const obs = [
       foodForward,              // 0: cos(angle to food)
       foodRight,                // 1: sin(angle to food)
@@ -127,10 +133,10 @@ export class CreatureInstance {
       normHeight,               // 9: CoM height
       clockSin,                 // 10: sin(wt)
       clockCos,                 // 11: cos(wt)
-      clockSin * foodForward,   // 12: forward-gated CPG sin
-      clockCos * foodForward,   // 13: forward-gated CPG cos
-      clockSin * foodRight,     // 14: turn-gated CPG sin
-      clockCos * foodRight      // 15: turn-gated CPG cos
+      clockSin * forwardGate,   // 12: forward-gated CPG sin (always forward)
+      clockCos * forwardGate,   // 13: forward-gated CPG cos (always forward)
+      clockSin * turnDrive,     // 14: yaw-turn-gated CPG sin
+      clockCos * turnDrive      // 15: yaw-turn-gated CPG cos
     ];
 
     const dofList = this.logicalDoFs;
@@ -157,11 +163,15 @@ export class CreatureInstance {
    */
   applyActionVector(actions) {
     let totalPower = 0;
+    // Differential between front-left (leg 0) and front-right (leg 1) stride commands
+    const stride0 = Math.max(-1, Math.min(1, actions[1] || 0));
+    const stride1 = Math.max(-1, Math.min(1, actions[3] || 0));
+    const diffTurn = 0.5 * (stride1 - stride0);
     for (let i = 0; i < this.legControllers.length; i++) {
       const ctrl = this.legControllers[i];
       const actLift = Math.max(-1, Math.min(1, actions[i * 2] || 0));
       const actStride = Math.max(-1, Math.min(1, actions[i * 2 + 1] || 0));
-      totalPower += ctrl.applyLegActions(actLift, actStride);
+      totalPower += ctrl.applyLegActions(actLift, actStride, diffTurn);
     }
     this.lastMechanicalPower = totalPower;
   }
@@ -189,10 +199,12 @@ function attachOrthogonalLeg({
   frontAnchor,
   rearAnchor,
   lateralAnchor,
+  oppositeLateralAnchor = null,
+  isRearCenter = false,
   footY = 0.06,
-  strideStroke = 0.17,
-  liftStrokeUp = 0.11,
-  liftStrokeDown = 0.06,
+  strideStroke = 0.16,
+  liftStrokeUp = 0.09,
+  liftStrokeDown = 0.10,
   color
 }) {
   const restFootPos = new Vec3(hipNode.pos.x, footY, hipNode.pos.z);
@@ -200,6 +212,7 @@ function attachOrthogonalLeg({
   const restFrontPos = frontAnchor.pos.clone();
   const restRearPos = rearAnchor.pos.clone();
   const restLatPos = lateralAnchor.pos.clone();
+  const restOppLatPos = oppositeLateralAnchor ? oppositeLateralAnchor.pos.clone() : null;
 
   const foot = body.addNode({
     id: `c${id}_foot_${legIdx}`,
@@ -251,23 +264,38 @@ function attachOrthogonalLeg({
     nodeA: lateralAnchor,
     nodeB: foot,
     pivotNode: hipNode,
-    minFactor: 0.70,
-    maxFactor: 1.30,
+    minFactor: 0.65,
+    maxFactor: 1.35,
     maxForce: 110.0,
     compliance: 0.00014
   });
 
+  const oppLatMuscle = oppositeLateralAnchor
+    ? body.addMuscle({
+        name: `leg${legIdx}_lat_opp`,
+        nodeA: oppositeLateralAnchor,
+        nodeB: foot,
+        pivotNode: hipNode,
+        minFactor: 0.65,
+        maxFactor: 1.35,
+        maxForce: 110.0,
+        compliance: 0.00014
+      })
+    : null;
+
   const controller = {
-    applyLegActions(actLift, actStride) {
+    applyLegActions(actLift, actStride, diffTurn = 0) {
       // actStride in [-1, 1]: +1 = forward (+X), -1 = backward (-X)
       const dx = actStride * strideStroke;
       // actLift in [-1, 1]: -1 = lift UP (+Y), +1 = press DOWN (-Y)
       const dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
+      // Pure longitudinal & vertical target in leg plane (rear leg acts as natural pivot)
+      const dz = 0;
 
       const targetPos = new Vec3(
         restFootPos.x + dx,
         restFootPos.y + dy,
-        restFootPos.z
+        restFootPos.z + dz
       );
 
       kneeLift.targetAction = actLift;
@@ -277,12 +305,16 @@ function attachOrthogonalLeg({
       strideFwd.setTargetLengthDirect(Vec3.dist(restFrontPos, targetPos));
       strideBwd.setTargetLengthDirect(Vec3.dist(restRearPos, targetPos));
       latMuscle.setTargetLengthDirect(Vec3.dist(restLatPos, targetPos));
+      if (oppLatMuscle && restOppLatPos) {
+        oppLatMuscle.setTargetLengthDirect(Vec3.dist(restOppLatPos, targetPos));
+      }
 
       return (
         kneeLift.instantPower +
         strideFwd.instantPower +
         strideBwd.instantPower +
-        latMuscle.instantPower
+        latMuscle.instantPower +
+        (oppLatMuscle ? oppLatMuscle.instantPower : 0)
       );
     }
   };
@@ -317,10 +349,10 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
   const torsoTop = body.addNode({
     id: `c${id}_top`,
     x: origin.x,
-    y: origin.y + 0.44,
+    y: origin.y + 0.36,
     z: origin.z,
-    mass: 0.35,
-    radius: 0.08,
+    mass: 0.32,
+    radius: 0.075,
     friction: 0.04,
     role: 'torso',
     color
@@ -329,10 +361,10 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
   const torsoBottom = body.addNode({
     id: `c${id}_bottom`,
     x: origin.x,
-    y: origin.y + 0.20,
+    y: origin.y + 0.22,
     z: origin.z,
-    mass: 0.30,
-    radius: 0.068,
+    mass: 0.32,
+    radius: 0.065,
     friction: 0.04,
     role: 'torso',
     color
@@ -340,10 +372,10 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
 
   const noseNode = body.addNode({
     id: `c${id}_nose`,
-    x: origin.x + 0.40,
-    y: origin.y + 0.22,
+    x: origin.x + 0.34,
+    y: origin.y + 0.25,
     z: origin.z,
-    mass: 0.20,
+    mass: 0.22,
     radius: 0.065,
     friction: 0.04,
     role: 'head',
@@ -352,21 +384,21 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
 
   const tailNode = body.addNode({
     id: `c${id}_tail`,
-    x: origin.x - 0.46,
-    y: origin.y + 0.22,
+    x: origin.x - 0.36,
+    y: origin.y + 0.25,
     z: origin.z,
-    mass: 0.20,
+    mass: 0.22,
     radius: 0.065,
     friction: 0.04,
     role: 'hip',
     color
   });
 
-  // 3 Hip sockets directly above the 3 feet
+  // 3 Hip sockets in a wide, stable equilateral triangle so the torso never tips onto its tail
   const hipCoords = [
-    { x: +0.16, y: 0.32, z: +0.26 }, // Leg 0: Front-Left
-    { x: +0.16, y: 0.32, z: -0.26 }, // Leg 1: Front-Right
-    { x: -0.22, y: 0.32, z: 0.0 }    // Leg 2: Rear-Center
+    { x: +0.24, y: 0.25, z: +0.30 }, // Leg 0: Front-Left
+    { x: +0.24, y: 0.25, z: -0.30 }, // Leg 1: Front-Right
+    { x: -0.34, y: 0.25, z: 0.0 }    // Leg 2: Rear-Center
   ];
 
   const hips = hipCoords.map((hc, idx) =>
@@ -392,6 +424,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
 
   for (let i = 0; i < 3; i++) {
     const lateralAnchor = i === 0 ? hips[1] : i === 1 ? hips[0] : hips[0];
+    const oppositeLateralAnchor = i === 2 ? hips[1] : null;
     const leg = attachOrthogonalLeg({
       body,
       id,
@@ -400,6 +433,8 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
       frontAnchor: noseNode,
       rearAnchor: tailNode,
       lateralAnchor,
+      oppositeLateralAnchor,
+      isRearCenter: i === 2,
       footY: origin.y + 0.06,
       color
     });
