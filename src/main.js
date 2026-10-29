@@ -6,18 +6,40 @@ import { ExperimentLogger } from './logging/ExperimentLogger.js';
 import { TRANSLATIONS } from './i18n/translations.js';
 
 const LANG_STORAGE_KEY = 'steps_lang_v1';
-let currentLang = 'ru';
-try {
-  const savedLang = localStorage.getItem(LANG_STORAGE_KEY);
-  if (savedLang && TRANSLATIONS[savedLang]) {
-    currentLang = savedLang;
+
+function detectInitialLanguage() {
+  try {
+    const savedLang = localStorage.getItem(LANG_STORAGE_KEY);
+    if (savedLang && TRANSLATIONS[savedLang]) {
+      return savedLang;
+    }
+  } catch {
+    // ignore storage errors
   }
-} catch {
-  // ignore
+
+  const browserLangs = (typeof navigator !== 'undefined')
+    ? (Array.isArray(navigator.languages) && navigator.languages.length > 0
+      ? navigator.languages
+      : [navigator.language || ''])
+    : [];
+
+  for (const raw of browserLangs) {
+    if (!raw || typeof raw !== 'string') continue;
+    let base = raw.toLowerCase().split(/[-_]/)[0];
+    // Handle legacy ISO code 'iw' for Hebrew
+    if (base === 'iw') base = 'he';
+    if (TRANSLATIONS[base]) {
+      return base;
+    }
+  }
+
+  return 'en';
 }
 
+let currentLang = detectInitialLanguage();
+
 function getT() {
-  return TRANSLATIONS[currentLang] || TRANSLATIONS.ru;
+  return TRANSLATIONS[currentLang] || TRANSLATIONS.en;
 }
 
 const arenaCanvas = document.getElementById('arenaCanvas');
@@ -175,13 +197,15 @@ function translateMetaState(m, t) {
   };
 }
 
-function applyLanguage(lang) {
-  if (!TRANSLATIONS[lang]) lang = 'ru';
+function applyLanguage(lang, { persist = false } = {}) {
+  if (!TRANSLATIONS[lang]) lang = 'en';
   currentLang = lang;
-  try {
-    localStorage.setItem(LANG_STORAGE_KEY, lang);
-  } catch {
-    // ignore
+  if (persist) {
+    try {
+      localStorage.setItem(LANG_STORAGE_KEY, lang);
+    } catch {
+      // ignore
+    }
   }
   const t = getT();
   document.documentElement.lang = lang;
@@ -231,7 +255,7 @@ function applyLanguage(lang) {
 if (selectLanguage) {
   selectLanguage.value = currentLang;
   selectLanguage.addEventListener('change', () => {
-    applyLanguage(selectLanguage.value);
+    applyLanguage(selectLanguage.value, { persist: true });
   });
 }
 
