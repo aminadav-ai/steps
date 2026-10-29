@@ -889,24 +889,82 @@ export class Renderer3D {
     }
 
     // 3. Render Rigid Torso Structural Frame
+    // In 'servo' mode (default in v2): renders a clean Central Robotic Spine Box (Z=0) + Cantilever Shoulder Axles
+    // so that outboard 2-DoF legs have 100% unobstructed 360-degree sagittal rotation without intersecting frame tubes!
+    // In 'muscle' mode (v1): renders all-to-all tensegrity/truss bones.
+    const isServoMode = creature.actuatorMode !== 'muscle';
     ctx.strokeStyle = isLeader ? '#fde047' : creature.color;
     ctx.lineWidth = isLeader ? 2.6 : 1.6;
-    for (const bone of creature.body.bones) {
-      if (bone.role !== 'torso') continue;
-      const pA = proj(posOf(bone.nodeA));
-      const pB = proj(posOf(bone.nodeB));
-      if (pA && pB) {
-        ctx.beginPath();
-        ctx.moveTo(pA.sx, pA.sy);
-        ctx.lineTo(pB.sx, pB.sy);
-        ctx.stroke();
+    if (isServoMode && creature.frameRefs) {
+      const nTop = posOf(creature.frameRefs.top);
+      const nBot = posOf(creature.frameRefs.bottom);
+      const nFront = posOf(creature.frameRefs.front);
+      const nTail = posOf(creature.frameRefs.tail);
+      const spineCenter = new Vec3(
+        0.5 * (nFront.x + nTail.x),
+        0.5 * (nFront.y + nTail.y),
+        0.5 * (nFront.z + nTail.z)
+      );
+      const spineAxis = Vec3.sub(nFront, nTail).normalize();
+
+      // Central spine diamond truss (strictly in mid-plane, never crossing leg sweep planes)
+      const spinePairs = [
+        [nTop, nFront],
+        [nTop, nTail],
+        [nBot, nFront],
+        [nBot, nTail],
+        [nTop, nBot],
+        [nFront, nTail]
+      ];
+      for (const [a, b] of spinePairs) {
+        const pA = proj(a);
+        const pB = proj(b);
+        if (pA && pB) {
+          ctx.beginPath();
+          ctx.moveTo(pA.sx, pA.sy);
+          ctx.lineTo(pB.sx, pB.sy);
+          ctx.stroke();
+        }
+      }
+
+      // Cantilever shoulder standoff axles from central spine out to each Hip Servo housing
+      ctx.strokeStyle = isLeader ? '#38bdf8' : '#94a3b8';
+      ctx.lineWidth = isLeader ? 3.2 : 2.0;
+      for (const hip of creature.hipNodes) {
+        const hPos = posOf(hip);
+        const rel = Vec3.sub(hPos, spineCenter);
+        const along = rel.dot(spineAxis);
+        const mountPt = new Vec3(
+          spineCenter.x + spineAxis.x * along,
+          hPos.y,
+          spineCenter.z + spineAxis.z * along
+        );
+        const pM = proj(mountPt);
+        const pH = proj(hPos);
+        if (pM && pH) {
+          ctx.beginPath();
+          ctx.moveTo(pM.sx, pM.sy);
+          ctx.lineTo(pH.sx, pH.sy);
+          ctx.stroke();
+        }
+      }
+    } else {
+      for (const bone of creature.body.bones) {
+        if (bone.role !== 'torso') continue;
+        const pA = proj(posOf(bone.nodeA));
+        const pB = proj(posOf(bone.nodeB));
+        if (pA && pB) {
+          ctx.beginPath();
+          ctx.moveTo(pA.sx, pA.sy);
+          ctx.lineTo(pB.sx, pB.sy);
+          ctx.stroke();
+        }
       }
     }
 
     // 4. Render 2-Segment Articulated Legs (Hip -> Knee -> Foot)
-    // In 'servo' mode (default in v2): uses physical kneeNodes + rigid robotic struts + cylindrical PD servo motor drums (no muscle lines)
+    // In 'servo' mode (default in v2): uses physical kneeNodes + outboard cantilever offset + cylindrical PD servo motor drums
     // In 'muscle' mode (v1): draws active muscle tension lines + IK knee
-    const isServoMode = creature.actuatorMode !== 'muscle';
     const L_femur = 0.16;
     const drawServoDrum = (pJoint, radiusPx, loadRatio, rotorAngleRad) => {
       if (!pJoint) return;
@@ -1012,30 +1070,56 @@ export class Renderer3D {
       // Draw Femur (Hip -> Knee) and Tibia (Knee -> Foot)
       if (pHip && pKnee && pFoot) {
         if (isServoMode) {
+          // Outboard cantilever servo shaft offset (like ODRI Solo-8 / Unitree / Stanford Doggo)
+          // so the femur & tibia rotate on the outer face of the Hip Servo Drum without colliding with the chassis!
+          const latRel = Vec3.sub(hipPos, com).dot(right);
+          const outSign = Math.abs(latRel) > 0.04 ? Math.sign(latRel) : 1.0;
+          const outOffset = 0.036 * outSign;
+          const hipOutPos = new Vec3(
+            hipPos.x + right.x * outOffset,
+            hipPos.y + right.y * outOffset,
+            hipPos.z + right.z * outOffset
+          );
+          const kneeOutPos = new Vec3(
+            kneePos.x + right.x * outOffset,
+            kneePos.y + right.y * outOffset,
+            kneePos.z + right.z * outOffset
+          );
+          const pHipOut = proj(hipOutPos) || pHip;
+          const pKneeOut = proj(kneeOutPos) || pKnee;
+
+          // Cantilever rotor shaft from Hip Servo housing to outboard femur hub
+          ctx.strokeStyle = '#94a3b8';
+          ctx.lineWidth = Math.max(3.0, 0.032 * pHip.scale);
+          ctx.beginPath();
+          ctx.moveTo(pHip.sx, pHip.sy);
+          ctx.lineTo(pHipOut.sx, pHipOut.sy);
+          ctx.stroke();
+
           // Rigid Robotic Link Casing (outer dark armor + bright structural core)
           ctx.strokeStyle = '#0f172a';
-          ctx.lineWidth = Math.max(4.5, 0.048 * pKnee.scale);
+          ctx.lineWidth = Math.max(4.5, 0.048 * pKneeOut.scale);
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
           ctx.beginPath();
-          ctx.moveTo(pHip.sx, pHip.sy);
-          ctx.lineTo(pKnee.sx, pKnee.sy);
+          ctx.moveTo(pHipOut.sx, pHipOut.sy);
+          ctx.lineTo(pKneeOut.sx, pKneeOut.sy);
           ctx.lineTo(pFoot.sx, pFoot.sy);
           ctx.stroke();
 
           ctx.strokeStyle = isLeader ? '#e2e8f0' : '#cbd5e1';
-          ctx.lineWidth = Math.max(2.2, 0.024 * pKnee.scale);
+          ctx.lineWidth = Math.max(2.2, 0.024 * pKneeOut.scale);
           ctx.beginPath();
-          ctx.moveTo(pHip.sx, pHip.sy);
-          ctx.lineTo(pKnee.sx, pKnee.sy);
+          ctx.moveTo(pHipOut.sx, pHipOut.sy);
+          ctx.lineTo(pKneeOut.sx, pKneeOut.sy);
           ctx.lineTo(pFoot.sx, pFoot.sy);
           ctx.stroke();
 
-          // Knee Revolute PD Servo Motor Drum
+          // Knee Revolute PD Servo Motor / Coaxial Pulley Drum
           const kneeServo = liftDof ? liftDof.primary : null;
           const kneeLoad = kneeServo ? (kneeServo.torqueLoadRatio ?? Math.min(1, Math.abs(kneeServo.appliedForce || 0) / 90.0)) : 0;
-          const kneeAng = Math.atan2(pFoot.sy - pKnee.sy, pFoot.sx - pKnee.sx);
-          drawServoDrum(pKnee, 0.042 * pKnee.scale, kneeLoad, kneeAng);
+          const kneeAng = Math.atan2(pFoot.sy - pKneeOut.sy, pFoot.sx - pKneeOut.sx);
+          drawServoDrum(pKneeOut, 0.042 * pKneeOut.scale, kneeLoad, kneeAng);
         } else {
           ctx.strokeStyle = isLeader ? '#f8fafc' : '#cbd5e1';
           ctx.lineWidth = Math.max(2.0, 0.026 * pKnee.scale);

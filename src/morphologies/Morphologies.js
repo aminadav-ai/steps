@@ -247,11 +247,13 @@ function attachOrthogonalLeg({
   const restComZ = 0.5 * (restFrontPos.z + restRearPos.z);
 
   // Exact 3D Revolute 2-Link Knee Kinematics in canonical torso frame:
-  // Guarantees ||kneePos - restHipPos|| === L_femur and ||kneePos - targetFootPos|| === L_tibia
+  // In 'servo' mode, enforces strict 2D sagittal-plane revolute joint geometry (pz === 0, uz === 0)
+  // with outward X-configuration knee orientation (front knees bend forward, rear knees bend aft away from chassis)
+  // while guaranteeing ||kneePos - restHipPos|| === L_femur and ||kneePos - targetFootPos|| === L_tibia.
   const computeKneeTarget3D = targetFootPos => {
     const ux = targetFootPos.x - restHipPos.x;
     const uy = targetFootPos.y - restHipPos.y;
-    const uz = targetFootPos.z - restHipPos.z;
+    const uz = isServoMode ? 0.0 : (targetFootPos.z - restHipPos.z);
     const rawD = Math.hypot(ux, uy, uz);
     const maxReach = (L_femur + L_tibia) * 0.992;
     const d = Math.max(0.05, Math.min(maxReach, rawD));
@@ -264,10 +266,13 @@ function attachOrthogonalLeg({
     const midY = restHipPos.y + 0.5 * cy;
     const midZ = restHipPos.z + 0.5 * cz;
 
-    // Outward + anterior sagittal knee bend vector orthogonalized against leg chord u
-    const bx0 = 0.65 + (restHipPos.x - restComX) * 1.4;
+    // Outward X-configuration sagittal knee bend vector (front legs bend forward +X, rear legs bend aft -X away from spine)
+    const isFrontLeg = restHipPos.x >= restComX;
+    const bx0 = isServoMode
+      ? (isFrontLeg ? 0.92 : -0.92)
+      : (0.65 + (restHipPos.x - restComX) * 1.4);
     const by0 = 0.25;
-    const bz0 = (restHipPos.z - restComZ) * 1.4;
+    const bz0 = isServoMode ? 0.0 : (restHipPos.z - restComZ) * 1.4;
     const dotBU = (bx0 * cx + by0 * cy + bz0 * cz) / Math.max(1e-6, d * d);
     let px = bx0 - dotBU * cx;
     let py = by0 - dotBU * cy;
@@ -278,7 +283,7 @@ function attachOrthogonalLeg({
       py /= pLen;
       pz /= pLen;
     } else {
-      px = 1.0;
+      px = isFrontLeg ? 1.0 : -1.0;
       py = 0.0;
       pz = 0.0;
     }
@@ -295,6 +300,7 @@ function attachOrthogonalLeg({
   let kneeFrontServo = null;
   let kneeRearServo = null;
   let kneeLatServo = null;
+  let kneeOppLatServo = null;
   let kneeDorsalServo = null;
 
   if (isServoMode) {
@@ -356,9 +362,21 @@ function attachOrthogonalLeg({
       pivotNode: hipNode,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 90.0,
-      compliance: 0.00012
+      maxForce: 165.0,
+      compliance: 0.00004
     });
+    if (oppositeLateralAnchor) {
+      kneeOppLatServo = body.addMuscle({
+        name: `leg${legIdx}_knee_lat_opp_servo`,
+        nodeA: oppositeLateralAnchor,
+        nodeB: knee,
+        pivotNode: hipNode,
+        minFactor: 0.25,
+        maxFactor: 2.20,
+        maxForce: 165.0,
+        compliance: 0.00004
+      });
+    }
     if (dorsalAnchor) {
       kneeDorsalServo = body.addMuscle({
         name: `leg${legIdx}_knee_dorsal_servo`,
@@ -413,8 +431,8 @@ function attachOrthogonalLeg({
     pivotNode: hipNode,
     minFactor: 0.35,
     maxFactor: 1.95,
-    maxForce: 110.0,
-    compliance: 0.00014
+    maxForce: isServoMode ? 185.0 : 110.0,
+    compliance: isServoMode ? 0.00004 : 0.00014
   });
 
   const oppLatMuscle = oppositeLateralAnchor
@@ -425,8 +443,8 @@ function attachOrthogonalLeg({
         pivotNode: hipNode,
         minFactor: 0.35,
         maxFactor: 1.95,
-        maxForce: 110.0,
-        compliance: 0.00014
+        maxForce: isServoMode ? 185.0 : 110.0,
+        compliance: isServoMode ? 0.00004 : 0.00014
       })
     : null;
 
@@ -478,12 +496,13 @@ function attachOrthogonalLeg({
         dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
         dz = 0;
       } else {
-        // Beetle Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.52, actLift < 0):
-        // Reaches into the dorsal hemisphere (y = 0.38..0.52m, past restHipPos.y = 0.25m) to press against the floor!
+        // Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.42, actLift < 0):
+        // In 'servo' mode, the 2-DoF revolute leg stays strictly in its sagittal bearing plane (dz === 0)
+        // and rotates on its cantilevered hip shaft outside the chassis frame!
         dx = actStride * 0.26;
         dy = 0.24 + (-actLift) * 0.28;
         const outSign = restFootPos.z >= 0 ? 1 : -1;
-        dz = isRearCenter ? diffTurn * 0.24 : -outSign * (-actLift) * 0.10;
+        dz = isServoMode ? 0.0 : (isRearCenter ? diffTurn * 0.24 : -outSign * (-actLift) * 0.10);
       }
 
       const rawTargetPos = new Vec3(
@@ -520,9 +539,9 @@ function attachOrthogonalLeg({
       kneeLift.maxForce = crossingHipPlane ? 14.0 : 135.0;
       strideFwd.maxForce = crossingHipPlane ? 18.0 : 120.0;
       strideBwd.maxForce = crossingHipPlane ? 18.0 : 120.0;
-      latMuscle.maxForce = crossingHipPlane ? 18.0 : 110.0;
+      latMuscle.maxForce = crossingHipPlane ? (isServoMode ? 45.0 : 18.0) : (isServoMode ? 185.0 : 110.0);
       if (oppLatMuscle) {
-        oppLatMuscle.maxForce = crossingHipPlane ? 18.0 : 110.0;
+        oppLatMuscle.maxForce = crossingHipPlane ? (isServoMode ? 45.0 : 18.0) : (isServoMode ? 185.0 : 110.0);
       }
 
       kneeLift.targetAction = actLift;
@@ -546,6 +565,9 @@ function attachOrthogonalLeg({
         kneeFrontServo.setTargetLengthDirect(Vec3.dist(restFrontPos, targetKneePos));
         kneeRearServo.setTargetLengthDirect(Vec3.dist(restRearPos, targetKneePos));
         kneeLatServo.setTargetLengthDirect(Vec3.dist(restLatPos, targetKneePos));
+        if (kneeOppLatServo && restOppLatPos) {
+          kneeOppLatServo.setTargetLengthDirect(Vec3.dist(restOppLatPos, targetKneePos));
+        }
         if (kneeDorsalServo && restDorsalPos) {
           kneeDorsalServo.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetKneePos));
         }

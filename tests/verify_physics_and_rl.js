@@ -189,9 +189,17 @@ console.log('ОК: Дообучение надёжно пробуждается 
 
 console.log('\n=== 6. Проверка переключателя режима приводов: servo (по умолчанию) <-> muscle (v1) ===');
 const leg0 = walker.legControllers[0];
-console.log(`Сервопривод #0: isServo=${leg0.isServo}, угол=${(leg0.jointAngleRad * 180 / Math.PI).toFixed(1)}°, момент=${leg0.jointTorqueNm.toFixed(2)} Н·м (нагрузка ${(leg0.torqueLoadRatio * 100).toFixed(1)}%)`);
-if (!leg0.isServo || typeof leg0.jointTorqueNm !== 'number') {
-  console.error('ОШИБКА: В режиме servo должна рассчитываться телеметрия крутящего момента (Н·м) и угла шарнира!');
+const { right: tRight } = walker.getTorsoFrame();
+const maxBearingDeflection = Math.max(
+  ...walker.hipNodes.map((h, i) => {
+    const kErr = Math.abs((walker.kneeNodes[i].pos.x - h.pos.x) * tRight.x + (walker.kneeNodes[i].pos.y - h.pos.y) * tRight.y + (walker.kneeNodes[i].pos.z - h.pos.z) * tRight.z);
+    const fErr = Math.abs((walker.footNodes[i].pos.x - h.pos.x) * tRight.x + (walker.footNodes[i].pos.y - h.pos.y) * tRight.y + (walker.footNodes[i].pos.z - h.pos.z) * tRight.z);
+    return Math.max(kErr, fErr);
+  })
+);
+console.log(`Сервопривод #0: isServo=${leg0.isServo}, угол=${(leg0.jointAngleRad * 180 / Math.PI).toFixed(1)}°, момент=${leg0.jointTorqueNm.toFixed(2)} Н·м (нагрузка ${(leg0.torqueLoadRatio * 100).toFixed(1)}%), боковой люфт подшипника=${(maxBearingDeflection * 1000).toFixed(2)} мм`);
+if (!leg0.isServo || typeof leg0.jointTorqueNm !== 'number' || maxBearingDeflection > 0.02) {
+  console.error('ОШИБКА: В режиме servo должна рассчитываться телеметрия крутящего момента (Н·м) и соблюдаться жёсткость плоскости подшипника!');
   process.exit(1);
 }
 
