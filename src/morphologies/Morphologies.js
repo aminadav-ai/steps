@@ -94,10 +94,12 @@ export class CreatureInstance {
     const dirX = toFood.x * invDist;
     const dirZ = toFood.z * invDist;
 
-    // Egocentric angle to food: forward projection (cos) and right projection (sin)
-    const foodForward = dirX * forward.x + dirZ * forward.z;
-    const foodRight = dirX * right.x + dirZ * right.z;
-    const normDist = Math.tanh(distToFood / 5.0);
+    // When overturned on its back (up.y < 0.35), the creature completely ignores food and walking gates
+    // and focuses 100% of its sensory-motor attention on body posture and flipping back onto its feet!
+    const isOverturned = up.y < 0.35;
+    const foodForward = isOverturned ? 0.0 : (dirX * forward.x + dirZ * forward.z);
+    const foodRight = isOverturned ? 0.0 : (dirX * right.x + dirZ * right.z);
+    const normDist = isOverturned ? 0.0 : Math.tanh(distToFood / 5.0);
 
     // Egocentric linear velocity of CoM
     const velForward = Math.tanh((comVel.x * forward.x + comVel.y * forward.y + comVel.z * forward.z) / 2.0);
@@ -114,11 +116,10 @@ export class CreatureInstance {
     const clockSin = Math.sin(this.phase);
     const clockCos = Math.cos(this.phase);
 
-    // Non-negative forward gate (0 when food is behind so creature pivots on the spot instead of walking away)
-    // and signed heading angle turnDrive in [-1, 1] (stays strong at +/- 1 even when food is 180 deg behind!)
-    const angleToFood = Math.atan2(foodRight, foodForward);
-    const forwardGate = Math.max(0.0, foodForward);
-    const turnDrive = Math.tanh(2.2 * angleToFood);
+    // Non-negative forward gate (0 when food is behind or when overturned)
+    const angleToFood = isOverturned ? 0.0 : Math.atan2(foodRight, foodForward);
+    const forwardGate = isOverturned ? 0.0 : Math.max(0.0, foodForward);
+    const turnDrive = isOverturned ? 0.0 : Math.tanh(2.2 * angleToFood);
 
     const obs = [
       foodForward,              // 0: cos(angle to food)
@@ -161,7 +162,7 @@ export class CreatureInstance {
    * Applies the action vector a_t in [-1, 1]^actionDim to the 2-DoF leg controllers
    * so all 4 internal tendons of each leg converge to a geometrically consistent 3D point.
    */
-  applyActionVector(actions) {
+  applyActionVector(actions, isRightingMode = false) {
     let totalPower = 0;
     // Differential between front-left (leg 0) and front-right (leg 1) stride commands
     const stride0 = Math.max(-1, Math.min(1, actions[1] || 0));
@@ -171,7 +172,7 @@ export class CreatureInstance {
       const ctrl = this.legControllers[i];
       const actLift = Math.max(-1, Math.min(1, actions[i * 2] || 0));
       const actStride = Math.max(-1, Math.min(1, actions[i * 2 + 1] || 0));
-      totalPower += ctrl.applyLegActions(actLift, actStride, diffTurn);
+      totalPower += ctrl.applyLegActions(actLift, actStride, diffTurn, isRightingMode);
     }
     this.lastMechanicalPower = totalPower;
   }
@@ -200,6 +201,7 @@ function attachOrthogonalLeg({
   rearAnchor,
   lateralAnchor,
   oppositeLateralAnchor = null,
+  dorsalAnchor = null,
   isRearCenter = false,
   footY = 0.06,
   strideStroke = 0.16,
@@ -213,6 +215,7 @@ function attachOrthogonalLeg({
   const restRearPos = rearAnchor.pos.clone();
   const restLatPos = lateralAnchor.pos.clone();
   const restOppLatPos = oppositeLateralAnchor ? oppositeLateralAnchor.pos.clone() : null;
+  const restDorsalPos = dorsalAnchor ? dorsalAnchor.pos.clone() : null;
 
   const foot = body.addNode({
     id: `c${id}_foot_${legIdx}`,
@@ -231,8 +234,8 @@ function attachOrthogonalLeg({
     nodeA: hipNode,
     nodeB: foot,
     pivotNode: hipNode,
-    minFactor: 0.55,
-    maxFactor: 1.45,
+    minFactor: 0.35,
+    maxFactor: 2.15,
     maxForce: 135.0,
     compliance: 0.00010
   });
@@ -242,8 +245,8 @@ function attachOrthogonalLeg({
     nodeA: frontAnchor,
     nodeB: foot,
     pivotNode: hipNode,
-    minFactor: 0.55,
-    maxFactor: 1.45,
+    minFactor: 0.35,
+    maxFactor: 1.95,
     maxForce: 120.0,
     compliance: 0.00014
   });
@@ -253,8 +256,8 @@ function attachOrthogonalLeg({
     nodeA: rearAnchor,
     nodeB: foot,
     pivotNode: hipNode,
-    minFactor: 0.55,
-    maxFactor: 1.45,
+    minFactor: 0.35,
+    maxFactor: 1.95,
     maxForce: 120.0,
     compliance: 0.00014
   });
@@ -264,8 +267,8 @@ function attachOrthogonalLeg({
     nodeA: lateralAnchor,
     nodeB: foot,
     pivotNode: hipNode,
-    minFactor: 0.65,
-    maxFactor: 1.35,
+    minFactor: 0.35,
+    maxFactor: 1.95,
     maxForce: 110.0,
     compliance: 0.00014
   });
@@ -276,21 +279,45 @@ function attachOrthogonalLeg({
         nodeA: oppositeLateralAnchor,
         nodeB: foot,
         pivotNode: hipNode,
-        minFactor: 0.65,
-        maxFactor: 1.35,
+        minFactor: 0.35,
+        maxFactor: 1.95,
         maxForce: 110.0,
         compliance: 0.00014
       })
     : null;
 
+  // Non-coplanar 3D dorsal tendon anchored to torsoTop: eliminates reflection ambiguity across the hip plane
+  // and enables beetle-style dorsal hyper-extension to push against the floor when overturned!
+  const dorsalMuscle = dorsalAnchor
+    ? body.addMuscle({
+        name: `leg${legIdx}_dorsal`,
+        nodeA: dorsalAnchor,
+        nodeB: foot,
+        pivotNode: hipNode,
+        minFactor: 0.22,
+        maxFactor: 1.85,
+        maxForce: 145.0,
+        compliance: 0.00011
+      })
+    : null;
+
   const controller = {
-    applyLegActions(actLift, actStride, diffTurn = 0) {
-      // actStride in [-1, 1]: +1 = forward (+X), -1 = backward (-X)
-      const dx = actStride * strideStroke;
-      // actLift in [-1, 1]: -1 = lift UP (+Y), +1 = press DOWN (-Y)
-      const dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
-      // Pure longitudinal & vertical target in leg plane (rear leg acts as natural pivot)
-      const dz = 0;
+    applyLegActions(actLift, actStride, diffTurn = 0, isRightingMode = false) {
+      let dx, dy, dz;
+      if (!isRightingMode) {
+        // Normal walking mode: pure sagittal stride + vertical lift
+        dx = actStride * strideStroke;
+        dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
+        dz = 0;
+      } else {
+        // Beetle Self-Righting Mode ("Рефлекс жука" when overturned on back):
+        // Unlocks dorsal hyper-flexion (+Y up to +0.58m past torsoTop) and lateral leverage (dz)
+        // so the leg can reach the floor behind the dorsal shell and roll the torso over its edge!
+        dx = actStride * 0.28;
+        dy = actLift < 0 ? -actLift * 0.58 : -actLift * 0.16;
+        const outSign = restFootPos.z >= 0 ? 1 : -1;
+        dz = isRearCenter ? diffTurn * 0.26 : outSign * Math.max(0, -actLift) * 0.18;
+      }
 
       const targetPos = new Vec3(
         restFootPos.x + dx,
@@ -308,13 +335,17 @@ function attachOrthogonalLeg({
       if (oppLatMuscle && restOppLatPos) {
         oppLatMuscle.setTargetLengthDirect(Vec3.dist(restOppLatPos, targetPos));
       }
+      if (dorsalMuscle && restDorsalPos) {
+        dorsalMuscle.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetPos));
+      }
 
       return (
         kneeLift.instantPower +
         strideFwd.instantPower +
         strideBwd.instantPower +
         latMuscle.instantPower +
-        (oppLatMuscle ? oppLatMuscle.instantPower : 0)
+        (oppLatMuscle ? oppLatMuscle.instantPower : 0) +
+        (dorsalMuscle ? dorsalMuscle.instantPower : 0)
       );
     }
   };
@@ -437,6 +468,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
       rearAnchor: tailNode,
       lateralAnchor,
       oppositeLateralAnchor,
+      dorsalAnchor: torsoTop,
       isRearCenter: i === 2,
       footY: origin.y + 0.06,
       color
@@ -559,6 +591,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
       frontAnchor: noseNode,
       rearAnchor: tailNode,
       lateralAnchor: oppositeLateral,
+      dorsalAnchor: torsoTop,
       footY: origin.y + 0.06,
       color
     });

@@ -25,7 +25,7 @@ export class ArenaSimulation {
   constructor({
     morphologyKey = 'tripod',
     algorithm = 'ppo',
-    populationSize = 16,
+    populationSize = 1,
     arenaHalfSize = 11.0,
     floorFriction = 1.0
   } = {}) {
@@ -204,7 +204,11 @@ export class ArenaSimulation {
   }
 
   setFloorFriction(mu) {
-    this.floorFriction = Math.max(0, Math.min(2.0, mu));
+    const nextMu = Math.max(0, Math.min(2.0, mu));
+    if (Math.abs(nextMu - this.floorFriction) >= 0.04 && this.trainer && this.trainer.notifyEnvironmentChange) {
+      this.trainer.notifyEnvironmentChange(`Изменилось трение пола (μ = ${nextMu.toFixed(2)}) — контроль сцепления`);
+    }
+    this.floorFriction = nextMu;
     this.world.floorFriction = this.floorFriction;
   }
 
@@ -230,7 +234,8 @@ export class ArenaSimulation {
       this.world.resetContactTelemetry((body, idx) => {
         const c = this.creatures[idx];
         if (c && c.lastAction) {
-          c.applyActionVector(c.lastAction);
+          const isOverturned = c.getTorsoFrame().up.y < 0.35;
+          c.applyActionVector(c.lastAction, isOverturned);
         }
       });
     }
@@ -284,60 +289,54 @@ export class ArenaSimulation {
       const invD = 1 / Math.max(1e-5, newDist);
       const alignCos = (dx * invD) * forward.x + (dz * invD) * forward.z;
 
-      // Reward components:
-      // 1) Approach velocity reward (favors moving nose-first toward food)
-      const forwardFactor = Math.max(0.25, 0.65 + 0.35 * alignCos);
-      let r = velToward * forwardFactor * 2.5;
-      // 2) Orientation alignment reward
-      r += 0.22 * alignCos;
-      // 3) Upright posture maintenance
-      r += 0.08 * Math.max(-1, up.y - 0.55);
-      // 4) Mechanical power penalty (smooth, efficient locomotion)
-      r -= 0.00035 * c.lastMechanicalPower;
+      const isOverturnedNow = up.y < 0.35;
+      const prevUpY = c.prevUpY !== undefined ? c.prevUpY : up.y;
+      c.prevUpY = up.y;
 
-      // Check if food reached! (center or front hip within reach radius)
-      const frontDist = Math.hypot(c.foodPos.x - c.frameRefs.front.pos.x, c.foodPos.z - c.frameRefs.front.pos.z);
-      if (newDist < 0.46 || frontDist < 0.38) {
-        r += 8.5; // Major foraging reward
-        c.foodCollected += 1;
-        this.totalFoodCollected += 1;
-        if (i === 0) {
-          this.c0FoodEvents.push({
-            foodNumber: c.foodCollected,
-            simTime: Number(this.simTime.toFixed(2)),
-            update: this.trainer.updateCount,
-            foodPos: [Number(c.foodPos.x.toFixed(2)), Number(c.foodPos.z.toFixed(2))],
-            timeToReachSec: Number((this.simTime - this.c0LastFoodSpawnTime).toFixed(2))
-          });
-          this.c0LastFoodSpawnTime = this.simTime;
-        }
-        this._spawnFoodForCreature(c, false);
-      }
-
-      // Penalize excessive tilt in reward only; episode reset / body teleportation is completely disabled
-      // for the main observed walker (i === 0) so it lives one continuous, unbroken physical life on the arena!
-      const flipped = up.y < 0.12 || center.y < 0.08;
-      if (flipped) {
-        r -= 2.2;
+      let r = 0;
+      if (isOverturnedNow) {
+        // When overturned on its back: ZERO thoughts about food or walking!
+        // Reward is 100% dedicated to the Beetle Self-Righting task: increasing up.y toward +1
+        // and leveraging feet against the floor to roll back onto its feet.
+        const upVel = (up.y - prevUpY) / dt;
+        const contactBonus = c.footNodes.some(f => f.inContact) ? 0.18 : 0.0;
+        r = 3.5 * upVel + 0.35 * up.y + contactBonus;
+        c.lastVelocityTowardFood = 0;
         dones[i] = 1;
-      }
-
-      if (up.y < 0.25) {
-        c.overturnSteps = (c.overturnSteps || 0) + 1;
       } else {
-        c.overturnSteps = 0;
-      }
+        // Normal upright walking reward components:
+        // 1) Approach velocity reward (favors moving nose-first toward food)
+        const forwardFactor = Math.max(0.25, 0.65 + 0.35 * alignCos);
+        r = velToward * forwardFactor * 2.5;
+        // 2) Orientation alignment reward
+        r += 0.22 * alignCos;
+        // 3) Upright posture maintenance
+        r += 0.08 * Math.max(-1, up.y - 0.55);
+        // 4) Mechanical power penalty (smooth, efficient locomotion)
+        r -= 0.00035 * c.lastMechanicalPower;
 
-      // Background parallel workers (i > 0) or headless fast-training automatically upright in-place
-      // after 12 overturned steps (0.6s) so they never lie upside-down poisoning the PPO rollout buffer.
-      if (c.overturnSteps >= 12 && (i > 0 || this._isHeadlessFastTrain)) {
-        this.uprightCreature(i);
-        c.overturnSteps = 0;
-        dones[i] = 1;
+        // Check if food reached! (center or front hip within reach radius)
+        const frontDist = Math.hypot(c.foodPos.x - c.frameRefs.front.pos.x, c.foodPos.z - c.frameRefs.front.pos.z);
+        if (newDist < 0.46 || frontDist < 0.38) {
+          r += 8.5; // Major foraging reward
+          c.foodCollected += 1;
+          this.totalFoodCollected += 1;
+          if (i === 0) {
+            this.c0FoodEvents.push({
+              foodNumber: c.foodCollected,
+              simTime: Number(this.simTime.toFixed(2)),
+              update: this.trainer.updateCount,
+              foodPos: [Number(c.foodPos.x.toFixed(2)), Number(c.foodPos.z.toFixed(2))],
+              timeToReachSec: Number((this.simTime - this.c0LastFoodSpawnTime).toFixed(2)),
+              metaMode: this.trainer.metaState ? this.trainer.metaState.mode : 'LEARNING_WALK'
+            });
+            this.c0LastFoodSpawnTime = this.simTime;
+          }
+          this._spawnFoodForCreature(c, false);
+        }
       }
 
       if (i === 0) {
-        const isOverturnedNow = up.y < 0.35;
         if (isOverturnedNow && !this.c0CurrentlyOverturned) {
           this.c0CurrentlyOverturned = true;
           this.c0OverturnEvents.push({
@@ -345,16 +344,19 @@ export class ArenaSimulation {
             simTime: Number(this.simTime.toFixed(2)),
             update: this.trainer.updateCount,
             pos: [Number(center.x.toFixed(2)), Number(center.z.toFixed(2))],
-            upY: Number(up.y.toFixed(3))
+            upY: Number(up.y.toFixed(3)),
+            rightingSkillPct: this.trainer.metaState ? this.trainer.metaState.rightingSkillPct : 20
           });
-        } else if (!isOverturnedNow && this.c0CurrentlyOverturned) {
+        } else if (!isOverturnedNow && up.y >= 0.45 && this.c0CurrentlyOverturned) {
           this.c0CurrentlyOverturned = false;
           this.c0OverturnEvents.push({
-            event: 'recovered',
+            event: 'recovered_by_beetle_reflex',
             simTime: Number(this.simTime.toFixed(2)),
             update: this.trainer.updateCount,
             pos: [Number(center.x.toFixed(2)), Number(center.z.toFixed(2))],
-            upY: Number(up.y.toFixed(3))
+            upY: Number(up.y.toFixed(3)),
+            attemptsUsed: this.trainer.metaState ? this.trainer.metaState.rightingAttempts : 1,
+            rightingSkillPct: this.trainer.metaState ? this.trainer.metaState.rightingSkillPct : 100
           });
         }
       }
@@ -440,6 +442,9 @@ export class ArenaSimulation {
         c0AlignCos: Number(((dx0 * fwd0.x + dz0 * fwd0.z) / Math.max(1e-5, dist0)).toFixed(2)),
         c0UpY: Number(up0.y.toFixed(3)),
         c0VelToFood: Number(c0.lastVelocityTowardFood.toFixed(3)),
+        metaMode: this.trainer.metaState ? this.trainer.metaState.mode : 'LEARNING_WALK',
+        isLearningActive: this.trainer.metaState ? this.trainer.metaState.isLearningActive : true,
+        needToLearnPct: this.trainer.metaState ? this.trainer.metaState.needToLearnPct : 80,
         policyLoss: Number((updateInfo.policyLoss || 0).toFixed(4)),
         valueLoss: Number((updateInfo.valueLoss || 0).toFixed(4)),
         entropy: Number((updateInfo.entropy || 0).toFixed(4))
@@ -474,6 +479,7 @@ export class ArenaSimulation {
       updateCount: this.trainer.updateCount,
       floorFriction: this.floorFriction,
       totalPopulationFood: this.totalFoodCollected,
+      metaState: this.trainer.metaState ? { ...this.trainer.metaState } : null,
       mainWalker: {
         foodCollected: c0.foodCollected,
         cumulativeReward: Number(c0.cumulativeReward.toFixed(2)),

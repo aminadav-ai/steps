@@ -39,30 +39,55 @@ if (horizontalDriftOnIce > 1e-6) {
   console.log('ОК: Закон сохранения импульса выполняется с машинной точностью (движение невозможно без трения опоры о пол).');
 }
 
-console.log('\n=== 2. Проверка обучения PPO (Actor-Critic + GAE + Adam) на арене с трением mu = 1.0 ===');
+console.log('\n=== 2. Проверка обучения одиночного шагохода (populationSize = 1, Мета-Чутьё + PPO) ===');
 const trainSim = new ArenaSimulation({
   morphologyKey: 'tripod',
   algorithm: 'ppo',
-  populationSize: 16,
+  populationSize: 1,
   floorFriction: 1.0
 });
 
 let firstMetrics = null;
 let lastMetrics = null;
 
-for (let s = 0; s < 32 * 12; s++) {
+for (let s = 0; s < 32 * 25; s++) {
   const upd = trainSim.stepControl();
   if (upd) {
     if (!firstMetrics) firstMetrics = upd;
     lastMetrics = upd;
-    if (upd.update % 3 === 0 || upd.update === 1) {
+    if (upd.update % 5 === 0 || upd.update === 1) {
       console.log(
-        `Update #${upd.update} | t=${upd.simTime}s | MeanRew=${upd.meanReward.toFixed(3)} | VelTowardFood=${upd.meanVelocity.toFixed(3)} m/s | TotalFood=${upd.totalFood}`
+        `Update #${upd.update} | t=${upd.simTime}s | Mode=${upd.metaMode} (active=${upd.isLearningActive}, need=${upd.needToLearnPct}%) | Vel=${upd.meanVelocity.toFixed(3)} m/s | Food=${upd.c0Food}`
       );
     }
   }
 }
 
+console.log('\n=== 3. Проверка «Рефлекса жука» (обучение перевороту со спины на ноги без участия еды) ===');
+const walker = trainSim.creatures[0];
+const com = walker.body.getCenterOfMass();
+const flipAngle = Math.PI * 0.94;
+for (const n of walker.body.nodes) {
+  const dy = n.pos.y - com.y;
+  const dz = n.pos.z - com.z;
+  n.pos.y = 0.35 + dy * Math.cos(flipAngle) - dz * Math.sin(flipAngle);
+  n.pos.z = com.z + dy * Math.sin(flipAngle) + dz * Math.cos(flipAngle);
+  n.prevPos.copy(n.pos);
+}
+
+for (let step = 1; step <= 60; step++) {
+  trainSim.stepControl();
+  const upY = walker.getTorsoFrame().up.y;
+  const m = trainSim.trainer.metaState;
+  if (step === 1 || step % 14 === 0 || upY > 0.65) {
+    console.log(`Шаг на спине #${step} | up.y=${upY.toFixed(3)} | режим=${m.mode} | попытка=${m.rightingAttempts} | навык=${m.rightingSkillPct}%`);
+    if (upY > 0.65 && step > 5) {
+      console.log('ОК: Шагоход самостоятельно обучился рычагу и перевернулся со спины обратно на лапы!');
+      break;
+    }
+  }
+}
+
 console.log('\nИтог проверки обучения:');
-console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.totalFood}`);
-console.log(`После 12 обновлений PPO: Vel=${lastMetrics.meanVelocity.toFixed(3)} m/s, Food=${lastMetrics.totalFood}`);
+console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);
+console.log(`После 25 эпох (1 шагоход): Vel=${lastMetrics.meanVelocity.toFixed(3)} m/s, Food=${lastMetrics.c0Food}, Mode=${lastMetrics.metaMode}`);

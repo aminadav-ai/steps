@@ -32,16 +32,21 @@ const rangeFriction = document.getElementById('rangeFriction');
 const labelFrictionVal = document.getElementById('labelFrictionVal');
 const chkFollowLeader = document.getElementById('chkFollowLeader');
 const chkShowForces = document.getElementById('chkShowForces');
-const chkShowAllPop = document.getElementById('chkShowAllPop');
 
 const hudUpdate = document.getElementById('hudUpdate');
 const hudSimTime = document.getElementById('hudSimTime');
 const hudTotalFood = document.getElementById('hudTotalFood');
-const hudLeaderId = document.getElementById('hudLeaderId');
-const hudLeaderFood = document.getElementById('hudLeaderFood');
 const hudLeaderVel = document.getElementById('hudLeaderVel');
 const hudFriction = document.getElementById('hudFriction');
 const expStatusBadge = document.getElementById('expStatusBadge');
+
+const metaActiveBadge = document.getElementById('metaActiveBadge');
+const metaModeBanner = document.getElementById('metaModeBanner');
+const metaNeedVal = document.getElementById('metaNeedVal');
+const metaNeedFill = document.getElementById('metaNeedFill');
+const metaRightingVal = document.getElementById('metaRightingVal');
+const metaRightingFill = document.getElementById('metaRightingFill');
+const metaReasonBox = document.getElementById('metaReasonBox');
 
 const metricMeanVel = document.getElementById('metricMeanVel');
 const metricMeanRew = document.getElementById('metricMeanRew');
@@ -87,7 +92,7 @@ async function startNewExperiment() {
   sim = new ArenaSimulation({
     morphologyKey,
     algorithm,
-    populationSize: 16,
+    populationSize: 1,
     arenaHalfSize: 11.0,
     floorFriction
   });
@@ -98,7 +103,7 @@ async function startNewExperiment() {
   await logger.startNewExperiment({
     morphology: morphologyKey,
     algorithm,
-    populationSize: 16,
+    populationSize: 1,
     config: { floorFriction, arenaHalfSize: 11.0 }
   });
   renderLogsList(logger.savedLogsList);
@@ -111,7 +116,6 @@ function getUIState() {
     floorFriction: parseFloat(rangeFriction.value),
     followLeader: chkFollowLeader.checked,
     showForceVectors: chkShowForces.checked,
-    showAllPopulation: chkShowAllPop.checked,
     morphology: selectMorphology.value,
     algorithm: selectAlgorithm.value
   };
@@ -201,22 +205,7 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
   expStatusBadge.textContent = '⚡ ТУРБО-ОБУЧЕНИЕ...';
   expStatusBadge.style.color = '#38bdf8';
 
-  // Preserve the main creature's current physical position and food target so it doesn't jump
-  // while the neural network trains in the background!
   const c0 = sim.creatures[0];
-  if (c0.getTorsoFrame().up.y < 0.45) {
-    sim.uprightCreature(0);
-  }
-  const savedNodes = c0.body.nodes.map(n => ({
-    pos: n.pos.clone(),
-    prevPos: n.prevPos.clone(),
-    vel: n.vel.clone()
-  }));
-  const savedFoodPos = c0.foodPos.clone();
-  const savedPrevFoodDist = c0.prevFoodDist;
-  const savedFoodCollected = c0.foodCollected;
-  const savedPhase = c0.phase;
-
   sim._isHeadlessFastTrain = true;
   for (let u = 1; u <= targetUpdates; u++) {
     let updateEntry = null;
@@ -224,7 +213,7 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
       updateEntry = sim.stepControl();
     }
     handleUpdateEntry(updateEntry);
-    btnFastTrain.textContent = `⚡ Обучение в фоне: ${u} / ${targetUpdates} эпох...`;
+    btnFastTrain.textContent = `⚡ Обучение без рендера: ${u} / ${targetUpdates} эпох...`;
 
     if (u % 3 === 0) {
       updateHUD();
@@ -233,18 +222,10 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
   }
   sim._isHeadlessFastTrain = false;
 
-  // Restore c0 to its exact pre-training physical state so it continues seamlessly from the exact same spot
-  // with its newly upgraded neural network brain!
-  for (let i = 0; i < savedNodes.length; i++) {
-    c0.body.nodes[i].pos.copy(savedNodes[i].pos);
-    c0.body.nodes[i].prevPos.copy(savedNodes[i].prevPos);
-    c0.body.nodes[i].vel.set(0, 0, 0);
+  if (c0.getTorsoFrame().up.y < 0.45) {
+    sim.uprightCreature(0);
   }
-  c0.foodPos.copy(savedFoodPos);
-  c0.prevFoodDist = savedPrevFoodDist;
-  c0.foodCollected = savedFoodCollected;
-  c0.phase = savedPhase;
-  c0.overturnSteps = 0;
+  renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
 
   simTimeAccum = 0;
   lastFrameTime = performance.now();
@@ -305,21 +286,13 @@ chkShowForces.addEventListener('change', () => {
   logger.recordUserEvent('toggle_force_vectors', { showForceVectors: chkShowForces.checked }, sim, renderer3D, getUIState());
 });
 
-chkShowAllPop.addEventListener('change', () => {
-  renderer3D.showAllPopulation = chkShowAllPop.checked;
-  logger.recordUserEvent('toggle_population_view', { showAllPopulation: chkShowAllPop.checked }, sim, renderer3D, getUIState());
-});
-
 function updateHUD() {
   if (!sim) return;
-  const focusIdx = renderer3D.showAllPopulation ? (sim.bestCreatureIdx || 0) : 0;
-  const leader = sim.creatures[focusIdx] || sim.creatures[0];
+  const leader = sim.creatures[0];
 
   hudUpdate.textContent = sim.trainer.updateCount;
   hudSimTime.textContent = `${sim.simTime.toFixed(1)} с`;
-  hudTotalFood.textContent = sim.totalFoodCollected;
-  hudLeaderId.textContent = focusIdx;
-  hudLeaderFood.textContent = leader.foodCollected;
+  hudTotalFood.textContent = leader.foodCollected;
   hudLeaderVel.textContent = `${leader.lastVelocityTowardFood.toFixed(2)} м/с`;
 
   const meanVel = sim.recentVelocities.length > 0
@@ -333,12 +306,45 @@ function updateHUD() {
   metricMeanRew.textContent = meanRew.toFixed(3);
   metricPower.textContent = `${leader.lastMechanicalPower.toFixed(1)} Вт`;
 
+  // Update Meta-Plasticity & Beetle Self-Righting Status Card on right panel
+  const m = sim.trainer.metaState;
+  if (m && metaActiveBadge) {
+    const modeClass = m.mode === 'CONSOLIDATED'
+      ? 'consolidated'
+      : m.mode === 'LEARNING_RIGHTING'
+        ? 'righting'
+        : 'learning';
+
+    metaActiveBadge.className = `meta-badge ${modeClass}`;
+    metaActiveBadge.textContent = m.mode === 'CONSOLIDATED'
+      ? '⏸ ДООБУЧЕНИЕ ОТКЛЮЧЕНО'
+      : m.mode === 'LEARNING_RIGHTING'
+        ? '🪲 ОБУЧЕНИЕ ПЕРЕВОРОТУ'
+        : '● ОБУЧЕНИЕ ИДЁТ';
+
+    metaModeBanner.className = `meta-mode-banner ${modeClass}`;
+    metaModeBanner.textContent = m.modeTitle;
+
+    metaNeedVal.textContent = `${m.needToLearnPct}%`;
+    metaNeedFill.style.inlineSize = `${Math.max(4, Math.min(100, m.needToLearnPct))}%`;
+
+    metaRightingVal.textContent = `${m.rightingSkillPct}% (встал сам: ${m.rightingSuccesses})`;
+    metaRightingFill.style.inlineSize = `${Math.max(8, Math.min(100, m.rightingSkillPct))}%`;
+
+    metaReasonBox.textContent = m.reasonText;
+    metaReasonBox.style.borderInlineStartColor = m.mode === 'CONSOLIDATED'
+      ? '#38bdf8'
+      : m.mode === 'LEARNING_RIGHTING'
+        ? '#f59e0b'
+        : '#34d399';
+  }
+
   // Highlight the "Help Stand Up" button if the walker is tilted onto its side or back
   const { up } = leader.getTorsoFrame();
   const isOverturned = up.y < 0.35;
   btnUprightWalker.classList.toggle('amber-alert', isOverturned);
   btnUprightWalker.textContent = isOverturned
-    ? '⚠️ Перевернулся — Помочь встать!'
+    ? '⚠️ На спине (учится сам или нажми помочь)'
     : '🤚 Помочь встать на ноги';
 }
 

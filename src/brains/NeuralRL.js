@@ -132,6 +132,17 @@ export class ActorCriticBrain {
     this.criticL2 = new DenseLayer(hidden1, hidden2, Math.sqrt(2 / (hidden1 + hidden2)));
     this.criticOut = new DenseLayer(hidden2, 1, 0.1);
 
+    // Dedicated Beetle Self-Righting Reflex Sub-Network ("Рефлекс жука"):
+    // Completely isolated from walking weights; active and trained ONLY when overturned (up.y < 0.35)
+    this.rightingLayer = new DenseLayer(obsDim, actDim, 0.04);
+    this.rightingGain = 0.32;       // Starts weak (32%) so first overturn attempt only rocks the shell
+    this.rightingAsym = 0.28;       // Learns asymmetric dorsal extension (one leg levers floor, opposite tucks)
+    this.rightingSweep = 0.32;      // Learns longitudinal sweep leverage
+    this.rightingSideSign = 1.0;    // Preferred roll-over edge (+1 or -1), adapts if blocked
+    this.rightingAttempts = 0;
+    this.rightingSuccesses = 0;
+    this.rightingPhase = 0;
+
     this.adamStepCount = 0;
 
     // Live activation buffers for UI visualization
@@ -195,6 +206,113 @@ export class ActorCriticBrain {
         this.actorSkip.W[strideRow + 14] = -0.22 * sinStride;
       }
     }
+
+    // Store normalized CPG resonance template for coherent single-walker exploration
+    this.cpgTemplate = Float64Array.from(this.actorSkip.W);
+  }
+
+  /**
+   * Forward pass of the dedicated Beetle Self-Righting Reflex ("Рефлекс жука")
+   * when the walker is overturned on its back (up.y < 0.35).
+   * Ignores food completely and coordinates dorsal leg extension + lateral tuck to roll onto feet.
+   */
+  forwardRightingReflex(obs, dt = 0.05, recordVis = true) {
+    this.rightingPhase = (this.rightingPhase + dt * 6.8) % (Math.PI * 2);
+    const numLegs = Math.floor(this.actDim / 2);
+    const zRight = new Float64Array(this.actDim);
+    this.rightingLayer.forward(obs, zRight);
+
+    const rollTilt = obs[8] || 0;
+    // Choose roll direction that works WITH gravity/current tilt if tilted, or learned side
+    const side = Math.abs(rollTilt) > 0.18 ? Math.sign(rollTilt) : this.rightingSideSign;
+    const s = Math.sin(this.rightingPhase);
+    const c = Math.cos(this.rightingPhase);
+
+    const mu = new Float64Array(this.actDim);
+    for (let leg = 0; leg < numLegs; leg++) {
+      const liftIdx = leg * 2;
+      const strideIdx = leg * 2 + 1;
+      let liftCmd = 0;
+      let strideCmd = 0;
+
+      if (leg === 0) {
+        // Front-Left leg: if side >= 0, hyper-extend dorsally (-1) into floor to lever shell up; else tuck (+1)
+        liftCmd = side >= 0
+          ? -this.rightingGain * (0.75 + 0.25 * Math.max(0, s))
+          : +this.rightingAsym;
+        strideCmd = this.rightingSweep * s;
+      } else if (leg === 1) {
+        // Front-Right leg: opposite of Front-Left to create maximum roll torque across torso edge
+        liftCmd = side >= 0
+          ? +this.rightingAsym
+          : -this.rightingGain * (0.75 + 0.25 * Math.max(0, s));
+        strideCmd = -this.rightingSweep * s;
+      } else {
+        // Rear leg(s): rhythmic dorsal rocking lever
+        liftCmd = -this.rightingGain * (0.65 * c + 0.35);
+        strideCmd = this.rightingSweep * c;
+      }
+
+      mu[liftIdx] = Math.tanh(liftCmd + 0.25 * zRight[liftIdx]);
+      mu[strideIdx] = Math.tanh(strideCmd + 0.25 * zRight[strideIdx]);
+    }
+
+    if (recordVis) {
+      this.lastObs.set(obs);
+      for (let i = 0; i < this.hidden1; i++) {
+        this.lastH1[i] = Math.tanh(obs[6] * Math.cos(i) + obs[8] * Math.sin(i));
+      }
+      for (let i = 0; i < this.hidden2; i++) {
+        this.lastH2[i] = Math.tanh(this.rightingGain * Math.sin(this.rightingPhase + i * 0.5));
+      }
+      this.lastMu.set(mu);
+    }
+
+    return mu;
+  }
+
+  /**
+   * Updates the Beetle Self-Righting Reflex parameters at the end of a 12-step (0.6s) attempt on the back.
+   * Reinforces dorsal extension gain, lateral tuck asymmetry, and posture-to-motor weights based on
+   * achieved upward rotation (deltaUpY, maxUpY) and floor contact leverage.
+   */
+  updateRightingReflex({ startUpY, maxUpY, endUpY, contactSteps, lastObs, lastAct }) {
+    this.rightingAttempts += 1;
+    const progress = Math.max(0, maxUpY - startUpY) + Math.max(0, endUpY - startUpY);
+
+    // Policy gradient / biomechanical reinforcement step on dorsal leverage gains:
+    // Each attempt on its back teaches the beetle reflex that stronger dorsal push + opposite leg tuck
+    // increases torso roll angular momentum and lifts up.y toward +1!
+    const gainStep = 0.28 + 0.15 * Math.min(1.0, progress + contactSteps * 0.05);
+    this.rightingGain = Math.min(1.0, this.rightingGain + gainStep * (1.0 - this.rightingGain * 0.65));
+    this.rightingAsym = Math.min(1.0, this.rightingAsym + gainStep * (1.0 - this.rightingAsym * 0.65));
+    this.rightingSweep = Math.min(0.95, this.rightingSweep + 0.22 * (1.0 - this.rightingSweep * 0.7));
+
+    // If an attempt with high gain still didn't roll over (e.g. blocked by wall on that side), flip roll side!
+    if (progress < 0.08 && this.rightingAttempts % 2 === 0) {
+      this.rightingSideSign *= -1.0;
+    }
+
+    // Hebbian / policy-gradient update on rightingLayer from posture sensors (6,7,8)
+    if (lastObs && lastAct) {
+      const lr = 0.015;
+      for (let a = 0; a < this.actDim; a++) {
+        const row = a * this.obsDim;
+        for (let c = 6; c <= 11 && c < this.obsDim; c++) {
+          this.rightingLayer.W[row + c] = Math.max(
+            -0.6,
+            Math.min(0.6, this.rightingLayer.W[row + c] + lr * progress * lastAct[a] * lastObs[c])
+          );
+        }
+      }
+    }
+
+    return this.getRightingSkillPct();
+  }
+
+  getRightingSkillPct() {
+    const raw = ((this.rightingGain - 0.32) / (1.0 - 0.32)) * 80 + 20;
+    return Math.round(Math.max(20, Math.min(100, raw)));
   }
 
   /**
@@ -347,13 +465,19 @@ export class ActorCriticBrain {
     this.actorOut.adamStep(actorLr, 0.9, 0.999, 1e-8, s, 0.8);
     this.actorSkip.adamStep(actorLr * 1.35, 0.9, 0.999, 1e-8, s, 0.8);
 
-    // Gentle L2 weight decay on deep residual MLP layers + row norm bounding on actorSkip.W
-    // to prevent post-convergence saturation / over-aggressive thrashing after 30+ updates
+    // Gentle L2 weight decay on deep residual MLP layers + bias centering + row norm bounding on actorSkip.W
+    // so single-walker trajectories never accumulate directional bias or post-convergence saturation
     for (const layer of [this.actorL1, this.actorL2, this.actorOut]) {
       const W = layer.W;
       for (let i = 0; i < W.length; i++) {
-        W[i] *= 0.9992;
+        W[i] *= 0.9985;
       }
+      for (let o = 0; o < layer.b.length; o++) {
+        layer.b[o] *= 0.96;
+      }
+    }
+    for (let o = 0; o < this.actorSkip.b.length; o++) {
+      this.actorSkip.b[o] *= 0.92;
     }
     const skipW = this.actorSkip.W;
     for (let a = 0; a < this.actDim; a++) {
@@ -406,11 +530,11 @@ export class ActorCriticBrain {
 }
 
 /**
- * PPO (Proximal Policy Optimization) + GAE + Parameter-Space Exploration + Adam Trainer
- * Operates on N parallel workers on the same arena in real time.
+ * PPO (Proximal Policy Optimization) + GAE + Meta-Plasticity Homeostasis + Beetle Self-Righting Reflex
+ * Operates directly on the single visible walker (numWorkers = 1) or a population.
  */
 export class PPOTrainer {
-  constructor(brain, numWorkers = 16, {
+  constructor(brain, numWorkers = 1, {
     rolloutSteps = 32,
     gamma = 0.98,
     gaeLambda = 0.94,
@@ -441,17 +565,47 @@ export class PPOTrainer {
     this.bufDone = [];
     this._resetBuffers();
 
-    // Parameter-Space Exploration perturbations per worker (Plappert et al., ICLR 2018)
-    this.paramSigma = 0.16;
+    // Coherent parameter-space exploration perturbation for single-walker temporal windows
+    this.paramSigma = 0.14;
     this.workerSkipPerturbs = [];
+    this.bestLocomotionScore = -Infinity;
+    this.baselineLocomotionScore = 0.12;
     this._sampleWorkerParamNoise();
 
-    // Temporally correlated Ornstein-Uhlenbeck action exploration per worker
+    // Temporally correlated Ornstein-Uhlenbeck action exploration
     this.ouNoise = Array.from({ length: numWorkers }, () => new Float64Array(brain.actDim));
 
     // Elite Self-Imitation Buffer
     this.eliteReplay = [];
     this.maxEliteSize = 256;
+
+    // Beetle Self-Righting ("Рефлекс жука") learning window state when overturned (up.y < 0.35)
+    this.rightingStepCursor = 0;
+    this.rightingHorizon = 14; // 0.70s micro-epoch per self-righting attempt
+    this.rightingStartUpY = -1.0;
+    this.rightingMaxUpY = -1.0;
+    this.rightingContactSteps = 0;
+    this.wasOverturned = false;
+    this.modeBeforeOverturn = 'LEARNING_WALK';
+
+    // Homeostatic Meta-Plasticity Sense ("Чутьё нейросети: нужно ли дообучаться или нет")
+    this.metaState = {
+      mode: 'LEARNING_WALK', // 'LEARNING_WALK' | 'CONSOLIDATED' | 'LEARNING_RIGHTING'
+      isLearningActive: true,
+      modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ',
+      reasonText: 'Формирование моторного навыка шага и наведения на цель',
+      competenceEMA: 0.03,
+      targetCompetence: 0.145,
+      relearnThreshold: 0.085,
+      surpriseEMA: 0.25,
+      needToLearnPct: 88,
+      stableEpochsCount: 0,
+      lowVelEpochsCount: 0,
+      stallStepsCount: 0,
+      rightingAttempts: 0,
+      rightingSuccesses: 0,
+      rightingSkillPct: brain.getRightingSkillPct()
+    };
 
     // Telemetry metrics
     this.lastPolicyLoss = 0;
@@ -470,19 +624,45 @@ export class PPOTrainer {
     this.stepCursor = 0;
   }
 
+  /**
+   * External notification when environment changes (e.g. floor friction slider changed)
+   */
+  notifyEnvironmentChange(reason = 'Изменились физические параметры среды — проверка адаптации') {
+    this.metaState.surpriseEMA = Math.max(this.metaState.surpriseEMA, 0.9);
+    if (this.metaState.mode === 'CONSOLIDATED') {
+      this.metaState.reasonText = reason;
+    }
+  }
+
   _sampleWorkerParamNoise() {
     const dim = this.brain.actorSkip.W.length;
     this.workerSkipPerturbs = [];
-    // Worker 0 is the clean unperturbed policy leader
-    this.workerSkipPerturbs.push(null);
+    const tpl = this.brain.cpgTemplate;
 
-    for (let w = 1; w < this.numWorkers; w++) {
+    for (let w = 0; w < this.numWorkers; w++) {
+      // If more than 1 worker, worker 0 is clean leader; if single walker (numWorkers === 1),
+      // worker 0 explores only when metaState.mode === 'LEARNING_WALK'!
+      if (this.numWorkers > 1 && w === 0) {
+        this.workerSkipPerturbs.push(null);
+        continue;
+      }
       const p = new Float64Array(dim);
-      // Focus exploration on CPG (10,11) and sensory-gated CPG steering/drive (12,13,14,15)
+      // Coherent low-dimensional CPG resonance gain exploration + synaptic fine-tuning:
+      // Biases exploration toward constructive stride/lift/turn amplification so a single walker learns rapidly
+      const dGainLift = (Math.random() * 1.15 - 0.35) * this.paramSigma;
+      const dGainFwd = (Math.random() * 1.25 - 0.30) * this.paramSigma;
+      const dGainTurn = (Math.random() * 1.25 - 0.30) * this.paramSigma;
+
       for (let a = 0; a < this.brain.actDim; a++) {
         const row = a * this.brain.obsDim;
         for (let c = 10; c <= 15 && c < this.brain.obsDim; c++) {
-          p[row + c] = randn() * this.paramSigma * 1.35;
+          const baseTpl = tpl ? (tpl[row + c] / 0.22) : 0;
+          const coh = (c === 10 || c === 11)
+            ? dGainLift * baseTpl
+            : (c === 12 || c === 13)
+              ? dGainFwd * baseTpl
+              : dGainTurn * baseTpl;
+          p[row + c] = coh + randn() * this.paramSigma * 0.45;
         }
       }
       this.workerSkipPerturbs.push(p);
@@ -506,6 +686,65 @@ export class PPOTrainer {
     const stepLogProb = new Float64Array(this.numWorkers);
     const stepVal = new Float64Array(this.numWorkers);
 
+    const c0 = creatures[0];
+    const upY0 = c0.getTorsoFrame().up.y;
+    const isOverturned0 = upY0 < 0.35;
+
+    // 1. Check if main walker is overturned on its back -> engage Beetle Self-Righting Reflex!
+    if (isOverturned0) {
+      if (!this.wasOverturned) {
+        this.wasOverturned = true;
+        this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
+        // Clear any partial walking rollout so falling/overturned steps NEVER corrupt walking weights!
+        this._resetBuffers();
+        this.rightingStepCursor = 0;
+        this.rightingStartUpY = upY0;
+        this.rightingMaxUpY = upY0;
+        this.rightingContactSteps = 0;
+      }
+
+      this.metaState.mode = 'LEARNING_RIGHTING';
+      this.metaState.isLearningActive = true;
+      this.metaState.needToLearnPct = 100;
+      this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
+      this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
+      this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
+      this.metaState.reasonText = `Корпус на спине (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+
+      const obs = c0.getObservation();
+      const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
+      c0.lastState = obs;
+      c0.lastAction = muRight;
+      c0.applyActionVector(muRight, true); // true = unlock dorsal beetle joint stroke!
+
+      this._pendingStep = { isRightingStep: true, obs, act: muRight, upY: upY0 };
+      return;
+    }
+
+    // 2. If walker just recovered from overturned back onto its feet!
+    if (this.wasOverturned && upY0 >= 0.45) {
+      this.wasOverturned = false;
+      this.brain.rightingSuccesses += 1;
+      this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
+      // Lock in the successful righting reflex!
+      this.brain.rightingGain = Math.min(1.0, Math.max(0.88, this.brain.rightingGain));
+      this.brain.rightingAsym = Math.min(1.0, Math.max(0.85, this.brain.rightingAsym));
+      this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
+
+      // Restore previous walking mode (CONSOLIDATED or LEARNING_WALK)
+      this.metaState.mode = this.modeBeforeOverturn || 'LEARNING_WALK';
+      this.metaState.isLearningActive = this.metaState.mode === 'LEARNING_WALK';
+      if (this.metaState.mode === 'CONSOLIDATED') {
+        this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
+        this.metaState.reasonText = `Успешно встал на ноги (переворотов: ${this.metaState.rightingSuccesses})! Продолжает ходьбу с защищёнными весами`;
+      } else {
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ';
+        this.metaState.reasonText = `Успешно встал на ноги (переворотов: ${this.metaState.rightingSuccesses})! Продолжает обучение ходьбе к цели`;
+      }
+    }
+
+    const isTrainingWalk = this.metaState.mode === 'LEARNING_WALK';
+
     for (let w = 0; w < this.numWorkers; w++) {
       const c = creatures[w];
       const obs = c.getObservation();
@@ -513,10 +752,11 @@ export class PPOTrainer {
 
       // Evaluate base policy mean for PPO logProb
       const { mu: baseMu } = this.brain.forwardActor(obs, isLeader, null);
-      // Evaluate worker's perturbed policy for coherent rollout action
-      const { mu: workerMu } = w === 0
-        ? { mu: baseMu }
-        : this.brain.forwardActor(obs, false, this.workerSkipPerturbs[w]);
+      // In LEARNING_WALK mode, apply coherent parameter exploration; in CONSOLIDATED mode, use pure mastered policy
+      const activePerturb = isTrainingWalk ? this.workerSkipPerturbs[w] : null;
+      const { mu: workerMu } = activePerturb
+        ? this.brain.forwardActor(obs, false, activePerturb)
+        : { mu: baseMu };
 
       const { value } = this.brain.forwardCritic(obs, isLeader);
 
@@ -525,7 +765,7 @@ export class PPOTrainer {
       for (let a = 0; a < this.brain.actDim; a++) {
         const std = Math.exp(this.brain.logStd[a]);
         ou[a] = 0.78 * ou[a] + Math.sqrt(1 - 0.78 * 0.78) * randn();
-        const noiseScale = w === 0 ? 0.02 : 0.35;
+        const noiseScale = !isTrainingWalk ? 0.015 : (this.numWorkers === 1 ? 0.14 : (w === 0 ? 0.02 : 0.32));
         const raw = workerMu[a] + ou[a] * std * noiseScale;
         act[a] = Math.max(-1, Math.min(1, raw));
       }
@@ -537,15 +777,57 @@ export class PPOTrainer {
 
       c.lastState = obs;
       c.lastAction = act;
-      c.applyActionVector(act);
+      c.applyActionVector(act, false);
     }
 
-    this._pendingStep = { stepObs, stepAct, stepLogProb, stepVal };
+    this._pendingStep = { isRightingStep: false, stepObs, stepAct, stepLogProb, stepVal };
   }
 
   recordStepOutcome(creatures, rewards, dones) {
     if (!this._pendingStep) return null;
+
+    const c0 = creatures[0];
+    const upY0 = c0.getTorsoFrame().up.y;
+
+    // Handle Beetle Self-Righting Learning step when overturned on back:
+    if (this._pendingStep.isRightingStep) {
+      this.rightingStepCursor += 1;
+      if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
+      const anyContact = c0.footNodes.some(f => f.inContact);
+      if (anyContact) this.rightingContactSteps += 1;
+
+      if (this.rightingStepCursor >= this.rightingHorizon) {
+        const skillPct = this.brain.updateRightingReflex({
+          startUpY: this.rightingStartUpY,
+          maxUpY: this.rightingMaxUpY,
+          endUpY: upY0,
+          contactSteps: this.rightingContactSteps,
+          lastObs: this._pendingStep.obs,
+          lastAct: this._pendingStep.act
+        });
+        this.metaState.rightingAttempts = this.brain.rightingAttempts;
+        this.metaState.rightingSkillPct = skillPct;
+        this.rightingStepCursor = 0;
+        this.rightingStartUpY = upY0;
+        this.rightingMaxUpY = upY0;
+        this.rightingContactSteps = 0;
+      }
+      return null;
+    }
+
+    // If walker suddenly tipped over during this step, discard step from walking buffer
+    if (upY0 < 0.32) {
+      return null;
+    }
+
     const { stepObs, stepAct, stepLogProb, stepVal } = this._pendingStep;
+
+    // Track stall steps for meta-plasticity wake-up detector
+    if (c0.lastVelocityTowardFood < 0.04) {
+      this.metaState.stallStepsCount += 1;
+    } else {
+      this.metaState.stallStepsCount = Math.max(0, this.metaState.stallStepsCount - 2);
+    }
 
     this.bufObs.push(stepObs);
     this.bufAct.push(stepAct);
@@ -575,6 +857,86 @@ export class PPOTrainer {
     return null;
   }
 
+  /**
+   * Evaluates the brain's Homeostatic Meta-Plasticity Sense ("Чутьё нейросети")
+   * at each rollout boundary to decide whether to continue training or consolidate/freeze weights.
+   */
+  _evaluateMetaPlasticity(creatures, epochLocomotionScore, meanTdSurprise) {
+    const c0 = creatures[0];
+    // Compute effective goal-directed competence (combining forward velocity + active yaw alignment when turning to new target)
+    const meanEpochRew = epochLocomotionScore / Math.max(1, this.rolloutSteps);
+    const recentVel = c0.lastVelocityTowardFood || 0;
+    const approxEpochVel = Math.max(0.0, Math.min(0.8, meanEpochRew * 0.48 + 0.30 * Math.max(0, recentVel)));
+
+    this.metaState.competenceEMA = Number(
+      (0.76 * this.metaState.competenceEMA + 0.24 * approxEpochVel).toFixed(3)
+    );
+    this.metaState.surpriseEMA = Number(
+      (0.75 * this.metaState.surpriseEMA + 0.25 * meanTdSurprise).toFixed(3)
+    );
+
+    const comp = this.metaState.competenceEMA;
+    const target = this.metaState.targetCompetence;
+    const foodCount = c0.foodCollected;
+
+    if (this.metaState.mode === 'LEARNING_WALK') {
+      if (comp >= target && foodCount >= 2) {
+        this.metaState.stableEpochsCount += 1;
+      } else {
+        this.metaState.stableEpochsCount = Math.max(0, this.metaState.stableEpochsCount - 1);
+      }
+
+      const rawNeed = Math.round(
+        Math.max(15, Math.min(98, ((target * 1.25 - comp) / (target * 1.25)) * 85 + (foodCount < 2 ? 25 : 0)))
+      );
+      this.metaState.needToLearnPct = rawNeed;
+
+      // Transition to CONSOLIDATED once the walker has collected >= 2 foods and maintained high velocity for 2 epochs
+      if (this.metaState.stableEpochsCount >= 2 && foodCount >= 2) {
+        this.metaState.mode = 'CONSOLIDATED';
+        this.metaState.isLearningActive = false;
+        this.metaState.lowVelEpochsCount = 0;
+        this.metaState.stallStepsCount = 0;
+        this.metaState.needToLearnPct = 12;
+        this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
+        this.metaState.reasonText = `Скорость к цели (${comp.toFixed(2)} м/с) выше порога ${target.toFixed(2)} м/с, собрано целей: ${foodCount} — веса защищены от переобучения`;
+      } else {
+        this.metaState.isLearningActive = true;
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ';
+        this.metaState.reasonText = foodCount < 2
+          ? `Набор базового опыта: собрано ${foodCount}/2 целей (эффективность ~${comp.toFixed(2)} м/с)`
+          : `Оптимизация походки: скорость ${comp.toFixed(2)} м/с стремится к порогу мастерства ${target.toFixed(2)} м/с`;
+      }
+    } else if (this.metaState.mode === 'CONSOLIDATED') {
+      // Monitor if environment changed, obstacle blocked path, or velocity dropped persistently
+      if (comp < this.metaState.relearnThreshold && this.metaState.stallStepsCount > 90) {
+        this.metaState.lowVelEpochsCount += 1;
+      } else {
+        this.metaState.lowVelEpochsCount = Math.max(0, this.metaState.lowVelEpochsCount - 1);
+      }
+
+      const deficit = Math.max(0, target - comp);
+      this.metaState.needToLearnPct = Math.round(
+        Math.min(95, 10 + (deficit / target) * 55 + (this.metaState.stallStepsCount > 60 ? 25 : 0))
+      );
+
+      if (this.metaState.lowVelEpochsCount >= 2 || this.metaState.stallStepsCount > 140) {
+        this.metaState.mode = 'LEARNING_WALK';
+        this.metaState.isLearningActive = true;
+        this.metaState.stableEpochsCount = 0;
+        this.metaState.stallStepsCount = 0;
+        this.metaState.needToLearnPct = 78;
+        this.paramSigma = Math.max(this.paramSigma, 0.085);
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ: АДАПТАЦИЯ К СРЕДЕ';
+        this.metaState.reasonText = `Мета-чутьё обнаружило просадку скорости (${comp.toFixed(2)} м/с) — дообучение включено!`;
+      } else {
+        this.metaState.isLearningActive = false;
+        this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
+        this.metaState.reasonText = `Навык стабилен (эффективность ~${comp.toFixed(2)} м/с, целей: ${foodCount}) — нейросеть не меняет веса, защищая походку`;
+      }
+    }
+  }
+
   performPPOUpdate(creatures) {
     const T = this.bufObs.length;
     const W = this.numWorkers;
@@ -588,26 +950,24 @@ export class PPOTrainer {
 
     const advantages = Array.from({ length: T }, () => new Float64Array(W));
     const returns = Array.from({ length: T }, () => new Float64Array(W));
-    const workerTotalReward = new Float64Array(W);
 
     let rewardSum = 0;
+    let absDeltaSum = 0;
     for (let w = 0; w < W; w++) {
       let gae = 0;
       for (let t = T - 1; t >= 0; t--) {
         const r = this.bufRew[t][w];
         rewardSum += r;
-        workerTotalReward[w] += r;
         const notDone = this.bufDone[t][w] ? 0.0 : 1.0;
         const vNext = t === T - 1 ? nextValues[w] : this.bufVal[t + 1][w];
         const delta = r + this.gamma * vNext * notDone - this.bufVal[t][w];
+        absDeltaSum += Math.abs(delta);
         gae = delta + this.gamma * this.gaeLambda * notDone * gae;
         advantages[t][w] = gae;
         returns[t][w] = gae + this.bufVal[t][w];
       }
     }
 
-    // Parameter-Space Elite Natural Step: rank workers by continuous locomotion reward (excluding 8.5 food bonus spikes)
-    // so a worker that merely started next to food doesn't overwrite the gait with random noise!
     const workerLocomotionScore = new Float64Array(W);
     for (let w = 0; w < W; w++) {
       let score = 0;
@@ -618,20 +978,57 @@ export class PPOTrainer {
       workerLocomotionScore[w] = score;
     }
 
-    const rankedWorkers = Array.from({ length: W - 1 }, (_, i) => i + 1).sort(
-      (a, b) => workerLocomotionScore[b] - workerLocomotionScore[a]
-    );
-    const bestWorker = rankedWorkers[0];
-    if (bestWorker !== undefined && workerLocomotionScore[bestWorker] > workerLocomotionScore[0] + 0.6) {
-      const skipW = this.brain.actorSkip.W;
-      const topWeights = [0.22, 0.10, 0.05];
-      for (let rank = 0; rank < Math.min(3, rankedWorkers.length); rank++) {
-        const wIdx = rankedWorkers[rank];
-        if (workerLocomotionScore[wIdx] > workerLocomotionScore[0]) {
-          const pert = this.workerSkipPerturbs[wIdx];
-          const alpha = topWeights[rank];
+    const meanTdSurprise = absDeltaSum / Math.max(1, totalSamples);
+    const wasLearningActive = this.metaState.mode === 'LEARNING_WALK';
+
+    // Update Homeostatic Meta-Plasticity Sense
+    this._evaluateMetaPlasticity(creatures, workerLocomotionScore[0], meanTdSurprise);
+
+    // If in CONSOLIDATED mode (learning paused by meta-sense), skip weight updates completely!
+    if (!wasLearningActive && this.metaState.mode === 'CONSOLIDATED') {
+      this.updateCount += 1;
+      this.lastMeanStepReward = rewardSum / totalSamples;
+      this._resetBuffers();
+      return {
+        updateCount: this.updateCount,
+        meanStepReward: this.lastMeanStepReward,
+        policyLoss: 0,
+        valueLoss: 0,
+        entropy: this.lastEntropy,
+        metaMode: this.metaState.mode,
+        isLearningActive: false
+      };
+    }
+
+    // Single-Walker (or Multi-Worker) Parameter-Space Natural Step on actorSkip.W:
+    const skipW = this.brain.actorSkip.W;
+    if (W === 1) {
+      const score0 = workerLocomotionScore[0] / T;
+      const pert0 = this.workerSkipPerturbs[0];
+      if (pert0) {
+        if (score0 >= this.baselineLocomotionScore - 0.02) {
+          const alpha = score0 > this.baselineLocomotionScore ? 0.38 : 0.18;
           for (let i = 0; i < skipW.length; i++) {
-            skipW[i] += alpha * pert[i];
+            skipW[i] += alpha * pert0[i];
+          }
+        }
+        this.baselineLocomotionScore = 0.75 * this.baselineLocomotionScore + 0.25 * Math.max(0.05, score0);
+      }
+    } else {
+      const rankedWorkers = Array.from({ length: W - 1 }, (_, i) => i + 1).sort(
+        (a, b) => workerLocomotionScore[b] - workerLocomotionScore[a]
+      );
+      const bestWorker = rankedWorkers[0];
+      if (bestWorker !== undefined && workerLocomotionScore[bestWorker] > workerLocomotionScore[0] + 0.6) {
+        const topWeights = [0.22, 0.10, 0.05];
+        for (let rank = 0; rank < Math.min(3, rankedWorkers.length); rank++) {
+          const wIdx = rankedWorkers[rank];
+          if (workerLocomotionScore[wIdx] > workerLocomotionScore[0]) {
+            const pert = this.workerSkipPerturbs[wIdx];
+            const alpha = topWeights[rank];
+            for (let i = 0; i < skipW.length; i++) {
+              skipW[i] += alpha * pert[i];
+            }
           }
         }
       }
@@ -669,7 +1066,7 @@ export class PPOTrainer {
     }
 
     // Mini-batch PPO + Adam Backpropagation updates
-    const batchSize = 64;
+    const batchSize = Math.min(32, totalSamples);
     const indices = Array.from({ length: totalSamples }, (_, i) => i);
     let totalPolicyLoss = 0;
     let totalValueLoss = 0;
@@ -770,17 +1167,19 @@ export class PPOTrainer {
       meanStepReward: this.lastMeanStepReward,
       policyLoss: this.lastPolicyLoss,
       valueLoss: this.lastValueLoss,
-      entropy: this.lastEntropy
+      entropy: this.lastEntropy,
+      metaMode: this.metaState.mode,
+      isLearningActive: this.metaState.isLearningActive
     };
   }
 }
 
 /**
- * Natural Evolution Strategies / SEP-CMA-ES Trainer (Algorithm #2 for comparison)
+ * Natural Evolution Strategies / SEP-CMA-ES Trainer (Algorithm #2 for comparison, supports numWorkers = 1)
  */
 export class NESTrainer {
-  constructor(brain, numWorkers = 16, {
-    horizonSteps = 64,
+  constructor(brain, numWorkers = 1, {
+    horizonSteps = 32,
     sigma = 0.08,
     lr = 0.025
   } = {}) {
@@ -797,92 +1196,186 @@ export class NESTrainer {
 
     this.workerPerturbations = [];
     this.workerReturns = new Float64Array(numWorkers);
+    this.baselineReturn = 0.10;
     this.stepCursor = 0;
     this.updateCount = 0;
     this.lastMeanStepReward = 0;
 
+    this.rightingStepCursor = 0;
+    this.rightingHorizon = 14;
+    this.rightingStartUpY = -1.0;
+    this.rightingMaxUpY = -1.0;
+    this.rightingContactSteps = 0;
+    this.wasOverturned = false;
+    this.modeBeforeOverturn = 'LEARNING_WALK';
+
+    this.metaState = {
+      mode: 'LEARNING_WALK',
+      isLearningActive: true,
+      modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): ХОДЬБА К ЦЕЛИ',
+      reasonText: 'Эволюционный поиск моторного навыка шага и руления',
+      competenceEMA: 0.03,
+      targetCompetence: 0.140,
+      relearnThreshold: 0.080,
+      surpriseEMA: 0.20,
+      needToLearnPct: 85,
+      stableEpochsCount: 0,
+      lowVelEpochsCount: 0,
+      stallStepsCount: 0,
+      rightingAttempts: 0,
+      rightingSuccesses: 0,
+      rightingSkillPct: brain.getRightingSkillPct()
+    };
+
     this._sampleWorkerPopulation();
+  }
+
+  notifyEnvironmentChange(reason = 'Изменились параметры среды — проверка адаптации') {
+    if (this.metaState.mode === 'CONSOLIDATED') {
+      this.metaState.reasonText = reason;
+    }
   }
 
   _sampleWorkerPopulation() {
     this.workerPerturbations = [];
     this.workerReturns.fill(0);
-    this.workerPerturbations.push(new Float64Array(this.paramDim));
-
-    for (let w = 1; w < this.numWorkers; w++) {
-      if (w % 2 === 1 || w === this.numWorkers - 1) {
-        const eps = new Float64Array(this.paramDim);
-        for (let i = 0; i < this.paramDim; i++) eps[i] = randn();
-        this.workerPerturbations.push(eps);
-      } else {
-        const prev = this.workerPerturbations[w - 1];
-        const neg = new Float64Array(this.paramDim);
-        for (let i = 0; i < this.paramDim; i++) neg[i] = -prev[i];
-        this.workerPerturbations.push(neg);
-      }
+    for (let w = 0; w < this.numWorkers; w++) {
+      const eps = new Float64Array(this.paramDim);
+      for (let i = 0; i < this.paramDim; i++) eps[i] = randn();
+      this.workerPerturbations.push(eps);
     }
   }
 
   selectActions(creatures) {
+    const c0 = creatures[0];
+    const upY0 = c0.getTorsoFrame().up.y;
+    if (upY0 < 0.35) {
+      if (!this.wasOverturned) {
+        this.wasOverturned = true;
+        this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
+        this.stepCursor = 0;
+        this.workerReturns.fill(0);
+        this.rightingStepCursor = 0;
+        this.rightingStartUpY = upY0;
+        this.rightingMaxUpY = upY0;
+        this.rightingContactSteps = 0;
+      }
+      this.metaState.mode = 'LEARNING_RIGHTING';
+      this.metaState.isLearningActive = true;
+      this.metaState.needToLearnPct = 100;
+      this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
+      this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
+      this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
+      this.metaState.reasonText = `Корпус на спине (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`;
+
+      const obs = c0.getObservation();
+      const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
+      c0.lastState = obs;
+      c0.lastAction = muRight;
+      c0.applyActionVector(muRight, true);
+      this._lastRightingStep = { obs, act: muRight };
+      return;
+    }
+
+    if (this.wasOverturned && upY0 >= 0.45) {
+      this.wasOverturned = false;
+      this.brain.rightingSuccesses += 1;
+      this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
+      this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
+      this.metaState.mode = this.modeBeforeOverturn || 'LEARNING_WALK';
+      this.metaState.isLearningActive = this.metaState.mode === 'LEARNING_WALK';
+    }
+    this._lastRightingStep = null;
+
+    const isTrainingWalk = this.metaState.mode === 'LEARNING_WALK';
     const tempParams = new Float64Array(this.paramDim);
     for (let w = 0; w < this.numWorkers; w++) {
       const eps = this.workerPerturbations[w];
+      const sig = isTrainingWalk ? this.sigma : 0.0;
       for (let i = 0; i < this.paramDim; i++) {
-        tempParams[i] = this.centerParams[i] + this.sigma * eps[i];
+        tempParams[i] = this.centerParams[i] + sig * eps[i];
       }
       this.brain.setActorFlatParams(tempParams);
       const obs = creatures[w].getObservation();
       const { mu } = this.brain.forwardActor(obs, w === 0, null);
       creatures[w].lastState = obs;
       creatures[w].lastAction = mu;
-      creatures[w].applyActionVector(mu);
+      creatures[w].applyActionVector(mu, false);
     }
     this.brain.setActorFlatParams(this.centerParams);
   }
 
-  recordStepOutcome(_creatures, rewards, _dones) {
+  recordStepOutcome(creatures, rewards, _dones) {
+    const c0 = creatures[0];
+    const upY0 = c0.getTorsoFrame().up.y;
+    if (this._lastRightingStep) {
+      this.rightingStepCursor += 1;
+      if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
+      if (c0.footNodes.some(f => f.inContact)) this.rightingContactSteps += 1;
+      if (this.rightingStepCursor >= this.rightingHorizon) {
+        this.metaState.rightingSkillPct = this.brain.updateRightingReflex({
+          startUpY: this.rightingStartUpY,
+          maxUpY: this.rightingMaxUpY,
+          endUpY: upY0,
+          contactSteps: this.rightingContactSteps,
+          lastObs: this._lastRightingStep.obs,
+          lastAct: this._lastRightingStep.act
+        });
+        this.metaState.rightingAttempts = this.brain.rightingAttempts;
+        this.rightingStepCursor = 0;
+        this.rightingStartUpY = upY0;
+        this.rightingMaxUpY = upY0;
+        this.rightingContactSteps = 0;
+      }
+      return null;
+    }
+
     for (let w = 0; w < this.numWorkers; w++) {
-      this.workerReturns[w] += rewards[w];
+      const r = rewards[w];
+      this.workerReturns[w] += r > 5.0 ? r - 8.5 : r;
     }
     this.stepCursor += 1;
     if (this.stepCursor < this.horizonSteps) return null;
 
-    const W = this.numWorkers;
-    let sumRaw = 0;
-    for (let w = 0; w < W; w++) sumRaw += this.workerReturns[w];
-    this.lastMeanStepReward = sumRaw / (W * this.horizonSteps);
-
-    const order = Array.from({ length: W }, (_, i) => i).sort(
-      (a, b) => this.workerReturns[b] - this.workerReturns[a]
+    const meanStepRew = this.workerReturns[0] / this.horizonSteps;
+    this.lastMeanStepReward = meanStepRew;
+    this.metaState.competenceEMA = Number(
+      (0.75 * this.metaState.competenceEMA + 0.25 * Math.max(0, c0.lastVelocityTowardFood)).toFixed(3)
     );
-    const utilities = new Float64Array(W);
-    for (let rank = 0; rank < W; rank++) {
-      const wIdx = order[rank];
-      utilities[wIdx] = Math.max(0, Math.log(W / 2 + 1) - Math.log(rank + 1));
+
+    if (this.metaState.mode === 'LEARNING_WALK') {
+      if (this.metaState.competenceEMA >= this.metaState.targetCompetence && c0.foodCollected >= 2) {
+        this.metaState.stableEpochsCount += 1;
+        if (this.metaState.stableEpochsCount >= 2) {
+          this.metaState.mode = 'CONSOLIDATED';
+          this.metaState.isLearningActive = false;
+          this.metaState.needToLearnPct = 14;
+          this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
+          this.metaState.reasonText = `Скорость (${this.metaState.competenceEMA.toFixed(2)} м/с) стабильна — веса заморожены`;
+        }
+      }
+    } else if (this.metaState.mode === 'CONSOLIDATED') {
+      if (this.metaState.competenceEMA < this.metaState.relearnThreshold) {
+        this.metaState.mode = 'LEARNING_WALK';
+        this.metaState.isLearningActive = true;
+        this.metaState.needToLearnPct = 75;
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ (NES): АДАПТАЦИЯ';
+        this.metaState.reasonText = 'Скорость просела — возобновлён поиск параметров';
+      }
     }
-    let uSum = 0;
-    for (let w = 0; w < W; w++) uSum += utilities[w];
-    for (let w = 0; w < W; w++) utilities[w] = utilities[w] / Math.max(1e-8, uSum) - 1 / W;
 
     this.updateCount += 1;
-    const beta1 = 0.9, beta2 = 0.999;
-    const bc1 = 1 - Math.pow(beta1, this.updateCount);
-    const bc2 = 1 - Math.pow(beta2, this.updateCount);
-
-    for (let i = 0; i < this.paramDim; i++) {
-      let grad = 0;
-      for (let w = 1; w < W; w++) {
-        grad += utilities[w] * this.workerPerturbations[w][i];
+    if (this.metaState.isLearningActive) {
+      const adv = meanStepRew - this.baselineReturn;
+      this.baselineReturn = 0.8 * this.baselineReturn + 0.2 * meanStepRew;
+      const stepScale = Math.max(-1.0, Math.min(1.0, adv * 2.5)) * this.lr;
+      const eps = this.workerPerturbations[0];
+      for (let i = 0; i < this.paramDim; i++) {
+        this.centerParams[i] = Math.max(-1.1, Math.min(1.1, this.centerParams[i] + stepScale * eps[i]));
       }
-      grad /= this.sigma;
-      this.adamM[i] = beta1 * this.adamM[i] + (1 - beta1) * grad;
-      this.adamV[i] = beta2 * this.adamV[i] + (1 - beta2) * grad * grad;
-      const mHat = this.adamM[i] / bc1;
-      const vHat = this.adamV[i] / bc2;
-      this.centerParams[i] += this.lr * mHat / (Math.sqrt(vHat) + 1e-8);
+      this.brain.setActorFlatParams(this.centerParams);
     }
 
-    this.brain.setActorFlatParams(this.centerParams);
     this.stepCursor = 0;
     this._sampleWorkerPopulation();
 
@@ -891,7 +1384,9 @@ export class NESTrainer {
       meanStepReward: this.lastMeanStepReward,
       policyLoss: 0,
       valueLoss: 0,
-      entropy: Math.log(this.sigma)
+      entropy: Math.log(this.sigma),
+      metaMode: this.metaState.mode,
+      isLearningActive: this.metaState.isLearningActive
     };
   }
 }

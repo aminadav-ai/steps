@@ -17,16 +17,16 @@
       <div class="hud-overlay">
         <div class="hud-badge-group">
           <div class="hud-pill">
-            Обновление ИИ: <strong id="hudUpdate">0</strong>
+            Эпоха ИИ: <strong id="hudUpdate">0</strong>
           </div>
           <div class="hud-pill">
             Физ. время: <strong id="hudSimTime">0.0 с</strong>
           </div>
           <div class="hud-pill emerald">
-            Собрано еды (популяция): <strong id="hudTotalFood">0</strong>
+            Собрано целей: <strong id="hudTotalFood">0</strong>
           </div>
           <div class="hud-pill gold">
-            Лидер (№<span id="hudLeaderId">0</span>): <strong id="hudLeaderFood">0</strong> еды | <strong id="hudLeaderVel">0.00 м/с</strong>
+            Скорость к цели: <strong id="hudLeaderVel">0.00 м/с</strong>
           </div>
         </div>
 
@@ -131,16 +131,53 @@
         </div>
 
         <div class="checkbox-row">
-          <label><input type="checkbox" id="chkFollowLeader" checked> Камера за шагоходом</label>
+          <label><input type="checkbox" id="chkFollowLeader" checked> Камера за шагоходом + целью</label>
           <label><input type="checkbox" id="chkShowForces" checked> Векторы сил (N, F_тр)</label>
-          <label title="По умолчанию на арене показан только 1 шагоход и 1 цель еды"><input type="checkbox" id="chkShowAllPop"> Показать фоновую популяцию</label>
+        </div>
+      </section>
+
+      <!-- Live Meta-Plasticity & Learning Status Card -->
+      <section class="card" id="metaLearningCard">
+        <div class="card-title">
+          <span>Мета-Чутьё ИИ (Контроль дообучения)</span>
+          <span id="metaActiveBadge" class="meta-badge learning">● ОБУЧЕНИЕ ИДЁТ</span>
+        </div>
+
+        <div id="metaModeBanner" class="meta-mode-banner learning">
+          🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ
+        </div>
+
+        <div class="meta-bars-grid">
+          <div class="meta-bar-item">
+            <div class="meta-bar-header">
+              <span>Потребность в дообучении (Чутьё):</span>
+              <strong id="metaNeedVal">88%</strong>
+            </div>
+            <div class="meta-bar-track">
+              <div id="metaNeedFill" class="meta-bar-fill" style="inline-size: 88%;"></div>
+            </div>
+          </div>
+
+          <div class="meta-bar-item">
+            <div class="meta-bar-header">
+              <span>Навык «Рефлекс жука» (Переворот со спины):</span>
+              <strong id="metaRightingVal">20% (0 раз)</strong>
+            </div>
+            <div class="meta-bar-track">
+              <div id="metaRightingFill" class="meta-bar-fill beetle" style="inline-size: 20%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="metaReasonBox" class="meta-reason-box">
+          Формирование базового моторного навыка шага и наведения на цель
         </div>
       </section>
 
       <!-- Live Neural Network Visualization -->
       <section class="card">
         <div class="card-title">
-          <span>Нейросеть Лидера (Actor-Critic + CPG Skip)</span>
+          <span>Нейросеть Шагохода (Actor-Critic + Рефлекс жука)</span>
           <span id="nnDimLabel" style="color:#94a3b8;font-size:11px;">31 → 32 → 24 → 6</span>
         </div>
         <div class="canvas-box">
