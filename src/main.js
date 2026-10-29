@@ -327,6 +327,9 @@ if (ambitionButtons) {
       rangeAmbition.value = tVal.toFixed(2);
       labelAmbitionVal.textContent = formatAmbitionLabel(tVal, preset);
     }
+    if (paused && preset !== 'min') {
+      setPausedState(false, 'ambition_change_auto_resume');
+    }
     logger.recordUserEvent('set_learning_ambition', { preset, targetCompetence: sim?.trainer?.metaState?.targetCompetence }, sim, renderer3D, getUIState());
     updateHUD();
   });
