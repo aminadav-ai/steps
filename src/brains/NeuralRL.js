@@ -99,6 +99,27 @@ export class DenseLayer {
       this.b[o] -= lr * mHat / (Math.sqrt(vHat) + eps);
     }
   }
+
+  toJSON() {
+    return {
+      W: Array.from(this.W),
+      b: Array.from(this.b),
+      mW: Array.from(this.mW),
+      vW: Array.from(this.vW),
+      mb: Array.from(this.mb),
+      vb: Array.from(this.vb)
+    };
+  }
+
+  fromJSON(data) {
+    if (!data) return;
+    if (Array.isArray(data.W) && data.W.length === this.W.length) this.W.set(data.W);
+    if (Array.isArray(data.b) && data.b.length === this.b.length) this.b.set(data.b);
+    if (Array.isArray(data.mW) && data.mW.length === this.mW.length) this.mW.set(data.mW);
+    if (Array.isArray(data.vW) && data.vW.length === this.vW.length) this.vW.set(data.vW);
+    if (Array.isArray(data.mb) && data.mb.length === this.mb.length) this.mb.set(data.mb);
+    if (Array.isArray(data.vb) && data.vb.length === this.vb.length) this.vb.set(data.vb);
+  }
 }
 
 /**
@@ -152,6 +173,62 @@ export class ActorCriticBrain {
     this.lastH2 = new Float64Array(hidden2);
     this.lastMu = new Float64Array(actDim);
     this.lastValue = 0;
+  }
+
+  toJSON() {
+    return {
+      obsDim: this.obsDim,
+      actDim: this.actDim,
+      hidden1: this.hidden1,
+      hidden2: this.hidden2,
+      actorL1: this.actorL1.toJSON(),
+      actorL2: this.actorL2.toJSON(),
+      actorOut: this.actorOut.toJSON(),
+      actorSkip: this.actorSkip.toJSON(),
+      criticL1: this.criticL1.toJSON(),
+      criticL2: this.criticL2.toJSON(),
+      criticOut: this.criticOut.toJSON(),
+      rightingLayer: this.rightingLayer.toJSON(),
+      cpgTemplate: this.cpgTemplate ? Array.from(this.cpgTemplate) : null,
+      logStd: Array.from(this.logStd),
+      rightingGain: this.rightingGain,
+      rightingAsym: this.rightingAsym,
+      rightingSweep: this.rightingSweep,
+      rightingSideSign: this.rightingSideSign,
+      rightingAttempts: this.rightingAttempts,
+      rightingSuccesses: this.rightingSuccesses,
+      rightingPhase: this.rightingPhase,
+      adamStepCount: this.adamStepCount,
+      maxSkipRowNorm: this.maxSkipRowNorm
+    };
+  }
+
+  fromJSON(data) {
+    if (!data || data.obsDim !== this.obsDim || data.actDim !== this.actDim) return false;
+    this.actorL1.fromJSON(data.actorL1);
+    this.actorL2.fromJSON(data.actorL2);
+    this.actorOut.fromJSON(data.actorOut);
+    this.actorSkip.fromJSON(data.actorSkip);
+    this.criticL1.fromJSON(data.criticL1);
+    this.criticL2.fromJSON(data.criticL2);
+    this.criticOut.fromJSON(data.criticOut);
+    this.rightingLayer.fromJSON(data.rightingLayer);
+    if (Array.isArray(data.cpgTemplate) && this.cpgTemplate && data.cpgTemplate.length === this.cpgTemplate.length) {
+      this.cpgTemplate.set(data.cpgTemplate);
+    }
+    if (Array.isArray(data.logStd) && data.logStd.length === this.logStd.length) {
+      this.logStd.set(data.logStd);
+    }
+    if (typeof data.rightingGain === 'number') this.rightingGain = data.rightingGain;
+    if (typeof data.rightingAsym === 'number') this.rightingAsym = data.rightingAsym;
+    if (typeof data.rightingSweep === 'number') this.rightingSweep = data.rightingSweep;
+    if (typeof data.rightingSideSign === 'number') this.rightingSideSign = data.rightingSideSign;
+    if (typeof data.rightingAttempts === 'number') this.rightingAttempts = data.rightingAttempts;
+    if (typeof data.rightingSuccesses === 'number') this.rightingSuccesses = data.rightingSuccesses;
+    if (typeof data.rightingPhase === 'number') this.rightingPhase = data.rightingPhase;
+    if (typeof data.adamStepCount === 'number') this.adamStepCount = data.adamStepCount;
+    if (typeof data.maxSkipRowNorm === 'number') this.maxSkipRowNorm = data.maxSkipRowNorm;
+    return true;
   }
 
   /**
@@ -1371,6 +1448,66 @@ export class PPOTrainer {
       isLearningActive: this.metaState.isLearningActive
     };
   }
+
+  toJSON() {
+    return {
+      updateCount: this.updateCount,
+      paramSigma: this.paramSigma,
+      bestScore: this.bestScore,
+      bestSkipW: this.bestSkipW ? Array.from(this.bestSkipW) : null,
+      baselineLocomotionScore: this.baselineLocomotionScore,
+      maxCpgGain: this.maxCpgGain,
+      minFoodsToConsolidate: this.minFoodsToConsolidate,
+      alwaysLearn: this.alwaysLearn,
+      manualFreeze: this.manualFreeze,
+      minTrainEpochsRemaining: this.minTrainEpochsRemaining || 0,
+      wasOverturned: this.wasOverturned,
+      modeBeforeOverturn: this.modeBeforeOverturn,
+      metaState: { ...this.metaState },
+      lastPolicyLoss: this.lastPolicyLoss,
+      lastValueLoss: this.lastValueLoss,
+      lastEntropy: this.lastEntropy,
+      lastMeanStepReward: this.lastMeanStepReward,
+      eliteReplay: this.eliteReplay.slice(-64).map(item => ({
+        obs: Array.from(item.obs),
+        act: Array.from(item.act),
+        ret: item.ret
+      }))
+    };
+  }
+
+  fromJSON(data) {
+    if (!data) return false;
+    if (typeof data.updateCount === 'number') this.updateCount = data.updateCount;
+    if (typeof data.paramSigma === 'number') this.paramSigma = data.paramSigma;
+    if (typeof data.bestScore === 'number') this.bestScore = data.bestScore;
+    if (Array.isArray(data.bestSkipW)) this.bestSkipW = Float64Array.from(data.bestSkipW);
+    if (typeof data.baselineLocomotionScore === 'number') this.baselineLocomotionScore = data.baselineLocomotionScore;
+    if (typeof data.maxCpgGain === 'number') this.maxCpgGain = data.maxCpgGain;
+    if (typeof data.minFoodsToConsolidate === 'number') this.minFoodsToConsolidate = data.minFoodsToConsolidate;
+    if (typeof data.alwaysLearn === 'boolean') this.alwaysLearn = data.alwaysLearn;
+    if (typeof data.manualFreeze === 'boolean') this.manualFreeze = data.manualFreeze;
+    if (typeof data.minTrainEpochsRemaining === 'number') this.minTrainEpochsRemaining = data.minTrainEpochsRemaining;
+    if (typeof data.wasOverturned === 'boolean') this.wasOverturned = data.wasOverturned;
+    if (typeof data.modeBeforeOverturn === 'string') this.modeBeforeOverturn = data.modeBeforeOverturn;
+    if (data.metaState && typeof data.metaState === 'object') {
+      this.metaState = { ...this.metaState, ...data.metaState };
+    }
+    if (typeof data.lastPolicyLoss === 'number') this.lastPolicyLoss = data.lastPolicyLoss;
+    if (typeof data.lastValueLoss === 'number') this.lastValueLoss = data.lastValueLoss;
+    if (typeof data.lastEntropy === 'number') this.lastEntropy = data.lastEntropy;
+    if (typeof data.lastMeanStepReward === 'number') this.lastMeanStepReward = data.lastMeanStepReward;
+    if (Array.isArray(data.eliteReplay)) {
+      this.eliteReplay = data.eliteReplay.map(item => ({
+        obs: Float64Array.from(item.obs),
+        act: Float64Array.from(item.act),
+        ret: item.ret
+      }));
+    }
+    this._resetBuffers();
+    this._sampleWorkerParamNoise();
+    return true;
+  }
 }
 
 /**
@@ -1680,5 +1817,40 @@ export class NESTrainer {
       metaMode: this.metaState.mode,
       isLearningActive: this.metaState.isLearningActive
     };
+  }
+
+  toJSON() {
+    return {
+      updateCount: this.updateCount,
+      sigma: this.sigma,
+      centerParams: Array.from(this.centerParams),
+      baselineReturn: this.baselineReturn,
+      alwaysLearn: this.alwaysLearn,
+      manualFreeze: this.manualFreeze,
+      minFoodsToConsolidate: this.minFoodsToConsolidate,
+      metaState: { ...this.metaState },
+      lastMeanStepReward: this.lastMeanStepReward
+    };
+  }
+
+  fromJSON(data) {
+    if (!data) return false;
+    if (typeof data.updateCount === 'number') this.updateCount = data.updateCount;
+    if (typeof data.sigma === 'number') this.sigma = data.sigma;
+    if (Array.isArray(data.centerParams) && data.centerParams.length === this.centerParams.length) {
+      this.centerParams.set(data.centerParams);
+      this.brain.setActorFlatParams(this.centerParams);
+    }
+    if (typeof data.baselineReturn === 'number') this.baselineReturn = data.baselineReturn;
+    if (typeof data.alwaysLearn === 'boolean') this.alwaysLearn = data.alwaysLearn;
+    if (typeof data.manualFreeze === 'boolean') this.manualFreeze = data.manualFreeze;
+    if (typeof data.minFoodsToConsolidate === 'number') this.minFoodsToConsolidate = data.minFoodsToConsolidate;
+    if (data.metaState && typeof data.metaState === 'object') {
+      this.metaState = { ...this.metaState, ...data.metaState };
+    }
+    if (typeof data.lastMeanStepReward === 'number') this.lastMeanStepReward = data.lastMeanStepReward;
+    this.stepCursor = 0;
+    this._sampleWorkerPopulation();
+    return true;
   }
 }

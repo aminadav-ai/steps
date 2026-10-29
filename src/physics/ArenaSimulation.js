@@ -729,4 +729,148 @@ export class ArenaSimulation {
       recentTrajectory: this.c0Trajectory.slice(-120)
     };
   }
+
+  /**
+   * Serializes the entire individual creature, its physical body state, trained neural network weights,
+   * trainer/meta-plasticity state, and learning curve history for instant persistence across page reloads.
+   */
+  exportCheckpoint(uiState = null, cameraState = null) {
+    const c0 = this.creatures[0];
+    return {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      morphologyKey: this.morphologyKey,
+      algorithm: this.algorithm,
+      populationSize: this.populationSize,
+      arenaHalfSize: this.arenaHalfSize,
+      floorFriction: this.floorFriction,
+      simTime: this.simTime,
+      totalSteps: this.totalSteps,
+      totalFoodCollected: this.totalFoodCollected,
+      bestCreatureIdx: this.bestCreatureIdx,
+      history: this.history.slice(-250),
+      recentStepRewards: this.recentStepRewards.slice(-64),
+      recentVelocities: this.recentVelocities.slice(-64),
+      c0FoodEvents: this.c0FoodEvents.slice(-100),
+      c0OverturnEvents: this.c0OverturnEvents.slice(-50),
+      creature0: c0 ? {
+        phase: c0.phase,
+        ageTime: c0.ageTime,
+        episodeSteps: c0.episodeSteps,
+        episodeReward: c0.episodeReward,
+        cumulativeReward: c0.cumulativeReward,
+        lastStepReward: c0.lastStepReward,
+        lastVelocityTowardFood: c0.lastVelocityTowardFood,
+        smoothedVelocityTowardFood: c0.smoothedVelocityTowardFood,
+        lastMechanicalPower: c0.lastMechanicalPower,
+        foodCollected: c0.foodCollected,
+        prevFoodDist: c0.prevFoodDist,
+        foodPos: [c0.foodPos.x, c0.foodPos.y, c0.foodPos.z],
+        dissolvePos: [c0.dissolvePos.x, c0.dissolvePos.y, c0.dissolvePos.z],
+        foodState: c0.foodState,
+        foodStateTimer: c0.foodStateTimer,
+        nodes: c0.body.nodes.map(n => ({
+          pos: [n.pos.x, n.pos.y, n.pos.z],
+          prevPos: [n.prevPos.x, n.prevPos.y, n.prevPos.z],
+          vel: [n.vel.x, n.vel.y, n.vel.z],
+          inContact: n.inContact,
+          normalForce: n.normalForce
+        })),
+        muscles: c0.body.muscles.map(m => ({
+          targetLength: m.targetLength,
+          directTargetLength: m.directTargetLength,
+          targetAction: m.targetAction,
+          smoothedAction: m.smoothedAction
+        }))
+      } : null,
+      brain: this.brain && typeof this.brain.toJSON === 'function' ? this.brain.toJSON() : null,
+      trainer: this.trainer && typeof this.trainer.toJSON === 'function' ? this.trainer.toJSON() : null,
+      uiState,
+      cameraState
+    };
+  }
+
+  /**
+   * Restores a previously saved individual creature, its physical posture, food state,
+   * neural network weights, and trainer state into this simulation instance.
+   */
+  importCheckpoint(ckpt) {
+    if (!ckpt || ckpt.morphologyKey !== this.morphologyKey || ckpt.algorithm !== this.algorithm) {
+      return false;
+    }
+    if (typeof ckpt.floorFriction === 'number') {
+      this.floorFriction = ckpt.floorFriction;
+      this.world.floorFriction = ckpt.floorFriction;
+    }
+    if (typeof ckpt.simTime === 'number') this.simTime = ckpt.simTime;
+    if (typeof ckpt.totalSteps === 'number') this.totalSteps = ckpt.totalSteps;
+    if (typeof ckpt.totalFoodCollected === 'number') this.totalFoodCollected = ckpt.totalFoodCollected;
+    if (typeof ckpt.bestCreatureIdx === 'number') this.bestCreatureIdx = ckpt.bestCreatureIdx;
+    if (Array.isArray(ckpt.history)) this.history = ckpt.history.slice();
+    if (Array.isArray(ckpt.recentStepRewards)) this.recentStepRewards = ckpt.recentStepRewards.slice();
+    if (Array.isArray(ckpt.recentVelocities)) this.recentVelocities = ckpt.recentVelocities.slice();
+    if (Array.isArray(ckpt.c0FoodEvents)) this.c0FoodEvents = ckpt.c0FoodEvents.slice();
+    if (Array.isArray(ckpt.c0OverturnEvents)) this.c0OverturnEvents = ckpt.c0OverturnEvents.slice();
+
+    const c0 = this.creatures[0];
+    if (c0 && ckpt.creature0) {
+      const sc = ckpt.creature0;
+      if (typeof sc.phase === 'number') c0.phase = sc.phase;
+      if (typeof sc.ageTime === 'number') c0.ageTime = sc.ageTime;
+      if (typeof sc.episodeSteps === 'number') c0.episodeSteps = sc.episodeSteps;
+      if (typeof sc.episodeReward === 'number') c0.episodeReward = sc.episodeReward;
+      if (typeof sc.cumulativeReward === 'number') c0.cumulativeReward = sc.cumulativeReward;
+      if (typeof sc.lastStepReward === 'number') c0.lastStepReward = sc.lastStepReward;
+      if (typeof sc.lastVelocityTowardFood === 'number') c0.lastVelocityTowardFood = sc.lastVelocityTowardFood;
+      if (typeof sc.smoothedVelocityTowardFood === 'number') c0.smoothedVelocityTowardFood = sc.smoothedVelocityTowardFood;
+      if (typeof sc.lastMechanicalPower === 'number') c0.lastMechanicalPower = sc.lastMechanicalPower;
+      if (typeof sc.foodCollected === 'number') c0.foodCollected = sc.foodCollected;
+      if (typeof sc.prevFoodDist === 'number') c0.prevFoodDist = sc.prevFoodDist;
+      if (Array.isArray(sc.foodPos) && sc.foodPos.length === 3) {
+        c0.foodPos.set(sc.foodPos[0], sc.foodPos[1], sc.foodPos[2]);
+      }
+      if (Array.isArray(sc.dissolvePos) && sc.dissolvePos.length === 3) {
+        c0.dissolvePos.set(sc.dissolvePos[0], sc.dissolvePos[1], sc.dissolvePos[2]);
+      }
+      if (typeof sc.foodState === 'string') c0.foodState = sc.foodState;
+      if (typeof sc.foodStateTimer === 'number') c0.foodStateTimer = sc.foodStateTimer;
+
+      if (Array.isArray(sc.nodes) && sc.nodes.length === c0.body.nodes.length) {
+        for (let i = 0; i < sc.nodes.length; i++) {
+          const sn = sc.nodes[i];
+          const n = c0.body.nodes[i];
+          if (Array.isArray(sn.pos)) n.pos.set(sn.pos[0], sn.pos[1], sn.pos[2]);
+          if (Array.isArray(sn.prevPos)) n.prevPos.set(sn.prevPos[0], sn.prevPos[1], sn.prevPos[2]);
+          if (Array.isArray(sn.vel)) n.vel.set(sn.vel[0], sn.vel[1], sn.vel[2]);
+          n.inContact = Boolean(sn.inContact);
+          n.normalForce = Number(sn.normalForce || 0);
+        }
+      }
+      if (Array.isArray(sc.muscles) && sc.muscles.length === c0.body.muscles.length) {
+        for (let i = 0; i < sc.muscles.length; i++) {
+          const sm = sc.muscles[i];
+          const m = c0.body.muscles[i];
+          if (typeof sm.targetLength === 'number') m.targetLength = sm.targetLength;
+          if (typeof sm.directTargetLength === 'number') m.directTargetLength = sm.directTargetLength;
+          if (typeof sm.targetAction === 'number') m.targetAction = sm.targetAction;
+          if (typeof sm.smoothedAction === 'number') m.smoothedAction = sm.smoothedAction;
+        }
+      }
+    }
+
+    if (ckpt.brain && this.brain && typeof this.brain.fromJSON === 'function') {
+      this.brain.fromJSON(ckpt.brain);
+    }
+    if (ckpt.trainer && this.trainer && typeof this.trainer.fromJSON === 'function') {
+      this.trainer.fromJSON(ckpt.trainer);
+    }
+
+    if (c0 && this.brain) {
+      const obs = c0.getObservation();
+      this.brain.forwardActor(obs, true, null);
+      this.brain.forwardCritic(obs, true);
+    }
+    this.substepCursor = 0;
+    return true;
+  }
 }

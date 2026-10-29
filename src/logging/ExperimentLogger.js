@@ -47,13 +47,38 @@ export class ExperimentLogger {
     }
   }
 
+  async resumeExistingExperiment() {
+    try {
+      const res = await fetch('/logs/current_experiment.json', { cache: 'no-store' });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data && data.experimentId) {
+        this.currentExperimentId = data.experimentId;
+      }
+      if (data && data.bestSnapshot) {
+        if (Array.isArray(data.bestSnapshot.userEvents)) {
+          this.userEvents = data.bestSnapshot.userEvents.slice();
+        }
+        if (Array.isArray(data.bestSnapshot.cameraEvents)) {
+          this.cameraEvents = data.bestSnapshot.cameraEvents.slice();
+        }
+      }
+      await this.refreshLogsList();
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
   buildTelemetrySnapshot(sim, renderer3D, uiState = {}) {
     if (!sim) return null;
+    const camState = renderer3D ? renderer3D.getCameraTelemetry() : null;
     return {
       capturedAt: new Date().toISOString(),
       uiState,
-      cameraState: renderer3D ? renderer3D.getCameraTelemetry() : null,
+      cameraState: camState,
       walkerAndTraining: sim.getDetailedTelemetry(),
+      savedCheckpoint: typeof sim.exportCheckpoint === 'function' ? sim.exportCheckpoint(uiState, camState) : null,
       userEventsCount: this.userEvents.length,
       cameraEventsCount: this.cameraEvents.length,
       userEvents: this.userEvents.slice(-150),

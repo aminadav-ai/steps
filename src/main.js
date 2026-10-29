@@ -94,7 +94,54 @@ function renderLogsList(logs) {
   }).join('');
 }
 
-async function startNewExperiment() {
+const CREATURE_STORAGE_KEY = 'steps_saved_creature_v1';
+
+function saveCreatureCheckpoint() {
+  if (!sim || typeof sim.exportCheckpoint !== 'function') return null;
+  try {
+    const ckpt = sim.exportCheckpoint(getUIState(), renderer3D ? renderer3D.getCameraTelemetry() : null);
+    localStorage.setItem(CREATURE_STORAGE_KEY, JSON.stringify(ckpt));
+    return ckpt;
+  } catch {
+    return null;
+  }
+}
+
+function applyRestoredUIState(ckpt) {
+  if (!ckpt) return;
+  if (ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
+    selectMorphology.value = ckpt.morphologyKey;
+  }
+  if (ckpt.algorithm) {
+    selectAlgorithm.value = ckpt.algorithm;
+  }
+  if (typeof ckpt.floorFriction === 'number') {
+    rangeFriction.value = ckpt.floorFriction.toFixed(2);
+    labelFrictionVal.textContent = formatFrictionLabel(ckpt.floorFriction);
+    hudFriction.textContent = ckpt.floorFriction.toFixed(2);
+  }
+  const m = ckpt.trainer && ckpt.trainer.metaState ? ckpt.trainer.metaState : null;
+  if (m) {
+    currentAmbitionPreset = m.ambitionPreset || 'min';
+    const tVal = Math.min(0.55, m.targetCompetence || 0.18);
+    if (rangeAmbition) rangeAmbition.value = tVal.toFixed(2);
+    if (labelAmbitionVal) labelAmbitionVal.textContent = formatAmbitionLabel(tVal, currentAmbitionPreset);
+    if (ambitionButtons) {
+      for (const b of ambitionButtons.querySelectorAll('button')) {
+        b.classList.toggle('active', b.dataset.ambition === currentAmbitionPreset);
+      }
+    }
+  }
+}
+
+async function startNewExperiment({ clearSaved = false } = {}) {
+  if (clearSaved) {
+    try {
+      localStorage.removeItem(CREATURE_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
   const morphologyKey = selectMorphology.value;
   const algorithm = selectAlgorithm.value;
   const floorFriction = parseFloat(rangeFriction.value);
@@ -119,7 +166,7 @@ async function startNewExperiment() {
   }
   renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
 
-  chartRenderer.render(sim.history);
+  chartRenderer.render(sim.history, true);
 
   await logger.startNewExperiment({
     morphology: morphologyKey,
@@ -127,7 +174,122 @@ async function startNewExperiment() {
     populationSize: 1,
     config: { floorFriction, arenaHalfSize: 11.0 }
   });
+  saveCreatureCheckpoint();
   renderLogsList(logger.savedLogsList);
+  updateHUD(true);
+}
+
+async function restoreOrStartExperiment() {
+  let localCkpt = null;
+  try {
+    const raw = localStorage.getItem(CREATURE_STORAGE_KEY);
+    if (raw) localCkpt = JSON.parse(raw);
+  } catch {
+    localCkpt = null;
+  }
+
+  const diskLog = await logger.resumeExistingExperiment();
+  const diskCkpt = diskLog && diskLog.bestSnapshot && diskLog.bestSnapshot.savedCheckpoint
+    ? diskLog.bestSnapshot.savedCheckpoint
+    : null;
+
+  // Pick whichever checkpoint has more progress / is newer
+  let ckpt = localCkpt;
+  if (diskCkpt && (!ckpt || (diskCkpt.simTime || 0) > (ckpt.simTime || 0))) {
+    ckpt = diskCkpt;
+  }
+
+  if (ckpt && ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
+    applyRestoredUIState(ckpt);
+    const spec = MORPHOLOGY_REGISTRY[ckpt.morphologyKey];
+    morphDescription.textContent = spec.description;
+    nnDimLabel.textContent = `${spec.obsDim} → 32 → 24 → ${spec.actDim}`;
+
+    sim = new ArenaSimulation({
+      morphologyKey: ckpt.morphologyKey,
+      algorithm: ckpt.algorithm || 'ppo',
+      populationSize: 1,
+      arenaHalfSize: 11.0,
+      floorFriction: typeof ckpt.floorFriction === 'number' ? ckpt.floorFriction : 1.0
+    });
+    sim.importCheckpoint(ckpt);
+    renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
+
+    const isLearningNow = !sim.trainer.metaState || sim.trainer.metaState.isLearningActive;
+    chartRenderer.render(sim.history, isLearningNow);
+    const leader = sim.creatures[0];
+    nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
+    renderLogsList(logger.savedLogsList);
+    updateHUD(true);
+    saveCreatureCheckpoint();
+    return;
+  }
+
+  // Fallback migration if diskLog exists from right before savedCheckpoint was added:
+  const wt = diskLog && diskLog.bestSnapshot && diskLog.bestSnapshot.walkerAndTraining
+    ? diskLog.bestSnapshot.walkerAndTraining
+    : null;
+  if (wt && (wt.updateCount > 0 || wt.simTime > 1)) {
+    const morphKey = diskLog.morphology || 'tripod';
+    const alg = diskLog.algorithm || 'ppo';
+    selectMorphology.value = morphKey;
+    selectAlgorithm.value = alg;
+    const spec = MORPHOLOGY_REGISTRY[morphKey];
+    morphDescription.textContent = spec.description;
+    nnDimLabel.textContent = `${spec.obsDim} → 32 → 24 → ${spec.actDim}`;
+
+    sim = new ArenaSimulation({
+      morphologyKey: morphKey,
+      algorithm: alg,
+      populationSize: 1,
+      arenaHalfSize: 11.0,
+      floorFriction: typeof wt.floorFriction === 'number' ? wt.floorFriction : 1.0
+    });
+
+    // Warm-up neural weights to match the logged training progress
+    const warmupUpdates = Math.min(16, Math.max(1, wt.updateCount || 8));
+    sim._isHeadlessFastTrain = true;
+    for (let u = 0; u < warmupUpdates; u++) {
+      while (!sim.stepControl()) {}
+    }
+    sim._isHeadlessFastTrain = false;
+
+    sim.simTime = wt.simTime || sim.simTime;
+    sim.trainer.updateCount = wt.updateCount || sim.trainer.updateCount;
+    if (Array.isArray(diskLog.history) && diskLog.history.length > 0) {
+      sim.history = diskLog.history.slice();
+    }
+    if (wt.metaState) {
+      sim.trainer.metaState = { ...sim.trainer.metaState, ...wt.metaState };
+    }
+    const c0 = sim.creatures[0];
+    if (c0 && wt.mainWalker) {
+      c0.foodCollected = wt.mainWalker.foodCollected || 0;
+      sim.totalFoodCollected = wt.totalPopulationFood || c0.foodCollected;
+      if (Array.isArray(wt.mainWalker.foodPos) && wt.mainWalker.foodPos.length >= 2) {
+        c0.foodPos.set(wt.mainWalker.foodPos[0], 0.16, wt.mainWalker.foodPos[1]);
+      }
+      if (c0.getTorsoFrame().up.y < 0.45) {
+        sim.uprightCreature(0);
+      }
+    }
+    applyRestoredUIState({
+      morphologyKey: morphKey,
+      algorithm: alg,
+      floorFriction: sim.floorFriction,
+      trainer: { metaState: sim.trainer.metaState }
+    });
+    renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
+    const isLearningNow = !sim.trainer.metaState || sim.trainer.metaState.isLearningActive;
+    chartRenderer.render(sim.history, isLearningNow);
+    nnRenderer.render(sim.brain, c0 ? c0.logicalDoFs : null);
+    renderLogsList(logger.savedLogsList);
+    updateHUD(true);
+    saveCreatureCheckpoint();
+    return;
+  }
+
+  await startNewExperiment({ clearSaved: false });
 }
 
 function getUIState() {
@@ -145,15 +307,15 @@ function getUIState() {
 // Event Listeners
 selectMorphology.addEventListener('change', () => {
   logger.recordUserEvent('select_morphology', { morphology: selectMorphology.value }, sim, renderer3D, getUIState());
-  startNewExperiment();
+  startNewExperiment({ clearSaved: true });
 });
 selectAlgorithm.addEventListener('change', () => {
   logger.recordUserEvent('select_algorithm', { algorithm: selectAlgorithm.value }, sim, renderer3D, getUIState());
-  startNewExperiment();
+  startNewExperiment({ clearSaved: true });
 });
 btnNewExperiment.addEventListener('click', () => {
   logger.recordUserEvent('btn_new_experiment', { reason: 'user_reset_ai' }, sim, renderer3D, getUIState());
-  startNewExperiment();
+  startNewExperiment({ clearSaved: true });
 });
 
 function setPausedState(nextPaused, source = 'ui') {
@@ -161,6 +323,7 @@ function setPausedState(nextPaused, source = 'ui') {
   btnPause.textContent = paused ? 'Продолжить' : 'Пауза';
   expStatusBadge.textContent = paused ? '⏸ ПАУЗА' : '● АКТИВЕН';
   expStatusBadge.style.color = paused ? '#fbbf24' : '#4ade80';
+  saveCreatureCheckpoint();
   logger.recordUserEvent(paused ? 'pause' : 'resume', { source }, sim, renderer3D, getUIState());
 }
 
@@ -168,6 +331,7 @@ function handleUpdateEntry(updateEntry) {
   if (!updateEntry) return;
   const isLearningNow = !sim.trainer.metaState || sim.trainer.metaState.isLearningActive;
   chartRenderer.render(sim.history, isLearningNow);
+  saveCreatureCheckpoint();
   const fullSnapshot = logger.buildTelemetrySnapshot(sim, renderer3D, getUIState());
   logger.logUpdate(
     updateEntry,
@@ -197,6 +361,7 @@ renderer3D.onCameraAction = camEvent => {
 
 // Direct 3D mouse manipulation of food orb (drag & drop) and walker (grab, move, throw)
 renderer3D.onSceneInteract = interactEvent => {
+  saveCreatureCheckpoint();
   logger.recordUserEvent(interactEvent.action, interactEvent, sim, renderer3D, getUIState());
   updateHUD();
 };
@@ -495,12 +660,17 @@ function animate(now = performance.now()) {
     nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
     updateHUD();
   }
-  // Periodic telemetry flush every ~2.5 seconds (150 frames) so trajectory & camera state stay up-to-date on disk
-  if (frameCounter % 150 === 0 && !paused) {
+  // Periodic telemetry & checkpoint flush every ~2.0 seconds (120 frames) so creature state & trajectory stay up-to-date
+  if (frameCounter % 120 === 0 && !paused) {
+    saveCreatureCheckpoint();
     logger.scheduleSnapshotFlush(sim, renderer3D, getUIState());
   }
 }
 
-startNewExperiment().then(() => {
+window.addEventListener('beforeunload', () => {
+  saveCreatureCheckpoint();
+});
+
+restoreOrStartExperiment().then(() => {
   requestAnimationFrame(animate);
 });
