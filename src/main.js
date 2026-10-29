@@ -80,6 +80,13 @@ const hudLeaderVel = document.getElementById('hudLeaderVel');
 const hudFriction = document.getElementById('hudFriction');
 const expStatusBadge = document.getElementById('expStatusBadge');
 
+const ytPausePlayOverlay = document.getElementById('ytPausePlayOverlay');
+const ytOverlayBtn = document.getElementById('ytOverlayBtn');
+const ytIconPause = document.getElementById('ytIconPause');
+const ytIconPlay = document.getElementById('ytIconPlay');
+let ytOverlayTimer = null;
+let isResumingTransition = false;
+
 const metaActiveBadge = document.getElementById('metaActiveBadge');
 const metaModeBanner = document.getElementById('metaModeBanner');
 const metaNeedVal = document.getElementById('metaNeedVal');
@@ -419,13 +426,60 @@ btnNewExperiment.addEventListener('click', () => {
 });
 
 function setPausedState(nextPaused, source = 'ui') {
+  if (ytOverlayTimer) {
+    clearTimeout(ytOverlayTimer);
+    ytOverlayTimer = null;
+  }
+  isResumingTransition = false;
   paused = nextPaused;
   const t = getT();
   btnPause.textContent = paused ? t.btnResume : t.btnPause;
   expStatusBadge.textContent = paused ? t.statusPaused : t.statusActive;
   expStatusBadge.style.color = paused ? '#fbbf24' : '#4ade80';
+
+  if (ytPausePlayOverlay && ytOverlayBtn && ytIconPause && ytIconPlay) {
+    ytOverlayBtn.classList.remove('resuming');
+    if (paused) {
+      // 1. Show transparent circle with large Pause icon (||) for 1 second
+      ytPausePlayOverlay.hidden = false;
+      ytIconPause.hidden = false;
+      ytIconPlay.hidden = true;
+      ytOverlayTimer = setTimeout(() => {
+        ytOverlayTimer = null;
+        if (paused && !isResumingTransition) {
+          // 2. Switch to circle with Play triangle (▶) after 1 second
+          ytIconPause.hidden = true;
+          ytIconPlay.hidden = false;
+        }
+      }, 1000);
+    } else {
+      ytPausePlayOverlay.hidden = true;
+    }
+  }
+
   saveCreatureCheckpoint();
   logger.recordUserEvent(paused ? 'pause' : 'resume', { source }, sim, renderer3D, getUIState());
+}
+
+function triggerResumeFromOverlay(source = 'yt_play_circle') {
+  if (!paused || isResumingTransition) return;
+  if (ytOverlayTimer) {
+    clearTimeout(ytOverlayTimer);
+    ytOverlayTimer = null;
+  }
+  isResumingTransition = true;
+  if (ytPausePlayOverlay && ytOverlayBtn && ytIconPause && ytIconPlay) {
+    ytPausePlayOverlay.hidden = false;
+    ytIconPause.hidden = true;
+    ytIconPlay.hidden = false;
+    ytOverlayBtn.classList.add('resuming');
+  }
+  ytOverlayTimer = setTimeout(() => {
+    ytOverlayTimer = null;
+    simTimeAccum = 0;
+    lastFrameTime = performance.now();
+    setPausedState(false, source);
+  }, 1000);
 }
 
 function handleUpdateEntry(updateEntry) {
@@ -447,12 +501,31 @@ function handleUpdateEntry(updateEntry) {
 }
 
 btnPause.addEventListener('click', () => {
-  setPausedState(!paused, 'btn_pause');
+  if (paused) {
+    triggerResumeFromOverlay('btn_pause');
+  } else {
+    setPausedState(true, 'btn_pause');
+  }
 });
+
+if (ytOverlayBtn) {
+  ytOverlayBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    if (paused) {
+      triggerResumeFromOverlay('yt_play_circle');
+    } else {
+      setPausedState(true, 'yt_pause_circle');
+    }
+  });
+}
 
 // Single click on the 3D arena canvas toggles pause/resume
 renderer3D.onTogglePause = (source = 'canvas_click') => {
-  setPausedState(!paused, source);
+  if (paused) {
+    triggerResumeFromOverlay(source);
+  } else {
+    setPausedState(true, source);
+  }
 };
 
 // Camera orbit, Shift+drag strafe, and wheel zoom events
