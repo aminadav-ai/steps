@@ -109,15 +109,7 @@ export class CreatureInstance {
         (foot.pos.x - hip.pos.x) * up.x +
         (foot.pos.y - hip.pos.y) * up.y +
         (foot.pos.z - hip.pos.z) * up.z;
-      if (footLocalUp > -0.03) return true;
-      if (this.actuatorMode !== 'muscle' && this.kneeNodes && this.kneeNodes[i]) {
-        const knee = this.kneeNodes[i];
-        const kneeLocalUp =
-          (knee.pos.x - hip.pos.x) * up.x +
-          (knee.pos.y - hip.pos.y) * up.y +
-          (knee.pos.z - hip.pos.z) * up.z;
-        if (kneeLocalUp > 0.01) return true;
-      }
+      if (footLocalUp > -0.04) return true;
     }
     return false;
   }
@@ -211,7 +203,7 @@ export class CreatureInstance {
    */
   applyActionVector(actions, isRightingMode = false) {
     let totalPower = 0;
-    const { up } = this.getTorsoFrame();
+    const { up, forward, right } = this.getTorsoFrame();
     // Differential between front-left (leg 0) and front-right (leg 1) stride commands
     const stride0 = Math.max(-1, Math.min(1, actions[1] || 0));
     const stride1 = Math.max(-1, Math.min(1, actions[3] || 0));
@@ -220,7 +212,7 @@ export class CreatureInstance {
       const ctrl = this.legControllers[i];
       const actLift = Math.max(-1, Math.min(1, actions[i * 2] || 0));
       const actStride = Math.max(-1, Math.min(1, actions[i * 2 + 1] || 0));
-      totalPower += ctrl.applyLegActions(actLift, actStride, diffTurn, isRightingMode, up);
+      totalPower += ctrl.applyLegActions(actLift, actStride, diffTurn, isRightingMode, up, forward, right);
     }
     this.lastMechanicalPower = totalPower;
   }
@@ -507,37 +499,119 @@ function attachOrthogonalLeg({
     jointTorqueNm: 0.0,
     maxTorqueNm: 22.0,
     torqueLoadRatio: 0.0,
-    applyLegActions(actLift, actStride, diffTurn = 0, isRightingMode = false, upVec = null) {
-      const footLocalUp = upVec
+    applyLegActions(actLift, actStride, diffTurn = 0, isRightingMode = false, upVec = null, forwardVec = null, rightVec = null) {
+      let footLocalUp = upVec
         ? (foot.pos.x - hipNode.pos.x) * upVec.x +
           (foot.pos.y - hipNode.pos.y) * upVec.y +
           (foot.pos.z - hipNode.pos.z) * upVec.z
         : (foot.pos.y - hipNode.pos.y);
 
-      const kneeLocalUp = (knee && upVec)
-        ? (knee.pos.x - hipNode.pos.x) * upVec.x +
-          (knee.pos.y - hipNode.pos.y) * upVec.y +
-          (knee.pos.z - hipNode.pos.z) * upVec.z
-        : (knee ? (knee.pos.y - hipNode.pos.y) : -0.08);
+      const needDorsalReach = isRightingMode && actLift < 0 && (!upVec || upVec.y < 0.45);
+      const isUprightOrStanding = !isRightingMode || (upVec && upVec.y >= 0.45);
+
+      // Physical Mechanical Joint Hard-Stops in 'servo' mode (conserving exact center-of-mass momentum sum m_i dx_i === 0):
+      // 1. Hip Ventral Stop: when the chassis is upright, the leg cannot passively fold/invert above the hip plane.
+      // 2. Knee Anti-Hyperextension Stop ("Ʌ" stop): prevents the knee from ever snapping into a backward "V" bend!
+      if (isServoMode && knee && upVec && forwardVec && rightVec) {
+        if (isUprightOrStanding && footLocalUp > -0.075) {
+          const corrUp = -0.085 - footLocalUp;
+          const mF = foot.mass;
+          const mH = hipNode.mass;
+          const wF = mH / (mF + mH);
+          const wH = mF / (mF + mH);
+          const dxStop = upVec.x * corrUp;
+          const dyStop = upVec.y * corrUp;
+          const dzStop = upVec.z * corrUp;
+
+          foot.pos.x += dxStop * wF;
+          foot.pos.y += dyStop * wF;
+          foot.pos.z += dzStop * wF;
+          foot.prevPos.x += dxStop * wF;
+          foot.prevPos.y += dyStop * wF;
+          foot.prevPos.z += dzStop * wF;
+
+          hipNode.pos.x -= dxStop * wH;
+          hipNode.pos.y -= dyStop * wH;
+          hipNode.pos.z -= dzStop * wH;
+          hipNode.prevPos.x -= dxStop * wH;
+          hipNode.prevPos.y -= dyStop * wH;
+          hipNode.prevPos.z -= dzStop * wH;
+
+          footLocalUp = -0.085;
+        }
+
+        // Compute valid 3D sagittal "Ʌ" knee position from current hipNode.pos and foot.pos
+        const uxW = foot.pos.x - hipNode.pos.x;
+        const uyW = foot.pos.y - hipNode.pos.y;
+        const uzW = foot.pos.z - hipNode.pos.z;
+        const uf = uxW * forwardVec.x + uyW * forwardVec.y + uzW * forwardVec.z;
+        const uu = uxW * upVec.x + uyW * upVec.y + uzW * upVec.z;
+        const rawDW = Math.hypot(uf, uu);
+        const maxReachW = (L_femur + L_tibia) * 0.992;
+        const dW = Math.max(0.05, Math.min(maxReachW, rawDW));
+        const scaleW = rawDW > 1e-6 ? dW / rawDW : 1.0;
+        const cf = uf * scaleW;
+        const cu = uu * scaleW;
+
+        const isFrontLeg = restHipPos.x >= restComX;
+        const bf0 = isFrontLeg ? 0.92 : -0.92;
+        const bu0 = 0.25;
+        const dotBW = (bf0 * cf + bu0 * cu) / Math.max(1e-6, dW * dW);
+        let pf = bf0 - dotBW * cf;
+        let pu = bu0 - dotBW * cu;
+        const pLenW = Math.hypot(pf, pu);
+        if (pLenW > 1e-6) {
+          pf /= pLenW;
+          pu /= pLenW;
+        } else {
+          pf = isFrontLeg ? 1.0 : -1.0;
+          pu = 0.0;
+        }
+        const hKneeW = Math.sqrt(Math.max(1e-5, L_femur * L_femur - 0.25 * dW * dW));
+        const validKneeX = hipNode.pos.x + (0.5 * cf + pf * hKneeW) * forwardVec.x + (0.5 * cu + pu * hKneeW) * upVec.x;
+        const validKneeY = hipNode.pos.y + (0.5 * cf + pf * hKneeW) * forwardVec.y + (0.5 * cu + pu * hKneeW) * upVec.y;
+        const validKneeZ = hipNode.pos.z + (0.5 * cf + pf * hKneeW) * forwardVec.z + (0.5 * cu + pu * hKneeW) * upVec.z;
+
+        const errKX = (validKneeX - knee.pos.x) * 0.72;
+        const errKY = (validKneeY - knee.pos.y) * 0.72;
+        const errKZ = (validKneeZ - knee.pos.z) * 0.72;
+        if (errKX * errKX + errKY * errKY + errKZ * errKZ > 1e-6) {
+          const mK = knee.mass;
+          const mHF = hipNode.mass + foot.mass;
+          const wK = mHF / (mK + mHF);
+          const wHF = mK / (mK + mHF);
+
+          knee.pos.x += errKX * wK;
+          knee.pos.y += errKY * wK;
+          knee.pos.z += errKZ * wK;
+          knee.prevPos.x += errKX * wK;
+          knee.prevPos.y += errKY * wK;
+          knee.prevPos.z += errKZ * wK;
+
+          hipNode.pos.x -= errKX * wHF;
+          hipNode.pos.y -= errKY * wHF;
+          hipNode.pos.z -= errKZ * wHF;
+          hipNode.prevPos.x -= errKX * wHF;
+          hipNode.prevPos.y -= errKY * wHF;
+          hipNode.prevPos.z -= errKZ * wHF;
+
+          foot.pos.x -= errKX * wHF;
+          foot.pos.y -= errKY * wHF;
+          foot.pos.z -= errKZ * wHF;
+          foot.prevPos.x -= errKX * wHF;
+          foot.prevPos.y -= errKY * wHF;
+          foot.prevPos.z -= errKZ * wHF;
+        }
+      }
 
       let dx, dy, dz;
-      const needDorsalReach = isRightingMode && actLift < 0 && (!upVec || upVec.y < 0.48);
-      const isUprightOrStanding = !isRightingMode || (upVec && upVec.y >= 0.48);
-      const legInvertedInVentralMode =
-        isUprightOrStanding && (footLocalUp > -0.05 || (isServoMode && kneeLocalUp > -0.015));
-
-      if (legInvertedInVentralMode) {
-        // Any leg still inverted above the hip plane in ventral mode is forcefully driven straight down to the floor!
-        dx = (restHipPos.x >= restComX ? 1 : -1) * 0.06;
-        dy = -liftStrokeDown * 0.85;
-        dz = 0;
-      } else if (!needDorsalReach) {
-        // Ventral mode (normal walking OR stand-up phase once rolled past up.y >= 0.48):
+      if (!needDorsalReach) {
+        // Ventral mode (normal walking OR stand-up phase once rolled past up.y >= 0.45):
         dx = actStride * strideStroke;
         dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
         dz = 0;
       } else {
-        // Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.48, actLift < 0):
+        // Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.45, actLift < 0):
         // In 'servo' mode, the 2-DoF revolute leg stays strictly in its sagittal bearing plane (dz === 0)
         // and rotates on its cantilevered hip shaft outside the chassis frame!
         dx = actStride * 0.26;
@@ -554,7 +628,6 @@ function attachOrthogonalLeg({
 
       // In servo mode, clamp targetPos strictly inside the 2-link rigid femur+tibia reach sphere (L_femur + L_tibia)
       let targetPos = rawTargetPos;
-      let targetKneePos = null;
       if (isServoMode) {
         const ux = rawTargetPos.x - restHipPos.x;
         const uy = rawTargetPos.y - restHipPos.y;
@@ -569,53 +642,21 @@ function attachOrthogonalLeg({
             restHipPos.z + uz * s
           );
         }
-        targetKneePos = computeKneeTarget3D(targetPos);
-
-        // Software Hip-Pitch angle limit in normal ventral walking (!needDorsalReach):
-        // Rigidly rotates the 2-link (hip -> knee -> foot) target around restHipPos in the sagittal plane
-        // if targetKneePos.y would cross above restHipPos.y - 0.04m, preserving exact L_femur & L_tibia distances
-        // while guaranteeing the knee NEVER pops up into the dorsal mirror trap during normal walking!
-        if (isUprightOrStanding && targetKneePos.y > restHipPos.y - 0.04) {
-          const kx = targetKneePos.x - restHipPos.x;
-          const ky = targetKneePos.y - restHipPos.y;
-          const curAng = Math.atan2(ky, kx);
-          const minDownSin = -0.04 / L_femur;
-          const goalAng = kx >= 0
-            ? Math.min(curAng, Math.asin(minDownSin))
-            : Math.max(curAng, Math.PI - Math.asin(minDownSin));
-          const dAng = goalAng - curAng;
-          const cosD = Math.cos(dAng);
-          const sinD = Math.sin(dAng);
-
-          const fx = targetPos.x - restHipPos.x;
-          const fy = targetPos.y - restHipPos.y;
-          targetKneePos = new Vec3(
-            restHipPos.x + (kx * cosD - ky * sinD),
-            restHipPos.y + (kx * sinD + ky * cosD),
-            targetKneePos.z
-          );
-          targetPos = new Vec3(
-            restHipPos.x + (fx * cosD - fy * sinD),
-            restHipPos.y + (fx * sinD + fy * cosD),
-            targetPos.z
-          );
-        }
       }
 
       const targetLocalUp = targetPos.y - restHipPos.y;
       const crossingHipPlane =
-        legInvertedInVentralMode ||
         (targetLocalUp < -0.03 && footLocalUp > -0.05) ||
         (targetLocalUp > 0.03 && footLocalUp < 0.05);
 
-      // Relax coplanar hip muscles while foot or knee crosses the hip plane (or escapes dorsal inversion)
-      // so the coplanar snap-through barrier vanishes and dorsalMuscle + kneeDorsalServo smoothly push/pull the leg across!
+      // Relax coplanar hip muscles while foot crosses the hip plane (footLocalUp ≈ 0)
+      // so the coplanar snap-through barrier vanishes and dorsalMuscle smoothly pushes/pulls the foot across!
       kneeLift.maxForce = crossingHipPlane ? 14.0 : 135.0;
       strideFwd.maxForce = crossingHipPlane ? 18.0 : 120.0;
       strideBwd.maxForce = crossingHipPlane ? 18.0 : 120.0;
-      latMuscle.maxForce = crossingHipPlane ? (legInvertedInVentralMode ? 22.0 : (isServoMode ? 45.0 : 18.0)) : (isServoMode ? 185.0 : 110.0);
+      latMuscle.maxForce = crossingHipPlane ? (isServoMode ? 45.0 : 18.0) : (isServoMode ? 185.0 : 110.0);
       if (oppLatMuscle) {
-        oppLatMuscle.maxForce = crossingHipPlane ? (legInvertedInVentralMode ? 22.0 : (isServoMode ? 45.0 : 18.0)) : (isServoMode ? 185.0 : 110.0);
+        oppLatMuscle.maxForce = crossingHipPlane ? (isServoMode ? 45.0 : 18.0) : (isServoMode ? 185.0 : 110.0);
       }
 
       kneeLift.targetAction = actLift;
@@ -629,21 +670,13 @@ function attachOrthogonalLeg({
         oppLatMuscle.setTargetLengthDirect(Vec3.dist(restOppLatPos, targetPos));
       }
       if (dorsalMuscle && restDorsalPos) {
-        const footInverted = footLocalUp > -0.06 || legInvertedInVentralMode;
-        dorsalMuscle.maxForce = (isRightingMode || footInverted || crossingHipPlane) ? 215.0 : 0.0;
+        const footInverted = footLocalUp > -0.06;
+        dorsalMuscle.maxForce = (isRightingMode || footInverted || crossingHipPlane) ? 195.0 : (isServoMode ? 115.0 : 0.0);
         dorsalMuscle.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetPos));
       }
 
       if (isServoMode && knee) {
-        if (!targetKneePos) {
-          targetKneePos = computeKneeTarget3D(targetPos);
-        }
-        kneeFrontServo.maxForce = legInvertedInVentralMode ? 14.0 : 95.0;
-        kneeRearServo.maxForce = legInvertedInVentralMode ? 14.0 : 95.0;
-        kneeLatServo.maxForce = legInvertedInVentralMode ? 28.0 : 165.0;
-        if (kneeOppLatServo) {
-          kneeOppLatServo.maxForce = legInvertedInVentralMode ? 28.0 : 165.0;
-        }
+        const targetKneePos = computeKneeTarget3D(targetPos);
         kneeFrontServo.setTargetLengthDirect(Vec3.dist(restFrontPos, targetKneePos));
         kneeRearServo.setTargetLengthDirect(Vec3.dist(restRearPos, targetKneePos));
         kneeLatServo.setTargetLengthDirect(Vec3.dist(restLatPos, targetKneePos));
@@ -651,7 +684,6 @@ function attachOrthogonalLeg({
           kneeOppLatServo.setTargetLengthDirect(Vec3.dist(restOppLatPos, targetKneePos));
         }
         if (kneeDorsalServo && restDorsalPos) {
-          kneeDorsalServo.maxForce = legInvertedInVentralMode ? 195.0 : 95.0;
           kneeDorsalServo.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetKneePos));
         }
 

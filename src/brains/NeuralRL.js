@@ -725,6 +725,7 @@ export class PPOTrainer {
     this.bufDone = [];
     this.stepCursor = 0;
     this.epochVelSum = 0;
+    this.epochStraightSteps = 0;
   }
 
   /**
@@ -926,13 +927,12 @@ export class PPOTrainer {
 
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
-    const hasInvLeg0 = typeof c0.hasInvertedLeg === 'function' && c0.hasInvertedLeg();
     const isOverturned0 =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      (upY0 < 0.52 || hasInvLeg0 || (this.wasOverturned && upY0 < 0.68));
+      (upY0 < 0.45 || (this.wasOverturned && upY0 < 0.68));
 
-    // 1. Check if main walker is overturned on its back/side or has an inverted leg -> engage Self-Righting Reflex!
+    // 1. Check if main walker is overturned on its back/side -> engage Self-Righting Reflex!
     if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
@@ -951,9 +951,7 @@ export class PPOTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
-      this.metaState.reasonText = upY0 < 0.52
-        ? `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`
-        : `Расправляет запрокинутые лапы под корпус (up.y=${upY0.toFixed(2)}): постановка на опору перед ходьбой`;
+      this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
 
       const obs = c0.getObservation();
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
@@ -966,7 +964,7 @@ export class PPOTrainer {
     }
 
     // 2. If walker just recovered from overturned back onto its feet!
-    if (this.wasOverturned && upY0 >= 0.68 && !hasInvLeg0) {
+    if (this.wasOverturned && upY0 >= 0.68) {
       this.wasOverturned = false;
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
@@ -1059,28 +1057,45 @@ export class PPOTrainer {
       return null;
     }
 
-    // If walker suddenly tipped over, is held by user's mouse, OR is in the 2-second pause between food orbs (DISSOLVING / WAITING),
+    // If walker suddenly tipped over, is held by user's mouse, OR is in the pause between food orbs (DISSOLVING / WAITING / DROPPING),
     // do not push non-locomotion steps into the walking rollout buffer!
-    if (c0.isGrabbed || c0.postThrowTimer > 0 || upY0 < 0.32 || c0.foodState === 'DISSOLVING' || c0.foodState === 'WAITING') {
+    if (
+      c0.isGrabbed ||
+      c0.postThrowTimer > 0 ||
+      upY0 < 0.35 ||
+      c0.foodState === 'DISSOLVING' ||
+      c0.foodState === 'WAITING' ||
+      c0.foodState === 'DROPPING'
+    ) {
+      this.metaState.stallStepsCount = 0;
       return null;
     }
 
     const { stepObs, stepAct, stepLogProb, stepVal } = this._pendingStep;
 
+    // When a new food orb spawns at an angle behind/beside the walker, the walker needs time to pivot in place
+    // and accelerate on its rigid servo legs. Do NOT penalize turning/accelerating as a speed stall!
+    const isPausedOrTurning = Boolean(c0.isPausedOrTurningToFood);
+
     // Track actual velocity across the rollout and stall steps for meta-plasticity wake-up detector
-    this.epochVelSum = (this.epochVelSum || 0) + (c0.lastVelocityTowardFood || 0);
     const smoothVel = c0.smoothedVelocityTowardFood !== undefined
       ? c0.smoothedVelocityTowardFood
       : (c0.lastVelocityTowardFood || 0);
     const wakeVelThreshold = Math.max(0.06, this.metaState.relearnThreshold || ((this.metaState.targetCompetence || 0.18) * 0.68));
-    if (smoothVel < wakeVelThreshold && (c0.lastVelocityTowardFood || 0) < wakeVelThreshold) {
-      this.metaState.stallStepsCount += 1;
+    if (isPausedOrTurning) {
+      this.metaState.stallStepsCount = 0;
     } else {
-      this.metaState.stallStepsCount = Math.max(0, this.metaState.stallStepsCount - 1);
+      this.epochVelSum = (this.epochVelSum || 0) + (c0.lastVelocityTowardFood || 0);
+      this.epochStraightSteps = (this.epochStraightSteps || 0) + 1;
+      if (smoothVel < wakeVelThreshold && (c0.lastVelocityTowardFood || 0) < wakeVelThreshold) {
+        this.metaState.stallStepsCount += 1;
+      } else {
+        this.metaState.stallStepsCount = Math.max(0, this.metaState.stallStepsCount - 1);
+      }
     }
 
-    // Immediate mid-rollout wake-up if walker is in CONSOLIDATED mode and speed has stayed below threshold for ~1.2s (24 steps)
-    if (this.metaState.mode === 'CONSOLIDATED' && !this.manualFreeze && this.metaState.stallStepsCount >= 24) {
+    // Immediate mid-rollout wake-up if walker is in CONSOLIDATED mode, aligned toward target, and speed has stayed below threshold for ~1.2s (24 steps)
+    if (this.metaState.mode === 'CONSOLIDATED' && !this.manualFreeze && !isPausedOrTurning && this.metaState.stallStepsCount >= 24) {
       this.metaState.mode = 'LEARNING_WALK';
       this.metaState.isLearningActive = true;
       this.metaState.stableEpochsCount = 0;
@@ -1130,8 +1145,14 @@ export class PPOTrainer {
     const c0 = creatures[0];
     // Compute effective goal-directed competence grounded in physical velocity toward food (m/s)
     const rolloutLen = Math.max(1, this.bufObs.length || this.rolloutSteps);
+    const straightSteps = this.epochStraightSteps || 0;
+    const mostlyTurningOrWaiting =
+      Boolean(c0.isPausedOrTurningToFood) ||
+      straightSteps < 10;
     const meanEpochRew = epochLocomotionScore / rolloutLen;
-    const meanRolloutVel = (this.epochVelSum || 0) / rolloutLen;
+    const meanRolloutVel = straightSteps > 0
+      ? (this.epochVelSum || 0) / straightSteps
+      : (this.epochVelSum || 0) / rolloutLen;
     const recentVel = Math.max(0, c0.smoothedVelocityTowardFood || c0.lastVelocityTowardFood || 0);
     const physicalVel = Math.max(0, 0.55 * recentVel + 0.45 * Math.max(0, meanRolloutVel));
     const rewVelComponent = Math.max(0, (meanEpochRew - 0.18) / 2.5);
@@ -1139,10 +1160,14 @@ export class PPOTrainer {
     const cappedRewVel = Math.min(rewVelComponent, physicalVel * 1.15 + 0.02);
     const approxEpochVel = Math.max(0.0, Math.min(0.65, 0.65 * physicalVel + 0.35 * cappedRewVel));
 
-    const emaAlpha = approxEpochVel < this.metaState.competenceEMA ? 0.45 : 0.24;
-    this.metaState.competenceEMA = Number(
-      ((1 - emaAlpha) * this.metaState.competenceEMA + emaAlpha * approxEpochVel).toFixed(3)
-    );
+    if (this.metaState.mode === 'CONSOLIDATED' && mostlyTurningOrWaiting && approxEpochVel < this.metaState.competenceEMA) {
+      // Do not penalize competenceEMA when the walker spent most of the rollout waiting for food or pivoting toward a new target!
+    } else {
+      const emaAlpha = approxEpochVel < this.metaState.competenceEMA ? 0.45 : 0.24;
+      this.metaState.competenceEMA = Number(
+        ((1 - emaAlpha) * this.metaState.competenceEMA + emaAlpha * approxEpochVel).toFixed(3)
+      );
+    }
     this.metaState.surpriseEMA = Number(
       (0.75 * this.metaState.surpriseEMA + 0.25 * meanTdSurprise).toFixed(3)
     );
@@ -1175,7 +1200,7 @@ export class PPOTrainer {
     if (this.metaState.mode === 'LEARNING_WALK') {
       if (comp >= target && foodCount >= minFoods && !(this.minTrainEpochsRemaining > 0)) {
         this.metaState.stableEpochsCount += 1;
-      } else if (!(this.minTrainEpochsRemaining > 0)) {
+      } else if (!(this.minTrainEpochsRemaining > 0) && !mostlyTurningOrWaiting) {
         this.metaState.stableEpochsCount = Math.max(0, this.metaState.stableEpochsCount - 1);
       }
 
@@ -1208,6 +1233,16 @@ export class PPOTrainer {
             : `Доводка скорости: ${comp.toFixed(2)} м/с → цель ${target.toFixed(2)} м/с`;
       }
     } else if (this.metaState.mode === 'CONSOLIDATED') {
+      if (mostlyTurningOrWaiting) {
+        this.metaState.lowVelEpochsCount = 0;
+        this.metaState.stallStepsCount = 0;
+        this.metaState.needToLearnPct = 10;
+        this.metaState.isLearningActive = false;
+        this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
+        this.metaState.reasonText = `Поворот/выход на новую цель (целей: ${foodCount}) — дообучение не требуется, веса защищены`;
+        return;
+      }
+
       // Monitor if environment changed (e.g. slippery ice), obstacle blocked path, or velocity dropped below threshold
       const wakeVelThreshold = Math.max(0.06, this.metaState.relearnThreshold || (target * 0.68));
       if (comp < wakeVelThreshold || physicalVel < wakeVelThreshold) {
@@ -1736,11 +1771,10 @@ export class NESTrainer {
   selectActions(creatures) {
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
-    const hasInvLeg0 = typeof c0.hasInvertedLeg === 'function' && c0.hasInvertedLeg();
     const isOverturned0 =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      (upY0 < 0.52 || hasInvLeg0 || (this.wasOverturned && upY0 < 0.68));
+      (upY0 < 0.45 || (this.wasOverturned && upY0 < 0.68));
     if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
@@ -1758,9 +1792,7 @@ export class NESTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
-      this.metaState.reasonText = upY0 < 0.52
-        ? `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`
-        : `Расправляет запрокинутые лапы под корпус (up.y=${upY0.toFixed(2)}): постановка на опору перед ходьбой`;
+      this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`;
 
       const obs = c0.getObservation();
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
@@ -1771,7 +1803,7 @@ export class NESTrainer {
       return;
     }
 
-    if (this.wasOverturned && upY0 >= 0.68 && !hasInvLeg0) {
+    if (this.wasOverturned && upY0 >= 0.68) {
       this.wasOverturned = false;
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
@@ -1824,7 +1856,13 @@ export class NESTrainer {
       return null;
     }
 
-    if (upY0 < 0.32 || c0.foodState === 'DISSOLVING' || c0.foodState === 'WAITING') {
+    if (
+      upY0 < 0.35 ||
+      c0.foodState === 'DISSOLVING' ||
+      c0.foodState === 'WAITING' ||
+      c0.foodState === 'DROPPING'
+    ) {
+      this.metaState.stallStepsCount = 0;
       return null;
     }
 
@@ -1832,18 +1870,23 @@ export class NESTrainer {
       const r = rewards[w];
       this.workerReturns[w] += r > 5.0 ? r - 8.5 : r;
     }
-    this.epochVelSum = (this.epochVelSum || 0) + (c0.lastVelocityTowardFood || 0);
+    const isPausedOrTurning = Boolean(c0.isPausedOrTurningToFood);
     const smoothVel = c0.smoothedVelocityTowardFood !== undefined
       ? c0.smoothedVelocityTowardFood
       : (c0.lastVelocityTowardFood || 0);
     const wakeVelThreshold = Math.max(0.06, this.metaState.relearnThreshold || ((this.metaState.targetCompetence || 0.18) * 0.68));
-    if (smoothVel < wakeVelThreshold && (c0.lastVelocityTowardFood || 0) < wakeVelThreshold) {
-      this.metaState.stallStepsCount = (this.metaState.stallStepsCount || 0) + 1;
+    if (isPausedOrTurning) {
+      this.metaState.stallStepsCount = 0;
     } else {
-      this.metaState.stallStepsCount = Math.max(0, (this.metaState.stallStepsCount || 0) - 1);
+      this.epochVelSum = (this.epochVelSum || 0) + (c0.lastVelocityTowardFood || 0);
+      if (smoothVel < wakeVelThreshold && (c0.lastVelocityTowardFood || 0) < wakeVelThreshold) {
+        this.metaState.stallStepsCount = (this.metaState.stallStepsCount || 0) + 1;
+      } else {
+        this.metaState.stallStepsCount = Math.max(0, (this.metaState.stallStepsCount || 0) - 1);
+      }
     }
 
-    if (this.metaState.mode === 'CONSOLIDATED' && !this.manualFreeze && this.metaState.stallStepsCount >= 24) {
+    if (this.metaState.mode === 'CONSOLIDATED' && !this.manualFreeze && !isPausedOrTurning && this.metaState.stallStepsCount >= 24) {
       this.metaState.mode = 'LEARNING_WALK';
       this.metaState.isLearningActive = true;
       this.metaState.stableEpochsCount = 0;

@@ -151,27 +151,53 @@ if (!recoveredFromBack) {
   process.exit(1);
 }
 
-// Тест 3б: Искусственно запрокидываем 2 лапы выше плоскости бедра при вертикальном корпусе (как на скриншоте пользователя)
+// Тест 3б: Искусственно выворачиваем колени вниз в "V"-прогиб и запрокидываем стопы выше бедра при вертикальном корпусе (как на скриншоте пользователя)
 walker.footNodes[0].pos.y = walker.hipNodes[0].pos.y + 0.16;
 walker.footNodes[0].prevPos.copy(walker.footNodes[0].pos);
-walker.kneeNodes[0].pos.y = walker.hipNodes[0].pos.y + 0.15;
+walker.kneeNodes[0].pos.y = walker.hipNodes[0].pos.y - 0.18;
 walker.kneeNodes[0].prevPos.copy(walker.kneeNodes[0].pos);
 walker.footNodes[2].pos.y = walker.hipNodes[2].pos.y + 0.16;
 walker.footNodes[2].prevPos.copy(walker.footNodes[2].pos);
-walker.kneeNodes[2].pos.y = walker.hipNodes[2].pos.y + 0.15;
+walker.kneeNodes[2].pos.y = walker.hipNodes[2].pos.y - 0.18;
 walker.kneeNodes[2].prevPos.copy(walker.kneeNodes[2].pos);
 
 trainSim.stepControl();
-console.log(`Сразу после запрокидывания 2 лап наверх: hasInvertedLeg=${walker.hasInvertedLeg()}, mode=${trainSim.trainer.metaState.mode}`);
-for (let i = 0; i < 8; i++) {
-  trainSim.stepControl();
-}
-console.log(`Через 8 шагов расправления лап: hasInvertedLeg=${walker.hasInvertedLeg()}, mode=${trainSim.trainer.metaState.mode}`);
-if (walker.hasInvertedLeg()) {
-  console.error('ОШИБКА: Запрокинутые наверх лапы должны автоматически расправляться вниз под корпус!');
+console.log(`После выворачивания коленей/стоп при вертикальном корпусе: hasInvertedLeg=${walker.hasInvertedLeg()}, mode=${trainSim.trainer.metaState.mode}`);
+if (walker.hasInvertedLeg() || trainSim.trainer.metaState.mode === 'LEARNING_RIGHTING') {
+  console.error('ОШИБКА: Механические упоры суставов должны мгновенно блокировать выворачивание лап/коленей без ложного включения LEARNING_RIGHTING!');
   process.exit(1);
 }
-console.log('ОК: Запрокинутые наверх лапы распознаются и мгновенно возвращаются под бедро на пол.');
+console.log('ОК: Механические упоры суставов (Hip & Knee Hard-Stops) мгновенно блокируют выворачивание лап/коленей.');
+
+// Тест 3в: Проверка, что ожидание нового шарика еды и разворот к нему НЕ включают ложное дообучение из CONSOLIDATED
+trainSim.uprightCreature(0);
+trainSim.trainer.wasOverturned = false;
+trainSim.trainer.metaState.mode = 'CONSOLIDATED';
+trainSim.trainer.metaState.isLearningActive = false;
+trainSim.trainer.metaState.competenceEMA = 0.22;
+trainSim.trainer.metaState.stallStepsCount = 0;
+trainSim.trainer.metaState.lowVelEpochsCount = 0;
+// Ставим шарик еды позади шагохода (разворот на ~160 градусов после поедания предыдущего шарика)
+const { forward: wFwd } = walker.getTorsoFrame();
+const wCom = walker.body.getCenterOfMass();
+walker.foodPos.set(wCom.x - wFwd.x * 1.8, walker.foodRadius, wCom.z - wFwd.z * 1.8);
+walker.postFoodTurnGraceTimer = 6.0;
+walker.smoothedVelocityTowardFood = 0.01;
+for (let s = 0; s < 30; s++) {
+  walker.foodPos.set(
+    walker.body.getCenterOfMass().x - walker.getTorsoFrame().forward.x * 1.8,
+    walker.foodRadius,
+    walker.body.getCenterOfMass().z - walker.getTorsoFrame().forward.z * 1.8
+  );
+  walker.smoothedVelocityTowardFood = 0.01;
+  trainSim.stepControl();
+}
+console.log(`Во время разворота к новой цели позади шагохода (30 шагов): mode=${trainSim.trainer.metaState.mode}, isLearningActive=${trainSim.trainer.metaState.isLearningActive}`);
+if (trainSim.trainer.metaState.mode !== 'CONSOLIDATED' || trainSim.trainer.metaState.isLearningActive) {
+  console.error('ОШИБКА: Во время паузы между целями или разворота к новой цели дообучение НЕ должно ложно включаться!');
+  process.exit(1);
+}
+console.log('ОК: Пауза между шариками и разворот к новой цели не вызывают ложного пробуждения дообучения.');
 
 console.log('\n=== 4. Проверка перетаскивания шарика еды и броска шагохода мышью ===');
 if (trainSim.trainer.metaState.ambitionPreset !== 'min' || trainSim.trainer.metaState.targetCompetence !== 0.18) {
@@ -200,13 +226,16 @@ if (trainSim.trainer.metaState.mode !== 'LEARNING_WALK' || !trainSim.trainer.met
   process.exit(1);
 }
 
-// Проверим также автоматическое пробуждение мета-чутья чисто по падению скорости из CONSOLIDATED
+// Проверим также автоматическое пробуждение мета-чутья чисто по падению скорости из CONSOLIDATED при движении прямо к цели
 trainSim.trainer.metaState.mode = 'CONSOLIDATED';
 trainSim.trainer.metaState.isLearningActive = false;
 trainSim.trainer.metaState.stallStepsCount = 0;
 trainSim.trainer.metaState.lowVelEpochsCount = 0;
+walker.postFoodTurnGraceTimer = 0;
+walker.isPausedOrTurningToFood = false;
 walker.smoothedVelocityTowardFood = 0.05;
 for (let s = 0; s < 32; s++) {
+  walker.postFoodTurnGraceTimer = 0;
   trainSim.stepControl();
 }
 console.log(`После просадки скорости на льду: mode=${trainSim.trainer.metaState.mode}, isLearningActive=${trainSim.trainer.metaState.isLearningActive}, comp=${trainSim.trainer.metaState.competenceEMA} м/с`);

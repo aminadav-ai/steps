@@ -349,6 +349,12 @@ export class ArenaSimulation {
     const nextMu = Math.max(0, Math.min(2.0, mu));
     const prevNotified = this._lastNotifiedFriction !== undefined ? this._lastNotifiedFriction : this.floorFriction;
     const isConsolidated = Boolean(this.trainer && this.trainer.metaState && this.trainer.metaState.mode === 'CONSOLIDATED');
+    if (this.creatures) {
+      for (const c of this.creatures) {
+        c.postFoodTurnGraceTimer = 0;
+        c.isPausedOrTurningToFood = false;
+      }
+    }
     if (
       this.trainer &&
       this.trainer.notifyEnvironmentChange &&
@@ -479,27 +485,57 @@ export class ArenaSimulation {
       const dz = c.foodPos.z - center.z;
       const newDist = Math.hypot(dx, dz);
 
+      // Heading alignment toward food
+      const invD = 1 / Math.max(1e-5, newDist);
+      const alignCos = (dx * invD) * forward.x + (dz * invD) * forward.z;
+      c.alignToFood = alignCos;
+
       // Velocity toward food (m/s)
       const isInThrowFlight = (c.postThrowTimer || 0) > 0;
-      const isOverturnedNow = !c.isGrabbed && !isInThrowFlight && up.y < 0.35;
+      const isOverturnedNow = !c.isGrabbed && !isInThrowFlight && up.y < 0.45;
       const isWaitingForFood = c.foodState === 'DISSOLVING' || c.foodState === 'WAITING';
+      const isDroppingFood = c.foodState === 'DROPPING';
+
+      const prevAlign = c.prevAlignToFood !== undefined ? c.prevAlignToFood : alignCos;
+      const alignRate = (alignCos - prevAlign) / dt;
+      c.prevAlignToFood = alignCos;
+
+      if (isWaitingForFood || isDroppingFood) {
+        // Give the walker a generous grace window after the new orb lands to pivot/turn toward it and accelerate
+        c.postFoodTurnGraceTimer = 8.0;
+      } else if (c.postFoodTurnGraceTimer > 0) {
+        if (alignCos < 0.82 && alignRate > 0.03) {
+          // Walker is actively pivoting toward the newly spawned target — decay timer slowly so it has all the time it needs
+          c.postFoodTurnGraceTimer = Math.max(0, c.postFoodTurnGraceTimer - dt * 0.25);
+        } else if (alignCos < 0.82) {
+          c.postFoodTurnGraceTimer = Math.max(0, c.postFoodTurnGraceTimer - dt);
+        } else {
+          c.postFoodTurnGraceTimer = Math.max(0, c.postFoodTurnGraceTimer - dt * 2.5);
+        }
+      }
+
       const rawVelToward = (c.isGrabbed || isInThrowFlight || isWaitingForFood || isOverturnedNow)
         ? 0
         : (c.prevFoodDist - newDist) / dt;
       c.prevFoodDist = newDist;
       c.lastVelocityTowardFood = rawVelToward;
-      // Smooth low-pass filtered velocity toward target (tau ~ 1.5 s, 2x smoother) so HUD readout never jumps per leg stroke
+
+      // Smooth low-pass filtered velocity toward target (for HUD display)
       if (c.isGrabbed || isInThrowFlight || isWaitingForFood || isOverturnedNow) {
         c.smoothedVelocityTowardFood = 0.96 * c.smoothedVelocityTowardFood;
       } else {
         c.smoothedVelocityTowardFood = 0.965 * c.smoothedVelocityTowardFood + 0.035 * rawVelToward;
       }
+
+      // Whether the walker is currently standing without a target or turning in place toward a newly spawned orb:
+      // Meta-plasticity ("Чутьё") must NOT mistake waiting for food or turning in place for a loss of walking skill!
+      c.isPausedOrTurningToFood =
+        isWaitingForFood ||
+        isDroppingFood ||
+        (c.postFoodTurnGraceTimer > 0 && (alignCos < 0.82 || rawVelToward < 0.14));
+
       const velToward = rawVelToward;
       stepVelSum += velToward;
-
-      // Heading alignment toward food
-      const invD = 1 / Math.max(1e-5, newDist);
-      const alignCos = (dx * invD) * forward.x + (dz * invD) * forward.z;
 
       const prevUpY = c.prevUpY !== undefined ? c.prevUpY : up.y;
       c.prevUpY = up.y;
