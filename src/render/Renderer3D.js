@@ -18,6 +18,7 @@ export class Renderer3D {
     this.camPitch = 0.52;
     this.camDist = 9.2;
     this.camTarget = new Vec3(0, 0.2, 0);
+    this.filteredLeaderPos = new Vec3(0, 0.2, 0);
     this.followLeader = true;
     this.showForceVectors = true;
     this.showAllPopulation = true;
@@ -108,13 +109,28 @@ export class Renderer3D {
 
     if (this.followLeader && leader) {
       const com = leader.body.getCenterOfMass();
-      this.camTarget.x += (com.x - this.camTarget.x) * 0.12;
-      this.camTarget.y += (0.22 - this.camTarget.y) * 0.12;
-      this.camTarget.z += (com.z - this.camTarget.z) * 0.12;
+      // Stage 1: Heavy low-pass filter on CoM removes 1.65 Hz stepping sway
+      this.filteredLeaderPos.x += (com.x - this.filteredLeaderPos.x) * 0.025;
+      this.filteredLeaderPos.z += (com.z - this.filteredLeaderPos.z) * 0.025;
+
+      // Stage 2: Soft deadzone radius (0.45 m) so floor grid stays completely still
+      // while the creature steps inside the focus zone, gliding only when it walks further
+      const dx = this.filteredLeaderPos.x - this.camTarget.x;
+      const dz = this.filteredLeaderPos.z - this.camTarget.z;
+      const dist = Math.hypot(dx, dz);
+      const deadzone = 0.45;
+      if (dist > deadzone) {
+        const excess = dist - deadzone;
+        const nx = dx / dist;
+        const nz = dz / dist;
+        this.camTarget.x += nx * excess * 0.04;
+        this.camTarget.z += nz * excess * 0.04;
+      }
+      this.camTarget.y = 0.20;
     } else {
-      this.camTarget.x += (0 - this.camTarget.x) * 0.1;
-      this.camTarget.y += (0.2 - this.camTarget.y) * 0.1;
-      this.camTarget.z += (0 - this.camTarget.z) * 0.1;
+      this.camTarget.x += (0 - this.camTarget.x) * 0.05;
+      this.camTarget.y = 0.20;
+      this.camTarget.z += (0 - this.camTarget.z) * 0.05;
     }
 
     const cosP = Math.cos(this.camPitch);

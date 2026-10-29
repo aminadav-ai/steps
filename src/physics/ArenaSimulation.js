@@ -210,12 +210,10 @@ export class ArenaSimulation {
         this._spawnFoodForCreature(c, false);
       }
 
-      // Check if creature flipped upside down or exceeded episode horizon
-      const flipped = up.y < 0.18 || center.y < 0.11;
+      // Only reset a creature if it physically flips upside down; never interrupt continuous walking!
+      const flipped = up.y < 0.18 || center.y < 0.10;
       if (flipped) {
         r -= 2.2;
-        dones[i] = 1;
-      } else if (c.episodeSteps >= 500) {
         dones[i] = 1;
       }
 
@@ -230,17 +228,16 @@ export class ArenaSimulation {
       }
     }
 
-    // Track leader (Worker 0 or creature with highest foodCollected / cumulativeReward)
-    let bestIdx = 0;
-    let bestScore = -Infinity;
+    // Track leader with strong hysteresis so camera never flickers between close workers
+    const currentBest = this.creatures[this.bestCreatureIdx] || this.creatures[0];
+    const currentBestScore = currentBest.foodCollected * 35 + currentBest.cumulativeReward + (this.bestCreatureIdx === 0 ? 15 : 0);
     for (let i = 0; i < this.populationSize; i++) {
-      const score = this.creatures[i].foodCollected * 25 + this.creatures[i].cumulativeReward + (i === 0 ? 5 : 0);
-      if (score > bestScore) {
-        bestScore = score;
-        bestIdx = i;
+      const score = this.creatures[i].foodCollected * 35 + this.creatures[i].cumulativeReward + (i === 0 ? 15 : 0);
+      // Require a substantial margin (+35 points = +1 full food + reward lead) to switch camera target
+      if (score > currentBestScore + 35) {
+        this.bestCreatureIdx = i;
       }
     }
-    this.bestCreatureIdx = bestIdx;
 
     this.recentStepRewards.push(stepRewSum / this.populationSize);
     this.recentVelocities.push(stepVelSum / this.populationSize);
