@@ -654,6 +654,9 @@ chkFollowLeader.addEventListener('change', () => {
 
 chkShowForces.addEventListener('change', () => {
   renderer3D.showForceVectors = chkShowForces.checked;
+  if (sim) {
+    renderer3D.render(sim, paused ? 1.0 : Math.min(1.0, simTimeAccum / sim.subDt));
+  }
   logger.recordUserEvent('toggle_force_vectors', { showForceVectors: chkShowForces.checked }, sim, renderer3D, getUIState());
 });
 

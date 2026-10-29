@@ -121,8 +121,10 @@ export class PhysicsNode {
 
     // Contact telemetry for sensors & visualization
     this.inContact = false;
-    this.normalForce = 0; // Newtons
+    this.normalForce = 0; // Newtons (accumulated over control step for RL sensors)
     this.frictionForceVec = new Vec3(0, 0, 0); // Newtons on node from floor
+    this.renderNormalForce = 0; // Smoothed instantaneous normal force (N) for 3D vector visualization
+    this.renderFrictionVec = new Vec3(0, 0, 0); // Smoothed instantaneous friction force (N) for 3D vector visualization
   }
 }
 
@@ -325,6 +327,10 @@ export class PhysicsWorld3D {
 
       for (let i = 0; i < body.nodes.length; i++) {
         const node = body.nodes[i];
+        node._subContact = false;
+        node._subNormalForce = 0;
+        node._subFrictionX = 0;
+        node._subFrictionZ = 0;
         if (node.invMass === 0) continue;
         node.prevPos.copy(node.pos);
 
@@ -429,9 +435,11 @@ export class PhysicsWorld3D {
               node.prevPos.y = node.radius;
             }
             node.inContact = true;
+            node._subContact = true;
 
             const normalForceIter = penetration * node.mass * invSubDtSq;
             node.normalForce += normalForceIter / this.substeps;
+            node._subNormalForce += normalForceIter;
 
             const slipX = node.pos.x - node.prevPos.x;
             const slipZ = node.pos.z - node.prevPos.z;
@@ -448,10 +456,12 @@ export class PhysicsWorld3D {
               node.pos.x += corrX;
               node.pos.z += corrZ;
 
-              const fx = (corrX * node.mass * invSubDtSq) / this.substeps;
-              const fz = (corrZ * node.mass * invSubDtSq) / this.substeps;
-              node.frictionForceVec.x += fx;
-              node.frictionForceVec.z += fz;
+              const instFx = corrX * node.mass * invSubDtSq;
+              const instFz = corrZ * node.mass * invSubDtSq;
+              node.frictionForceVec.x += instFx / this.substeps;
+              node.frictionForceVec.z += instFz / this.substeps;
+              node._subFrictionX += instFx;
+              node._subFrictionZ += instFz;
             }
           }
 
@@ -476,6 +486,15 @@ export class PhysicsWorld3D {
 
         if (node.inContact && node.vel.y < 0) {
           node.vel.y = 0;
+        }
+        if (node._subContact) {
+          node.renderNormalForce = 0.65 * (node.renderNormalForce || node._subNormalForce) + 0.35 * node._subNormalForce;
+          node.renderFrictionVec.x = 0.60 * (node.renderFrictionVec.x || 0) + 0.40 * node._subFrictionX;
+          node.renderFrictionVec.z = 0.60 * (node.renderFrictionVec.z || 0) + 0.40 * node._subFrictionZ;
+        } else {
+          node.renderNormalForce = 0.5 * (node.renderNormalForce || 0);
+          node.renderFrictionVec.x *= 0.5;
+          node.renderFrictionVec.z *= 0.5;
         }
       }
     }
