@@ -180,23 +180,12 @@ async function startNewExperiment({ clearSaved = false } = {}) {
 }
 
 async function restoreOrStartExperiment() {
-  let localCkpt = null;
+  let ckpt = null;
   try {
     const raw = localStorage.getItem(CREATURE_STORAGE_KEY);
-    if (raw) localCkpt = JSON.parse(raw);
+    if (raw) ckpt = JSON.parse(raw);
   } catch {
-    localCkpt = null;
-  }
-
-  const diskLog = await logger.resumeExistingExperiment();
-  const diskCkpt = diskLog && diskLog.bestSnapshot && diskLog.bestSnapshot.savedCheckpoint
-    ? diskLog.bestSnapshot.savedCheckpoint
-    : null;
-
-  // Pick whichever checkpoint has more progress / is newer
-  let ckpt = localCkpt;
-  if (diskCkpt && (!ckpt || (diskCkpt.simTime || 0) > (ckpt.simTime || 0))) {
-    ckpt = diskCkpt;
+    ckpt = null;
   }
 
   if (ckpt && ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
@@ -219,70 +208,7 @@ async function restoreOrStartExperiment() {
     chartRenderer.render(sim.history, isLearningNow);
     const leader = sim.creatures[0];
     nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
-    renderLogsList(logger.savedLogsList);
-    updateHUD(true);
-    saveCreatureCheckpoint();
-    return;
-  }
-
-  // Fallback migration if diskLog exists from right before savedCheckpoint was added:
-  const wt = diskLog && diskLog.bestSnapshot && diskLog.bestSnapshot.walkerAndTraining
-    ? diskLog.bestSnapshot.walkerAndTraining
-    : null;
-  if (wt && (wt.updateCount > 0 || wt.simTime > 1)) {
-    const morphKey = diskLog.morphology || 'tripod';
-    const alg = diskLog.algorithm || 'ppo';
-    selectMorphology.value = morphKey;
-    selectAlgorithm.value = alg;
-    const spec = MORPHOLOGY_REGISTRY[morphKey];
-    morphDescription.textContent = spec.description;
-    nnDimLabel.textContent = `${spec.obsDim} → 32 → 24 → ${spec.actDim}`;
-
-    sim = new ArenaSimulation({
-      morphologyKey: morphKey,
-      algorithm: alg,
-      populationSize: 1,
-      arenaHalfSize: 11.0,
-      floorFriction: typeof wt.floorFriction === 'number' ? wt.floorFriction : 1.0
-    });
-
-    // Warm-up neural weights to match the logged training progress
-    const warmupUpdates = Math.min(16, Math.max(1, wt.updateCount || 8));
-    sim._isHeadlessFastTrain = true;
-    for (let u = 0; u < warmupUpdates; u++) {
-      while (!sim.stepControl()) {}
-    }
-    sim._isHeadlessFastTrain = false;
-
-    sim.simTime = wt.simTime || sim.simTime;
-    sim.trainer.updateCount = wt.updateCount || sim.trainer.updateCount;
-    if (Array.isArray(diskLog.history) && diskLog.history.length > 0) {
-      sim.history = diskLog.history.slice();
-    }
-    if (wt.metaState) {
-      sim.trainer.metaState = { ...sim.trainer.metaState, ...wt.metaState };
-    }
-    const c0 = sim.creatures[0];
-    if (c0 && wt.mainWalker) {
-      c0.foodCollected = wt.mainWalker.foodCollected || 0;
-      sim.totalFoodCollected = wt.totalPopulationFood || c0.foodCollected;
-      if (Array.isArray(wt.mainWalker.foodPos) && wt.mainWalker.foodPos.length >= 2) {
-        c0.foodPos.set(wt.mainWalker.foodPos[0], 0.16, wt.mainWalker.foodPos[1]);
-      }
-      if (c0.getTorsoFrame().up.y < 0.45) {
-        sim.uprightCreature(0);
-      }
-    }
-    applyRestoredUIState({
-      morphologyKey: morphKey,
-      algorithm: alg,
-      floorFriction: sim.floorFriction,
-      trainer: { metaState: sim.trainer.metaState }
-    });
-    renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
-    const isLearningNow = !sim.trainer.metaState || sim.trainer.metaState.isLearningActive;
-    chartRenderer.render(sim.history, isLearningNow);
-    nnRenderer.render(sim.brain, c0 ? c0.logicalDoFs : null);
+    await logger.refreshLogsList();
     renderLogsList(logger.savedLogsList);
     updateHUD(true);
     saveCreatureCheckpoint();
