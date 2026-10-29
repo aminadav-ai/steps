@@ -346,14 +346,17 @@ function attachOrthogonalLeg({
 function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }) {
   const body = new ArticulatedBody();
 
+  // Self-righting Gömböc / keel mass distribution:
+  // Light high dorsal spire (torsoTop) + heavy low ballast keel (torsoBottom)
+  // keeps the center of mass below the hip plane so the walker naturally rights itself if tilted!
   const torsoTop = body.addNode({
     id: `c${id}_top`,
     x: origin.x,
-    y: origin.y + 0.36,
+    y: origin.y + 0.48,
     z: origin.z,
-    mass: 0.32,
-    radius: 0.075,
-    friction: 0.04,
+    mass: 0.10,
+    radius: 0.065,
+    friction: 0.02,
     role: 'torso',
     color
   });
@@ -361,9 +364,9 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
   const torsoBottom = body.addNode({
     id: `c${id}_bottom`,
     x: origin.x,
-    y: origin.y + 0.22,
+    y: origin.y + 0.16,
     z: origin.z,
-    mass: 0.32,
+    mass: 0.72,
     radius: 0.065,
     friction: 0.04,
     role: 'torso',
@@ -373,10 +376,10 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
   const noseNode = body.addNode({
     id: `c${id}_nose`,
     x: origin.x + 0.34,
-    y: origin.y + 0.25,
+    y: origin.y + 0.24,
     z: origin.z,
-    mass: 0.22,
-    radius: 0.065,
+    mass: 0.18,
+    radius: 0.060,
     friction: 0.04,
     role: 'head',
     color
@@ -385,10 +388,10 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
   const tailNode = body.addNode({
     id: `c${id}_tail`,
     x: origin.x - 0.36,
-    y: origin.y + 0.25,
+    y: origin.y + 0.24,
     z: origin.z,
-    mass: 0.22,
-    radius: 0.065,
+    mass: 0.18,
+    radius: 0.060,
     friction: 0.04,
     role: 'hip',
     color
@@ -407,8 +410,8 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
       x: origin.x + hc.x,
       y: origin.y + hc.y,
       z: origin.z + hc.z,
-      mass: 0.24,
-      radius: 0.065,
+      mass: 0.18,
+      radius: 0.060,
       friction: 0.04,
       role: 'hip',
       color
@@ -475,10 +478,10 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
   const torsoTop = body.addNode({
     id: `c${id}_top`,
     x: origin.x,
-    y: origin.y + 0.44,
+    y: origin.y + 0.46,
     z: origin.z,
-    mass: 0.36,
-    radius: 0.08,
+    mass: 0.12,
+    radius: 0.068,
     friction: 0.04,
     role: 'torso',
     color
@@ -487,10 +490,10 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
   const torsoBottom = body.addNode({
     id: `c${id}_bottom`,
     x: origin.x,
-    y: origin.y + 0.20,
+    y: origin.y + 0.16,
     z: origin.z,
-    mass: 0.30,
-    radius: 0.068,
+    mass: 0.68,
+    radius: 0.065,
     friction: 0.04,
     role: 'torso',
     color

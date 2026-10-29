@@ -157,7 +157,19 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
   expStatusBadge.textContent = '⚡ ТУРБО-ОБУЧЕНИЕ...';
   expStatusBadge.style.color = '#38bdf8';
 
-  const startUpd = sim.trainer.updateCount;
+  // Preserve the main creature's current physical position and food target so it doesn't jump
+  // while the neural network trains in the background!
+  const c0 = sim.creatures[0];
+  const savedNodes = c0.body.nodes.map(n => ({
+    pos: n.pos.clone(),
+    prevPos: n.prevPos.clone(),
+    vel: n.vel.clone()
+  }));
+  const savedFoodPos = c0.foodPos.clone();
+  const savedPrevFoodDist = c0.prevFoodDist;
+  const savedFoodCollected = c0.foodCollected;
+  const savedPhase = c0.phase;
+
   for (let u = 1; u <= targetUpdates; u++) {
     let updateEntry = null;
     while (!updateEntry) {
@@ -166,19 +178,34 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
     handleUpdateEntry(updateEntry);
     btnFastTrain.textContent = `⚡ Обучение в фоне: ${u} / ${targetUpdates} эпох...`;
 
-    if (u % 2 === 0) {
+    if (u % 3 === 0) {
+      // Keep c0 visually anchored at its current spot during headless background training
+      for (let i = 0; i < savedNodes.length; i++) {
+        c0.body.nodes[i].pos.copy(savedNodes[i].pos);
+        c0.body.nodes[i].prevPos.copy(savedNodes[i].prevPos);
+        c0.body.nodes[i].vel.copy(savedNodes[i].vel);
+      }
+      c0.foodPos.copy(savedFoodPos);
+      c0.prevFoodDist = savedPrevFoodDist;
+      c0.foodCollected = savedFoodCollected;
+      c0.phase = savedPhase;
       updateHUD();
       await new Promise(r => setTimeout(r, 0));
     }
   }
 
-  // Smoothly snap camera to the trained walker's current position and resume at 1x real time
-  const c0 = sim.creatures[0];
-  if (c0) {
-    const com = c0.body.getCenterOfMass();
-    renderer3D.filteredLeaderPos.set(com.x, 0.18, com.z);
-    renderer3D.camTarget.set(com.x, 0.18, com.z);
+  // Restore c0 to its exact pre-training physical state so it continues seamlessly from the exact same spot
+  // with its newly upgraded neural network brain!
+  for (let i = 0; i < savedNodes.length; i++) {
+    c0.body.nodes[i].pos.copy(savedNodes[i].pos);
+    c0.body.nodes[i].prevPos.copy(savedNodes[i].prevPos);
+    c0.body.nodes[i].vel.copy(savedNodes[i].vel);
   }
+  c0.foodPos.copy(savedFoodPos);
+  c0.prevFoodDist = savedPrevFoodDist;
+  c0.foodCollected = savedFoodCollected;
+  c0.phase = savedPhase;
+
   simTimeAccum = 0;
   lastFrameTime = performance.now();
   setPausedState(false);

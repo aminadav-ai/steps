@@ -238,11 +238,14 @@ export class ArenaSimulation {
         this._spawnFoodForCreature(c, false);
       }
 
-      // Only reset a creature if it physically flips upside down; never interrupt continuous walking!
-      const flipped = up.y < 0.18 || center.y < 0.10;
+      // Penalize excessive tilt; background workers (i > 0) reset if completely inverted,
+      // while the main observed creature (i === 0) NEVER teleports or resets — it lives one unbroken physical life!
+      const flipped = up.y < 0.12 || center.y < 0.08;
       if (flipped) {
         r -= 2.2;
-        dones[i] = 1;
+        if (i > 0) {
+          dones[i] = 1;
+        }
       }
 
       c.lastStepReward = r;
@@ -251,7 +254,7 @@ export class ArenaSimulation {
       rewards[i] = r;
       stepRewSum += r;
 
-      if (dones[i]) {
+      if (dones[i] && i > 0) {
         this._resetCreatureBody(i);
       }
     }
