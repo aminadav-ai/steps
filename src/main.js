@@ -71,7 +71,6 @@ const speedButtons = document.getElementById('speedButtons');
 const rangeFriction = document.getElementById('rangeFriction');
 const labelFrictionVal = document.getElementById('labelFrictionVal');
 const chkFollowLeader = document.getElementById('chkFollowLeader');
-const chkShowForces = document.getElementById('chkShowForces');
 
 const hudUpdate = document.getElementById('hudUpdate');
 const hudSimTime = document.getElementById('hudSimTime');
@@ -405,7 +404,6 @@ function getUIState() {
     simSpeed,
     floorFriction: parseFloat(rangeFriction.value),
     followLeader: chkFollowLeader.checked,
-    showForceVectors: chkShowForces.checked,
     morphology: selectMorphology.value,
     algorithm: selectAlgorithm.value
   };
@@ -650,14 +648,6 @@ chkFollowLeader.addEventListener('change', () => {
     renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
   }
   logger.recordUserEvent('toggle_follow_camera', { followLeader: chkFollowLeader.checked }, sim, renderer3D, getUIState());
-});
-
-chkShowForces.addEventListener('change', () => {
-  renderer3D.showForceVectors = chkShowForces.checked;
-  if (sim) {
-    renderer3D.render(sim, paused ? 1.0 : Math.min(1.0, simTimeAccum / sim.subDt));
-  }
-  logger.recordUserEvent('toggle_force_vectors', { showForceVectors: chkShowForces.checked }, sim, renderer3D, getUIState());
 });
 
 if (ambitionButtons) {

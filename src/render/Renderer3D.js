@@ -27,7 +27,6 @@ export class Renderer3D {
     this.filteredLeaderPos = new Vec3(0, 0.18, 0);
 
     this.followLeader = true;
-    this.showForceVectors = true;
     this.showAllPopulation = false;
     this.onTogglePause = null;
     this.onCameraAction = null;
@@ -1018,78 +1017,6 @@ export class Renderer3D {
       ctx.strokeStyle = 'rgba(15, 23, 42, 0.85)';
       ctx.lineWidth = 1.2;
       ctx.stroke();
-    }
-
-    // 6. Render Physical Reaction Force Vectors (Normal N_i and Friction F_tr) ON TOP of foot nodes
-    if (this.showForceVectors && isFocused) {
-      const drawArrow = (pStart, pEnd, color, lineWidth = 2.4) => {
-        if (!pStart || !pEnd) return;
-        const dx = pEnd.sx - pStart.sx;
-        const dy = pEnd.sy - pStart.sy;
-        const len = Math.hypot(dx, dy);
-        if (len < 3) return;
-        const angle = Math.atan2(dy, dx);
-        const headLen = Math.min(9, Math.max(5, len * 0.32));
-
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color;
-        ctx.lineWidth = lineWidth;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(pStart.sx, pStart.sy);
-        ctx.lineTo(pEnd.sx, pEnd.sy);
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.moveTo(pEnd.sx, pEnd.sy);
-        ctx.lineTo(
-          pEnd.sx - headLen * Math.cos(angle - Math.PI / 6),
-          pEnd.sy - headLen * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.lineTo(
-          pEnd.sx - headLen * Math.cos(angle + Math.PI / 6),
-          pEnd.sy - headLen * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.closePath();
-        ctx.fill();
-      };
-
-      for (let i = 0; i < creature.footNodes.length; i++) {
-        const foot = creature.footNodes[i];
-        if (!foot) continue;
-        const nForce = Math.max(foot.renderNormalForce || 0, foot.normalForce || 0);
-        if (!foot.inContact && nForce <= 0.12) continue;
-
-        const footPos = posOf(foot);
-        const pFoot = proj(footPos);
-        if (!pFoot) continue;
-
-        // Green vector: Normal Reaction Force N_i (always clearly visible above the foot sphere when in contact)
-        const vecHeight = Math.min(0.45, 0.14 + nForce * 0.018);
-        const nTop = proj(new Vec3(
-          footPos.x,
-          footPos.y + vecHeight,
-          footPos.z
-        ));
-        drawArrow(pFoot, nTop, '#4ade80', 2.4);
-
-        // Yellow vector: Horizontal Floor Friction Force F_friction propelling the creature
-        const fVec = (foot.renderFrictionVec && (Math.abs(foot.renderFrictionVec.x) + Math.abs(foot.renderFrictionVec.z) > 1e-4))
-          ? foot.renderFrictionVec
-          : foot.frictionForceVec;
-        const fMag = Math.hypot(fVec.x, fVec.z);
-        if (fMag > 0.04) {
-          const dirX = fVec.x / fMag;
-          const dirZ = fVec.z / fMag;
-          const fLen = Math.min(0.44, 0.10 + fMag * 0.028);
-          const fEnd = proj(new Vec3(
-            footPos.x + dirX * fLen,
-            footPos.y,
-            footPos.z + dirZ * fLen
-          ));
-          drawArrow(pFoot, fEnd, '#facc15', 2.6);
-        }
-      }
     }
 
     ctx.restore();
