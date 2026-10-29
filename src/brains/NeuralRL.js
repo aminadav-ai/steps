@@ -484,6 +484,12 @@ export class ActorCriticBrain {
       const row = a * this.obsDim;
       let normSq = 0;
       for (let c = 0; c < this.obsDim; c++) {
+        // Keep actorSkip strictly on oscillatory CPG & sensory-gated CPG channels (10..15)
+        // so static sensors never create a DC leg lock!
+        if (c < 10 || c > 15) {
+          skipW[row + c] = 0;
+          continue;
+        }
         const w = Math.max(-0.95, Math.min(0.95, skipW[row + c]));
         skipW[row + c] = w;
         normSq += w * w;
@@ -491,7 +497,7 @@ export class ActorCriticBrain {
       const maxRowNorm = 1.25;
       if (normSq > maxRowNorm * maxRowNorm) {
         const scale = maxRowNorm / Math.sqrt(normSq);
-        for (let c = 0; c < this.obsDim; c++) {
+        for (let c = 10; c <= 15 && c < this.obsDim; c++) {
           skipW[row + c] *= scale;
         }
       }
@@ -1002,17 +1008,30 @@ export class PPOTrainer {
 
     // Single-Walker (or Multi-Worker) Parameter-Space Natural Step on actorSkip.W:
     const skipW = this.brain.actorSkip.W;
+    if (!this.bestSkipW) {
+      this.bestSkipW = Float64Array.from(skipW);
+      this.bestScore = 0.14;
+    }
+    const score0 = workerLocomotionScore[0] / T;
     if (W === 1) {
-      const score0 = workerLocomotionScore[0] / T;
       const pert0 = this.workerSkipPerturbs[0];
       if (pert0) {
-        if (score0 >= this.baselineLocomotionScore - 0.02) {
-          const alpha = score0 > this.baselineLocomotionScore ? 0.38 : 0.18;
+        if (score0 >= this.baselineLocomotionScore - 0.01) {
+          const alpha = score0 > this.bestScore ? 0.45 : 0.22;
           for (let i = 0; i < skipW.length; i++) {
             skipW[i] += alpha * pert0[i];
           }
+          if (score0 > this.bestScore) {
+            this.bestScore = 0.65 * this.bestScore + 0.35 * score0;
+            this.bestSkipW = Float64Array.from(skipW);
+          }
+        } else if (score0 < this.bestScore * 0.65) {
+          // Restore toward best known CPG gait matrix so a poor exploration rollout never degrades locomotion
+          for (let i = 0; i < skipW.length; i++) {
+            skipW[i] = 0.80 * this.bestSkipW[i] + 0.20 * skipW[i];
+          }
         }
-        this.baselineLocomotionScore = 0.75 * this.baselineLocomotionScore + 0.25 * Math.max(0.05, score0);
+        this.baselineLocomotionScore = 0.75 * this.baselineLocomotionScore + 0.25 * Math.max(0.08, score0);
       }
     } else {
       const rankedWorkers = Array.from({ length: W - 1 }, (_, i) => i + 1).sort(
@@ -1061,8 +1080,9 @@ export class PPOTrainer {
       advVar += d * d;
     }
     const advStd = Math.sqrt(advVar / totalSamples) + 1e-6;
+    const epochBonus = W === 1 ? Math.max(-0.2, Math.min(0.75, (score0 - 0.12) * 2.5)) : 0.0;
     for (let i = 0; i < totalSamples; i++) {
-      flatAdv[i] = (flatAdv[i] - advMean) / advStd;
+      flatAdv[i] = (flatAdv[i] - advMean) / advStd + epochBonus;
     }
 
     // Mini-batch PPO + Adam Backpropagation updates
