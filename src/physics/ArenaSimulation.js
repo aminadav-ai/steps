@@ -36,7 +36,10 @@ export class ArenaSimulation {
     this.floorFriction = floorFriction;
 
     this.controlDt = 0.05; // 20 Hz neural control tick
-    this.cpgOmega = 2 * Math.PI * 1.65; // 1.65 Hz base pacemaker frequency
+    this.substepsPerControl = 10;
+    this.subDt = this.controlDt / this.substepsPerControl; // 0.005s (200 Hz physics)
+    this.substepCursor = 0;
+    this.cpgOmega = 2 * Math.PI * 1.45; // 1.45 Hz natural stride frequency
     this.simTime = 0;
     this.totalSteps = 0;
     this.totalFoodCollected = 0;
@@ -140,32 +143,56 @@ export class ArenaSimulation {
   }
 
   /**
-   * Executes one neural control step (dt = 0.05s, 10 physics substeps = 200Hz).
-   * Returns an update summary object if a PPO/NES weight update occurred on this tick.
+   * Advances the simulation by a single 200Hz physics substep (subDt = 0.005s).
+   * At substep 0, queries the neural network for target actions;
+   * at substep 10, evaluates rewards and triggers PPO/NES learning when ready.
+   * This allows ultra-smooth slow-motion inspection (0.05x, 0.1x, 0.25x, 0.5x, 1.0x)
+   * with 100% identical deterministic physics!
    */
-  stepControl() {
+  stepPhysicsSubstep() {
     const dt = this.controlDt;
-    this.simTime += dt;
-    this.totalSteps += 1;
+    const subDt = this.subDt;
 
-    // Advance internal phase clocks
-    for (let i = 0; i < this.populationSize; i++) {
-      this.creatures[i].phase = (this.creatures[i].phase + this.cpgOmega * dt) % (Math.PI * 2);
-      this.creatures[i].ageTime += dt;
-      this.creatures[i].episodeSteps += 1;
+    if (this.substepCursor === 0) {
+      this.totalSteps += 1;
+      for (let i = 0; i < this.populationSize; i++) {
+        this.creatures[i].phase = (this.creatures[i].phase + this.cpgOmega * dt) % (Math.PI * 2);
+        this.creatures[i].ageTime += dt;
+        this.creatures[i].episodeSteps += 1;
+      }
+      this.trainer.selectActions(this.creatures);
+      this.world.resetContactTelemetry((body, idx) => {
+        const c = this.creatures[idx];
+        if (c && c.lastAction) {
+          c.applyActionVector(c.lastAction);
+        }
+      });
     }
 
-    // 1. Query neural network policy for all parallel creatures
-    this.trainer.selectActions(this.creatures);
+    this.world.stepSingleSubstep(subDt);
+    this.simTime += subDt;
+    this.substepCursor += 1;
 
-    // 2. Step 3D rigid/articulated physics with substeps
-    this.world.step(dt, (body, idx) => {
-      const c = this.creatures[idx];
-      if (c && c.lastAction) {
-        c.applyActionVector(c.lastAction);
-      }
-    });
+    if (this.substepCursor < this.substepsPerControl) {
+      return null;
+    }
 
+    this.substepCursor = 0;
+    return this._completeControlStep(dt);
+  }
+
+  /**
+   * Executes one full neural control step (dt = 0.05s = 10 physics substeps).
+   */
+  stepControl() {
+    let result = null;
+    do {
+      result = this.stepPhysicsSubstep();
+    } while (this.substepCursor !== 0);
+    return result;
+  }
+
+  _completeControlStep(dt) {
     // 3. Evaluate physical rewards, food collection, and posture termination
     const rewards = new Float64Array(this.populationSize);
     const dones = new Uint8Array(this.populationSize);

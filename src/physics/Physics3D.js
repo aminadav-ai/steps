@@ -291,18 +291,7 @@ export class PhysicsWorld3D {
     this.bodies = [];
   }
 
-  /**
-   * Advances all articulated bodies by dt seconds using coupled XPBD substeps
-   * where Bone, Muscle, and Floor Coulomb Friction constraints are solved simultaneously
-   * so ground reaction forces transmit faithfully through the skeleton into the torso.
-   */
-  step(dt, actionCallback = null) {
-    const subDt = dt / this.substeps;
-    const invSubDt = 1 / subDt;
-    const invSubDtSq = invSubDt * invSubDt;
-    const solverIterations = 4;
-
-    // Reset contact telemetry accumulated over the step
+  resetContactTelemetry(actionCallback = null) {
     for (let b = 0; b < this.bodies.length; b++) {
       const body = this.bodies[b];
       for (let i = 0; i < body.nodes.length; i++) {
@@ -315,176 +304,188 @@ export class PhysicsWorld3D {
         actionCallback(body, b);
       }
     }
+  }
 
+  stepSingleSubstep(subDt) {
+    const invSubDt = 1 / subDt;
+    const invSubDtSq = invSubDt * invSubDt;
+    const solverIterations = 4;
     const halfArena = this.arenaHalfSize;
 
-    for (let s = 0; s < this.substeps; s++) {
-      // 1. Predict unconstrained motion under gravity
+    // 1. Predict unconstrained motion under gravity & clear instantaneous substep contact forces
+    for (let b = 0; b < this.bodies.length; b++) {
+      const body = this.bodies[b];
+      for (let m = 0; m < body.muscles.length; m++) {
+        body.muscles[m].updateTelemetryAndTarget(subDt);
+        body.muscles[m].lambda = 0;
+      }
+      for (let c = 0; c < body.bones.length; c++) {
+        body.bones[c].lambda = 0;
+      }
+
+      for (let i = 0; i < body.nodes.length; i++) {
+        const node = body.nodes[i];
+        if (node.invMass === 0) continue;
+        node.prevPos.copy(node.pos);
+
+        const airDrag = Math.max(0, 1 - 0.02 * subDt);
+        node.vel.x *= airDrag;
+        node.vel.y = (node.vel.y + this.gravity * subDt) * airDrag;
+        node.vel.z *= airDrag;
+
+        node.pos.x += node.vel.x * subDt;
+        node.pos.y += node.vel.y * subDt;
+        node.pos.z += node.vel.z * subDt;
+      }
+    }
+
+    // 2. Coupled XPBD Iteration Loop: Muscles + Bones + Floor Contact & Coulomb Friction
+    for (let iter = 0; iter < solverIterations; iter++) {
       for (let b = 0; b < this.bodies.length; b++) {
         const body = this.bodies[b];
-        for (let m = 0; m < body.muscles.length; m++) {
-          body.muscles[m].updateTelemetryAndTarget(subDt);
-          body.muscles[m].lambda = 0;
-        }
-        for (let c = 0; c < body.bones.length; c++) {
-          body.bones[c].lambda = 0;
+
+        // 2a. Active Muscles
+        const muscles = body.muscles;
+        for (let m = 0; m < muscles.length; m++) {
+          const mus = muscles[m];
+          const nA = mus.nodeA;
+          const nB = mus.nodeB;
+          const wSum = nA.invMass + nB.invMass;
+          if (wSum === 0) continue;
+
+          const dx = nB.pos.x - nA.pos.x;
+          const dy = nB.pos.y - nA.pos.y;
+          const dz = nB.pos.z - nA.pos.z;
+          const dist = Math.hypot(dx, dy, dz);
+          if (dist < 1e-8) continue;
+
+          const C = dist - mus.targetLength;
+          const alphaTilde = mus.compliance * invSubDtSq;
+          let dLambda = (-C - alphaTilde * mus.lambda) / (wSum + alphaTilde);
+
+          const maxLambda = mus.maxForce * subDt * subDt;
+          const newLambda = Math.max(-maxLambda, Math.min(maxLambda, mus.lambda + dLambda));
+          dLambda = newLambda - mus.lambda;
+          mus.lambda = newLambda;
+          mus.appliedForce = mus.lambda * invSubDtSq;
+
+          const corr = dLambda / dist;
+          const cx = dx * corr;
+          const cy = dy * corr;
+          const cz = dz * corr;
+
+          nA.pos.x -= cx * nA.invMass;
+          nA.pos.y -= cy * nA.invMass;
+          nA.pos.z -= cz * nA.invMass;
+
+          nB.pos.x += cx * nB.invMass;
+          nB.pos.y += cy * nB.invMass;
+          nB.pos.z += cz * nB.invMass;
         }
 
+        // 2b. Rigid Bones & Ligaments
+        const bones = body.bones;
+        for (let c = 0; c < bones.length; c++) {
+          const bone = bones[c];
+          const nA = bone.nodeA;
+          const nB = bone.nodeB;
+          const wSum = nA.invMass + nB.invMass;
+          if (wSum === 0) continue;
+
+          const dx = nB.pos.x - nA.pos.x;
+          const dy = nB.pos.y - nA.pos.y;
+          const dz = nB.pos.z - nA.pos.z;
+          const dist = Math.hypot(dx, dy, dz);
+          if (dist < 1e-8) continue;
+
+          const C = dist - bone.restLength;
+          const alphaTilde = bone.compliance * invSubDtSq;
+          const dLambda = (-C - alphaTilde * bone.lambda) / (wSum + alphaTilde);
+          bone.lambda += dLambda;
+
+          const corr = dLambda / dist;
+          const cx = dx * corr;
+          const cy = dy * corr;
+          const cz = dz * corr;
+
+          nA.pos.x -= cx * nA.invMass;
+          nA.pos.y -= cy * nA.invMass;
+          nA.pos.z -= cz * nA.invMass;
+
+          nB.pos.x += cx * nB.invMass;
+          nB.pos.y += cy * nB.invMass;
+          nB.pos.z += cz * nB.invMass;
+        }
+
+        // 2c. Floor Contact & Coulomb Friction Cone
         for (let i = 0; i < body.nodes.length; i++) {
           const node = body.nodes[i];
           if (node.invMass === 0) continue;
-          node.prevPos.copy(node.pos);
 
-          const airDrag = Math.max(0, 1 - 0.02 * subDt);
-          node.vel.x *= airDrag;
-          node.vel.y = (node.vel.y + this.gravity * subDt) * airDrag;
-          node.vel.z *= airDrag;
+          const penetration = node.radius - node.pos.y;
+          if (penetration > 0) {
+            node.pos.y = node.radius;
+            node.inContact = true;
 
-          node.pos.x += node.vel.x * subDt;
-          node.pos.y += node.vel.y * subDt;
-          node.pos.z += node.vel.z * subDt;
-        }
-      }
+            const normalForceIter = penetration * node.mass * invSubDtSq;
+            node.normalForce += normalForceIter / this.substeps;
 
-      // 2. Coupled XPBD Iteration Loop: Muscles + Bones + Floor Contact & Coulomb Friction
-      for (let iter = 0; iter < solverIterations; iter++) {
-        for (let b = 0; b < this.bodies.length; b++) {
-          const body = this.bodies[b];
+            const slipX = node.pos.x - node.prevPos.x;
+            const slipZ = node.pos.z - node.prevPos.z;
+            const slipDist = Math.hypot(slipX, slipZ);
 
-          // 2a. Active Muscles
-          const muscles = body.muscles;
-          for (let m = 0; m < muscles.length; m++) {
-            const mus = muscles[m];
-            const nA = mus.nodeA;
-            const nB = mus.nodeB;
-            const wSum = nA.invMass + nB.invMass;
-            if (wSum === 0) continue;
+            if (slipDist > 1e-9) {
+              const muEffective = this.floorFriction * node.friction;
+              const maxFrictionDisp = muEffective * penetration;
+              const arrestRatio = Math.min(1.0, maxFrictionDisp / slipDist);
 
-            const dx = nB.pos.x - nA.pos.x;
-            const dy = nB.pos.y - nA.pos.y;
-            const dz = nB.pos.z - nA.pos.z;
-            const dist = Math.hypot(dx, dy, dz);
-            if (dist < 1e-8) continue;
+              const corrX = -slipX * arrestRatio;
+              const corrZ = -slipZ * arrestRatio;
 
-            const C = dist - mus.targetLength;
-            const alphaTilde = mus.compliance * invSubDtSq;
-            let dLambda = (-C - alphaTilde * mus.lambda) / (wSum + alphaTilde);
+              node.pos.x += corrX;
+              node.pos.z += corrZ;
 
-            const maxLambda = mus.maxForce * subDt * subDt;
-            const newLambda = Math.max(-maxLambda, Math.min(maxLambda, mus.lambda + dLambda));
-            dLambda = newLambda - mus.lambda;
-            mus.lambda = newLambda;
-            mus.appliedForce = mus.lambda * invSubDtSq;
-
-            const corr = dLambda / dist;
-            const cx = dx * corr;
-            const cy = dy * corr;
-            const cz = dz * corr;
-
-            nA.pos.x -= cx * nA.invMass;
-            nA.pos.y -= cy * nA.invMass;
-            nA.pos.z -= cz * nA.invMass;
-
-            nB.pos.x += cx * nB.invMass;
-            nB.pos.y += cy * nB.invMass;
-            nB.pos.z += cz * nB.invMass;
-          }
-
-          // 2b. Rigid Bones & Ligaments
-          const bones = body.bones;
-          for (let c = 0; c < bones.length; c++) {
-            const bone = bones[c];
-            const nA = bone.nodeA;
-            const nB = bone.nodeB;
-            const wSum = nA.invMass + nB.invMass;
-            if (wSum === 0) continue;
-
-            const dx = nB.pos.x - nA.pos.x;
-            const dy = nB.pos.y - nA.pos.y;
-            const dz = nB.pos.z - nA.pos.z;
-            const dist = Math.hypot(dx, dy, dz);
-            if (dist < 1e-8) continue;
-
-            const C = dist - bone.restLength;
-            const alphaTilde = bone.compliance * invSubDtSq;
-            const dLambda = (-C - alphaTilde * bone.lambda) / (wSum + alphaTilde);
-            bone.lambda += dLambda;
-
-            const corr = dLambda / dist;
-            const cx = dx * corr;
-            const cy = dy * corr;
-            const cz = dz * corr;
-
-            nA.pos.x -= cx * nA.invMass;
-            nA.pos.y -= cy * nA.invMass;
-            nA.pos.z -= cz * nA.invMass;
-
-            nB.pos.x += cx * nB.invMass;
-            nB.pos.y += cy * nB.invMass;
-            nB.pos.z += cz * nB.invMass;
-          }
-
-          // 2c. Floor Contact & Coulomb Friction Cone (inside iteration so reaction transmits up the leg!)
-          for (let i = 0; i < body.nodes.length; i++) {
-            const node = body.nodes[i];
-            if (node.invMass === 0) continue;
-
-            const penetration = node.radius - node.pos.y;
-            if (penetration > 0) {
-              node.pos.y = node.radius;
-              node.inContact = true;
-
-              const normalForceIter = penetration * node.mass * invSubDtSq;
-              node.normalForce += normalForceIter / this.substeps;
-
-              // Horizontal slip relative to substep start
-              const slipX = node.pos.x - node.prevPos.x;
-              const slipZ = node.pos.z - node.prevPos.z;
-              const slipDist = Math.hypot(slipX, slipZ);
-
-              if (slipDist > 1e-9) {
-                const muEffective = this.floorFriction * node.friction;
-                const maxFrictionDisp = muEffective * penetration;
-                const arrestRatio = Math.min(1.0, maxFrictionDisp / slipDist);
-
-                const corrX = -slipX * arrestRatio;
-                const corrZ = -slipZ * arrestRatio;
-
-                node.pos.x += corrX;
-                node.pos.z += corrZ;
-
-                const fx = (corrX * node.mass * invSubDtSq) / this.substeps;
-                const fz = (corrZ * node.mass * invSubDtSq) / this.substeps;
-                node.frictionForceVec.x += fx;
-                node.frictionForceVec.z += fz;
-              }
+              const fx = (corrX * node.mass * invSubDtSq) / this.substeps;
+              const fz = (corrZ * node.mass * invSubDtSq) / this.substeps;
+              node.frictionForceVec.x += fx;
+              node.frictionForceVec.z += fz;
             }
-
-            // Arena Boundary Walls
-            const limit = halfArena - node.radius;
-            if (node.pos.x > limit) node.pos.x = limit;
-            else if (node.pos.x < -limit) node.pos.x = -limit;
-            if (node.pos.z > limit) node.pos.z = limit;
-            else if (node.pos.z < -limit) node.pos.z = -limit;
           }
+
+          const limit = halfArena - node.radius;
+          if (node.pos.x > limit) node.pos.x = limit;
+          else if (node.pos.x < -limit) node.pos.x = -limit;
+          if (node.pos.z > limit) node.pos.z = limit;
+          else if (node.pos.z < -limit) node.pos.z = -limit;
         }
       }
+    }
 
-      // 3. Update velocities from XPBD positions
-      for (let b = 0; b < this.bodies.length; b++) {
-        const body = this.bodies[b];
-        for (let i = 0; i < body.nodes.length; i++) {
-          const node = body.nodes[i];
-          if (node.invMass === 0) continue;
-          node.vel.x = (node.pos.x - node.prevPos.x) * invSubDt;
-          node.vel.y = (node.pos.y - node.prevPos.y) * invSubDt;
-          node.vel.z = (node.pos.z - node.prevPos.z) * invSubDt;
+    // 3. Update velocities from XPBD positions
+    for (let b = 0; b < this.bodies.length; b++) {
+      const body = this.bodies[b];
+      for (let i = 0; i < body.nodes.length; i++) {
+        const node = body.nodes[i];
+        if (node.invMass === 0) continue;
+        node.vel.x = (node.pos.x - node.prevPos.x) * invSubDt;
+        node.vel.y = (node.pos.y - node.prevPos.y) * invSubDt;
+        node.vel.z = (node.pos.z - node.prevPos.z) * invSubDt;
 
-          if (node.inContact && node.vel.y < 0) {
-            node.vel.y = 0;
-          }
+        if (node.inContact && node.vel.y < 0) {
+          node.vel.y = 0;
         }
       }
+    }
+  }
+
+  /**
+   * Advances all articulated bodies by dt seconds using coupled XPBD substeps.
+   */
+  step(dt, actionCallback = null) {
+    const subDt = dt / this.substeps;
+    this.resetContactTelemetry(actionCallback);
+    for (let s = 0; s < this.substeps; s++) {
+      this.stepSingleSubstep(subDt);
     }
   }
 }

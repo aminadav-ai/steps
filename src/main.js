@@ -24,6 +24,7 @@ const morphDescription = document.getElementById('morphDescription');
 const nnDimLabel = document.getElementById('nnDimLabel');
 const btnNewExperiment = document.getElementById('btnNewExperiment');
 const btnPause = document.getElementById('btnPause');
+const btnStepOnce = document.getElementById('btnStepOnce');
 const speedButtons = document.getElementById('speedButtons');
 const rangeFriction = document.getElementById('rangeFriction');
 const labelFrictionVal = document.getElementById('labelFrictionVal');
@@ -105,17 +106,51 @@ selectMorphology.addEventListener('change', () => startNewExperiment());
 selectAlgorithm.addEventListener('change', () => startNewExperiment());
 btnNewExperiment.addEventListener('click', () => startNewExperiment());
 
-btnPause.addEventListener('click', () => {
-  paused = !paused;
+function setPausedState(nextPaused) {
+  paused = nextPaused;
   btnPause.textContent = paused ? 'Продолжить' : 'Пауза';
   expStatusBadge.textContent = paused ? '⏸ ПАУЗА' : '● АКТИВЕН';
   expStatusBadge.style.color = paused ? '#fbbf24' : '#4ade80';
+}
+
+function handleUpdateEntry(updateEntry) {
+  if (!updateEntry) return;
+  chartRenderer.render(sim.history);
+  logger.logUpdate(
+    updateEntry,
+    sim.morphologyKey,
+    sim.algorithm,
+    {
+      update: updateEntry.update,
+      totalFood: updateEntry.totalFood,
+      meanVelocity: updateEntry.meanVelocity
+    }
+  ).then(() => {
+    if (updateEntry.update % 3 === 0) {
+      logger.refreshLogsList().then(list => renderLogsList(list));
+    }
+  });
+}
+
+btnPause.addEventListener('click', () => {
+  setPausedState(!paused);
+});
+
+btnStepOnce.addEventListener('click', () => {
+  if (!sim) return;
+  if (!paused) setPausedState(true);
+  simTimeAccum = 0;
+  const updateEntry = sim.stepControl();
+  handleUpdateEntry(updateEntry);
+  const leader = sim.creatures[sim.bestCreatureIdx || 0];
+  nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
+  updateHUD();
 });
 
 speedButtons.addEventListener('click', e => {
   const btn = e.target.closest('button[data-speed]');
   if (!btn) return;
-  simSpeed = parseInt(btn.dataset.speed, 10) || 1;
+  simSpeed = parseFloat(btn.dataset.speed) || 1;
   for (const b of speedButtons.querySelectorAll('button')) {
     b.classList.toggle('active', b === btn);
   }
@@ -167,34 +202,35 @@ function updateHUD() {
 }
 
 let frameCounter = 0;
-function animate() {
+let lastFrameTime = performance.now();
+let simTimeAccum = 0;
+
+function animate(now = performance.now()) {
   requestAnimationFrame(animate);
+  const realDt = Math.min(0.05, Math.max(0.0, (now - lastFrameTime) / 1000));
+  lastFrameTime = now;
+
   if (!sim) return;
 
   if (!paused) {
-    for (let i = 0; i < simSpeed; i++) {
-      const updateEntry = sim.stepControl();
-      if (updateEntry) {
-        chartRenderer.render(sim.history);
-        logger.logUpdate(
-          updateEntry,
-          sim.morphologyKey,
-          sim.algorithm,
-          {
-            update: updateEntry.update,
-            totalFood: updateEntry.totalFood,
-            meanVelocity: updateEntry.meanVelocity
-          }
-        ).then(() => {
-          if (updateEntry.update % 3 === 0) {
-            logger.refreshLogsList().then(list => renderLogsList(list));
-          }
-        });
-      }
+    simTimeAccum += realDt * simSpeed;
+    // Cap accumulator to avoid spiral of death if tab was backgrounded
+    const maxSubsteps = Math.max(20, Math.ceil(simSpeed * 16));
+    let substepsRun = 0;
+    while (simTimeAccum >= sim.subDt && substepsRun < maxSubsteps) {
+      simTimeAccum -= sim.subDt;
+      substepsRun++;
+      const updateEntry = sim.stepPhysicsSubstep();
+      handleUpdateEntry(updateEntry);
+    }
+    if (substepsRun >= maxSubsteps) {
+      simTimeAccum = 0;
     }
   }
 
-  renderer3D.render(sim);
+  const interpAlpha = paused ? 1.0 : Math.min(1.0, simTimeAccum / sim.subDt);
+  renderer3D.render(sim, interpAlpha);
+
   frameCounter++;
   if (frameCounter % 2 === 0) {
     const leader = sim.creatures[sim.bestCreatureIdx || 0];

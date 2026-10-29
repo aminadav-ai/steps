@@ -90,6 +90,7 @@
             Новый эксперимент (Сброс ИИ)
           </button>
           <button id="btnPause" class="btn">Пауза</button>
+          <button id="btnStepOnce" class="btn" title="Пошаговый разбор: продвинуть физику ровно на 1 шаг управления (0.05 с)">+1 Шаг</button>
         </div>
       </section>
 
@@ -100,13 +101,15 @@
         </div>
 
         <div class="control-field">
-          <label>Ускорение симуляции (чистая физика):</label>
+          <label>Масштаб времени (замедление / реальное время / ускорение):</label>
           <div class="speed-row" id="speedButtons">
-            <button class="btn active" data-speed="1">1×</button>
-            <button class="btn" data-speed="2">2×</button>
-            <button class="btn" data-speed="5">5×</button>
-            <button class="btn" data-speed="12">12×</button>
-            <button class="btn" data-speed="25">25×</button>
+            <button class="btn" data-speed="0.1" title="10-кратное замедление для изучения механики шага">0.1×</button>
+            <button class="btn" data-speed="0.25" title="4-кратное замедление">0.25×</button>
+            <button class="btn" data-speed="0.5" title="2-кратное замедление">0.5×</button>
+            <button class="btn active" data-speed="1" title="Честное реальное время 1:1">1×</button>
+            <button class="btn" data-speed="2" title="2-кратное ускорение">2×</button>
+            <button class="btn" data-speed="5" title="5-кратное ускорение обучения">5×</button>
+            <button class="btn" data-speed="15" title="15-кратное ускорение обучения">15×</button>
           </div>
         </div>
 

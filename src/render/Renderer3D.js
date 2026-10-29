@@ -97,7 +97,7 @@ export class Renderer3D {
     };
   }
 
-  render(sim) {
+  render(sim, interpAlpha = 1.0) {
     this.resize();
     const ctx = this.ctx;
     const width = this.canvas.width;
@@ -178,7 +178,7 @@ export class Renderer3D {
     for (const idx of indices) {
       const isFocused = idx === leaderIdx || idx === 0;
       const alpha = isFocused ? 1.0 : 0.42;
-      this._renderCreatureAndFood(ctx, proj, sim.creatures[idx], isFocused, idx === leaderIdx, alpha);
+      this._renderCreatureAndFood(ctx, proj, sim.creatures[idx], isFocused, idx === leaderIdx, alpha, interpAlpha);
     }
   }
 
@@ -280,15 +280,25 @@ export class Renderer3D {
     ctx.stroke();
   }
 
-  _renderCreatureAndFood(ctx, proj, creature, isFocused, isLeader, alpha) {
+  _renderCreatureAndFood(ctx, proj, creature, isFocused, isLeader, alpha, interpAlpha = 1.0) {
     ctx.save();
     ctx.globalAlpha = alpha;
+
+    const a = Math.max(0.0, Math.min(1.0, interpAlpha));
+    const posOf = node => {
+      if (!node.prevPos || a >= 0.999) return node.pos;
+      return new Vec3(
+        node.prevPos.x + (node.pos.x - node.prevPos.x) * a,
+        node.prevPos.y + (node.pos.y - node.prevPos.y) * a,
+        node.prevPos.z + (node.pos.z - node.prevPos.z) * a
+      );
+    };
 
     const com = creature.body.getCenterOfMass();
     const { forward, right } = creature.getTorsoFrame();
 
     // 1. Target line from creature nose to its food sphere
-    const pNose = proj(creature.frameRefs.front.pos);
+    const pNose = proj(posOf(creature.frameRefs.front));
     const pFood = proj(creature.foodPos);
     const pFoodShadow = proj(new Vec3(creature.foodPos.x, 0.005, creature.foodPos.z));
 
@@ -365,8 +375,8 @@ export class Renderer3D {
     ctx.lineWidth = isLeader ? 2.6 : 1.6;
     for (const bone of creature.body.bones) {
       if (bone.role !== 'torso') continue;
-      const pA = proj(bone.nodeA.pos);
-      const pB = proj(bone.nodeB.pos);
+      const pA = proj(posOf(bone.nodeA));
+      const pB = proj(posOf(bone.nodeB));
       if (pA && pB) {
         ctx.beginPath();
         ctx.moveTo(pA.sx, pA.sy);
@@ -383,23 +393,26 @@ export class Renderer3D {
       const foot = creature.footNodes[i];
       if (!hip || !foot) continue;
 
+      const hipPos = posOf(hip);
+      const footPos = posOf(foot);
+
       // Compute exact 3D knee joint position using 2-link inverse kinematics
       // Knee bends outward/forward along the leg's sagittal plane
       const mid = new Vec3(
-        0.5 * (hip.pos.x + foot.pos.x),
-        0.5 * (hip.pos.y + foot.pos.y),
-        0.5 * (hip.pos.z + foot.pos.z)
+        0.5 * (hipPos.x + footPos.x),
+        0.5 * (hipPos.y + footPos.y),
+        0.5 * (hipPos.z + footPos.z)
       );
-      const legVec = Vec3.sub(foot.pos, hip.pos);
+      const legVec = Vec3.sub(footPos, hipPos);
       const legLen = Math.max(0.05, legVec.length());
       const halfSpan = Math.min(L_femur * 0.98, legLen * 0.5);
       const kneeOut = Math.sqrt(Math.max(0.0004, L_femur * L_femur - halfSpan * halfSpan));
 
       // Outward radial + anterior knee direction
       const bendDir = new Vec3(
-        forward.x * 0.65 + (hip.pos.x - com.x) * 1.4,
+        forward.x * 0.65 + (hipPos.x - com.x) * 1.4,
         0.25,
-        forward.z * 0.65 + (hip.pos.z - com.z) * 1.4
+        forward.z * 0.65 + (hipPos.z - com.z) * 1.4
       ).normalize();
 
       const kneePos = new Vec3(
@@ -408,17 +421,17 @@ export class Renderer3D {
         mid.z + bendDir.z * kneeOut
       );
 
-      const pHip = proj(hip.pos);
+      const pHip = proj(hipPos);
       const pKnee = proj(kneePos);
-      const pFoot = proj(foot.pos);
+      const pFoot = proj(footPos);
 
       // Draw active muscle lines colored by instantaneous force (cyan = pull, orange/red = push)
       const liftDof = creature.logicalDoFs[i * 2];
       const strideDof = creature.logicalDoFs[i * 2 + 1];
       if (isFocused && liftDof && strideDof) {
         for (const mus of [liftDof.primary, strideDof.primary]) {
-          const pA = proj(mus.nodeA.pos);
-          const pB = proj(mus.nodeB.pos);
+          const pA = proj(posOf(mus.nodeA));
+          const pB = proj(posOf(mus.nodeB));
           if (pA && pB) {
             const fNorm = Math.max(-1, Math.min(1, mus.appliedForce / 80.0));
             ctx.strokeStyle = fNorm >= 0
@@ -452,7 +465,7 @@ export class Renderer3D {
       }
 
       // Foot contact ring & Physical Reaction Force vectors (Normal N_i and Friction F_tr)
-      const pFootGround = proj(new Vec3(foot.pos.x, 0.005, foot.pos.z));
+      const pFootGround = proj(new Vec3(footPos.x, 0.005, footPos.z));
       if (foot.inContact && pFootGround) {
         const ringRad = Math.max(4, Math.min(22, (0.07 + foot.normalForce * 0.003) * pFootGround.scale));
         ctx.strokeStyle = '#4ade80';
@@ -464,9 +477,9 @@ export class Renderer3D {
         if (this.showForceVectors && isFocused) {
           // Green vector: Normal Reaction Force N_i
           const nTop = proj(new Vec3(
-            foot.pos.x,
-            foot.pos.y + Math.min(0.35, foot.normalForce * 0.008),
-            foot.pos.z
+            footPos.x,
+            footPos.y + Math.min(0.35, foot.normalForce * 0.008),
+            footPos.z
           ));
           if (pFoot && nTop) {
             ctx.strokeStyle = '#4ade80';
@@ -480,9 +493,9 @@ export class Renderer3D {
           // Yellow/Red vector: Horizontal Floor Friction Force F_friction propelling the creature!
           const fVec = foot.frictionForceVec;
           const fEnd = proj(new Vec3(
-            foot.pos.x + fVec.x * 0.015,
-            foot.pos.y,
-            foot.pos.z + fVec.z * 0.015
+            footPos.x + fVec.x * 0.015,
+            footPos.y,
+            footPos.z + fVec.z * 0.015
           ));
           if (pFoot && fEnd) {
             ctx.strokeStyle = '#facc15';
@@ -498,7 +511,7 @@ export class Renderer3D {
 
     // 5. Render 3D Nodes (Torso, Hips, Head Sensor, Feet)
     for (const node of creature.body.nodes) {
-      const p = proj(node.pos);
+      const p = proj(posOf(node));
       if (!p) continue;
       const rPx = Math.max(3, node.radius * p.scale * 0.85);
 

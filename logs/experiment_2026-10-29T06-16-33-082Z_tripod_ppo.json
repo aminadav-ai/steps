@@ -1,0 +1,11 @@
+{
+  "experimentId": "exp_1793254171092",
+  "startedAt": "2026-10-29T06:09:31.092Z",
+  "morphology": "tripod",
+  "algorithm": "ppo",
+  "populationSize": 16,
+  "config": {},
+  "archivedPreviousLog": "experiment_2026-10-29T06-09-31-091Z_tripod_ppo.json",
+  "history": [],
+  "bestSnapshot": null
+}
