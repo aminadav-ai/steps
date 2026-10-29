@@ -177,9 +177,6 @@ export class Renderer3D {
       if (mode === 'food' && this._sim && c0) {
         this._sim.moveFoodTo(0, c0.foodPos.x, c0.foodPos.z, false);
         this.lockedFoodPos.set(NaN, NaN, NaN);
-        if (this._sim.trainer && this._sim.trainer.notifyEnvironmentChange) {
-          this._sim.trainer.notifyEnvironmentChange('Шарик еды переставлен мышью — наведение на новую точку');
-        }
         if (typeof this.onSceneInteract === 'function' && dragStartWorldPos) {
           this.onSceneInteract({
             action: 'drag_food',

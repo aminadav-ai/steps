@@ -232,6 +232,7 @@ export class ArenaSimulation {
     c.foodPos.set(clampedX, isDragging ? 0.24 : 0.16, clampedZ);
     c.foodState = 'ACTIVE';
     c.foodStateTimer = 0.0;
+    c.postFoodTurnGraceTimer = 8.0;
     const com = c.body.getCenterOfMass();
     c.prevFoodDist = Math.hypot(clampedX - com.x, clampedZ - com.z);
   }
