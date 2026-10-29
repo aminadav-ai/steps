@@ -17,52 +17,64 @@
       <div class="hud-overlay">
         <div class="hud-badge-group">
           <div class="hud-pill">
-            Эпоха ИИ: <strong id="hudUpdate">0</strong>
+            <span data-i18n="hudEpoch">Эпоха ИИ:</span> <strong id="hudUpdate">0</strong>
           </div>
           <div class="hud-pill">
-            Физ. время: <strong id="hudSimTime">0 с</strong>
+            <span data-i18n="hudSimTime">Физ. время:</span> <strong id="hudSimTime">0 с</strong>
           </div>
           <div class="hud-pill emerald">
-            Собрано целей: <strong id="hudTotalFood">0</strong>
+            <span data-i18n="hudTotalFood">Собрано целей:</span> <strong id="hudTotalFood">0</strong>
           </div>
           <div class="hud-pill gold">
-            Скорость к цели: <strong id="hudLeaderVel">0.00 м/с</strong>
+            <span data-i18n="hudLeaderVel">Скорость к цели:</span> <strong id="hudLeaderVel">0.00 м/с</strong>
           </div>
         </div>
 
         <div class="hud-badge-group">
           <div class="hud-pill">
-            Трение пола μ = <strong id="hudFriction">1.00</strong>
+            <span data-i18n="hudFriction">Трение пола μ =</span> <strong id="hudFriction">1.00</strong>
           </div>
         </div>
       </div>
 
       <div class="hud-bottom-bar">
         <div class="hud-legend">
-          <span><strong>Drag шарик / шагохода:</strong> Переставить / Бросить</span>
-          <span><strong>Клик по фону:</strong> Пауза/Пуск</span>
-          <span><strong>Drag фон:</strong> Вращение</span>
-          <span><strong>Shift + Drag:</strong> Стрейф</span>
-          <span><i class="legend-dot" style="background:#4ade80"></i>Опора N</span>
-          <span><i class="legend-dot" style="background:#facc15"></i>Трение F_тр</span>
+          <span><strong data-i18n="legDragObjTitle">Drag шарик / шагохода:</strong> <span data-i18n="legDragObjDesc">Переставить / Бросить</span></span>
+          <span><strong data-i18n="legClickBgTitle">Клик по фону:</strong> <span data-i18n="legClickBgDesc">Пауза/Пуск</span></span>
+          <span><strong data-i18n="legDragBgTitle">Drag фон:</strong> <span data-i18n="legDragBgDesc">Вращение</span></span>
+          <span><strong data-i18n="legShiftDragTitle">Shift + Drag:</strong> <span data-i18n="legShiftDragDesc">Стрейф</span></span>
+          <span><i class="legend-dot" style="background:#4ade80"></i><span data-i18n="legNormalForce">Опора N</span></span>
+          <span><i class="legend-dot" style="background:#facc15"></i><span data-i18n="legFrictionForce">Трение F_тр</span></span>
         </div>
       </div>
     </section>
 
     <!-- Right Scientific Control & Telemetry Sidebar -->
-    <aside class="sidebar-pane">
+    <aside class="sidebar-pane" id="sidebarPane">
       <header class="lab-header">
         <div>
           <h1>STEPS // 3D Physics &amp; RL Lab</h1>
-          <div class="lab-subtitle">Честная 3D-динамика (XPBD + трение Кулона) без анимаций</div>
+          <div class="lab-subtitle" data-i18n="labSubtitle">Честная 3D-динамика (XPBD + трение Кулона) без анимаций</div>
         </div>
-        <span class="meta-badge consolidated" title="Зафиксированный релиз Версия 1.0">v1.0</span>
+        <div class="header-actions">
+          <select id="selectLanguage" class="lang-select" aria-label="Language" title="Interface Language / Язык интерфейса / שפת ממשק">
+            <option value="ru" selected>🇷🇺 Русский</option>
+            <option value="en">🇬🇧 English</option>
+            <option value="he">🇮🇱 עברית</option>
+            <option value="es">🇪🇸 Español</option>
+            <option value="de">🇩🇪 Deutsch</option>
+            <option value="fr">🇫🇷 Français</option>
+            <option value="zh">🇨🇳 中文</option>
+            <option value="ja">🇯🇵 日本語</option>
+          </select>
+          <span class="meta-badge consolidated" title="Release v1.0">v1.0</span>
+        </div>
       </header>
 
       <!-- Live Meta-Plasticity & Learning Status Card -->
       <section class="card" id="metaLearningCard">
         <div class="card-title">
-          <span>Мета-Чутьё ИИ (Контроль дообучения)</span>
+          <span data-i18n="metaCardTitle">Мета-Чутьё ИИ (Контроль дообучения)</span>
           <span id="metaActiveBadge" class="meta-badge learning">● ОБУЧЕНИЕ ИДЁТ</span>
         </div>
 
@@ -73,7 +85,7 @@
         <div class="meta-bars-grid">
           <div class="meta-bar-item">
             <div class="meta-bar-header">
-              <span>Потребность в дообучении (Чутьё):</span>
+              <span data-i18n="metaNeedLabel">Потребность в дообучении (Чутьё):</span>
               <strong id="metaNeedVal">88%</strong>
             </div>
             <div class="meta-bar-track">
@@ -83,7 +95,7 @@
 
           <div class="meta-bar-item">
             <div class="meta-bar-header">
-              <span>Навык «Рефлекс жука» (Переворот со спины):</span>
+              <span data-i18n="metaRightingLabel">Навык «Рефлекс жука» (Переворот со спины):</span>
               <strong id="metaRightingVal">20% (0 раз)</strong>
             </div>
             <div class="meta-bar-track">
@@ -97,25 +109,25 @@
         </div>
 
         <div class="control-field" style="margin-block-start: 4px;">
-          <label>Амбиция обучения (баланс минимум / скачок / максимум):</label>
+          <label data-i18n="ambitionFieldLabel">Амбиция обучения (баланс минимум / скачок / максимум):</label>
           <div class="speed-row" id="ambitionButtons">
-            <button class="btn active" data-ambition="min" title="Минимум (0.18 м/с): заморозить веса сразу после освоения базового аккуратного шага">🐢 Минимум</button>
-            <button class="btn" data-ambition="bound" title="Бодрый скачок (0.34 м/с): учить энергичный пружинистый прыжок к цели перед фиксацией навыка">🐇 Скачок</button>
-            <button class="btn" data-ambition="turbo" title="Турбо-галоп (0.46 м/с): доучивать мощный скоростной галоп с высокой частотой шага">🚀 Галоп</button>
-            <button class="btn" data-ambition="infinite" title="Вечное ИИ: никогда не выключать обучение — непрерывный поиск максимальной скорости">♾️ Вечное</button>
+            <button class="btn active" data-ambition="min" data-i18n="ambBtnMin">🐢 Минимум</button>
+            <button class="btn" data-ambition="bound" data-i18n="ambBtnBound">🐇 Скачок</button>
+            <button class="btn" data-ambition="turbo" data-i18n="ambBtnTurbo">🚀 Галоп</button>
+            <button class="btn" data-ambition="infinite" data-i18n="ambBtnInfinite">♾️ Вечное</button>
           </div>
         </div>
 
         <div class="control-field">
           <label for="rangeAmbition">
-            <span>Порог мастерства (откл. обучения):</span>
+            <span data-i18n="ambMasteryLabel">Порог мастерства (откл. обучения):</span>
             <strong id="labelAmbitionVal">0.18 м/с (Минимум / Шаг)</strong>
           </label>
           <input type="range" id="rangeAmbition" min="0.15" max="0.55" step="0.02" value="0.18">
         </div>
 
         <div class="btn-row">
-          <button id="btnToggleFreeze" class="btn" title="Принудительно зафиксировать текущую походку ИИ или вручную разбудить дообучение">
+          <button id="btnToggleFreeze" class="btn">
             🔒 Заморозить веса сейчас
           </button>
         </div>
@@ -124,24 +136,24 @@
       <!-- Experiment Configuration Card -->
       <section class="card">
         <div class="card-title">
-          <span>Конструкция и Алгоритм</span>
+          <span data-i18n="configCardTitle">Конструкция и Алгоритм</span>
           <span id="expStatusBadge" style="color:#4ade80;font-size:11px;">● АКТИВЕН</span>
         </div>
 
         <div class="control-grid">
           <div class="control-field full">
-            <label for="selectMorphology">Морфология тела (Конструкция):</label>
+            <label for="selectMorphology" data-i18n="labelMorphology">Морфология тела (Конструкция):</label>
             <select id="selectMorphology">
-              <option value="tripod" selected>Конструкция №1: 3-лучевой шагоход («Трипод», 6 DoF)</option>
-              <option value="quadruped">Конструкция №2: 4-лучевой шагоход («Квадрупод», 8 DoF)</option>
+              <option value="tripod" data-i18n="optTripod" selected>Конструкция №1: 3-лучевой шагоход («Трипод», 6 DoF)</option>
+              <option value="quadruped" data-i18n="optQuadruped">Конструкция №2: 4-лучевой шагоход («Квадрупод», 8 DoF)</option>
             </select>
           </div>
 
           <div class="control-field full">
-            <label for="selectAlgorithm">Алгоритм обучения нейросети:</label>
+            <label for="selectAlgorithm" data-i18n="labelAlgorithm">Алгоритм обучения нейросети:</label>
             <select id="selectAlgorithm">
-              <option value="ppo" selected>PPO (Actor-Critic + GAE + Adam Backpropagation)</option>
-              <option value="nes">SEP-CMA-ES / OpenAI-ES (Естественный градиент)</option>
+              <option value="ppo" data-i18n="optPPO" selected>PPO (Actor-Critic + GAE + Adam Backpropagation)</option>
+              <option value="nes" data-i18n="optNES">SEP-CMA-ES / OpenAI-ES (Естественный градиент)</option>
             </select>
           </div>
         </div>
@@ -152,16 +164,16 @@
 
         <div class="btn-row">
           <button id="btnPause" class="btn">Пауза</button>
-          <button id="btnStepOnce" class="btn" title="Пошаговый разбор: продвинуть физику ровно на 1 шаг управления (0.05 с)">+1 Шаг</button>
-          <button id="btnUprightWalker" class="btn" title="Аккуратно перевернуть шагохода обратно на лапы на том же месте, сохранив весь его опыт и нейросеть">
+          <button id="btnStepOnce" class="btn" data-i18n="btnStepOnce">+1 Шаг</button>
+          <button id="btnUprightWalker" class="btn">
             🤚 Помочь встать на ноги
           </button>
         </div>
         <div class="btn-row">
-          <button id="btnFastTrain" class="btn emerald" title="Мгновенно прогнать 25 эпох обучения без отрисовки кадров и сразу показать обученного шагохода в реальном времени 1×">
+          <button id="btnFastTrain" class="btn emerald" data-i18n="btnFastTrain">
             ⚡ Быстро обучить без рендера (+25 эпох)
           </button>
-          <button id="btnNewExperiment" class="btn primary" title="Внимание: полностью сбрасывает обученную нейросеть и начинает новый эксперимент с нуля">
+          <button id="btnNewExperiment" class="btn primary" data-i18n="btnNewExperiment">
             Сброс ИИ (Заново)
           </button>
         </div>
@@ -170,43 +182,43 @@
       <!-- Physics & Speed Controls -->
       <section class="card">
         <div class="card-title">
-          <span>Физический мир и Скорость времени</span>
+          <span data-i18n="physicsCardTitle">Физический мир и Скорость времени</span>
         </div>
 
         <div class="control-field">
-          <label>Масштаб времени (замедление / реальное время / ускорение):</label>
-          <div class="speed-row" id="speedButtons">
-            <button class="btn" data-speed="0.1" title="10-кратное замедление для изучения механики шага">0.1×</button>
-            <button class="btn" data-speed="0.25" title="4-кратное замедление">0.25×</button>
-            <button class="btn" data-speed="0.5" title="2-кратное замедление">0.5×</button>
-            <button class="btn active" data-speed="1" title="Честное реальное время 1:1">1×</button>
-            <button class="btn" data-speed="2" title="2-кратное ускорение">2×</button>
-            <button class="btn" data-speed="5" title="5-кратное ускорение обучения">5×</button>
-            <button class="btn" data-speed="15" title="15-кратное ускорение обучения">15×</button>
+          <label data-i18n="labelTimeScale">Масштаб времени (замедление / реальное время / ускорение):</label>
+          <div class="speed-row" id="speedButtons" dir="ltr">
+            <button class="btn" data-speed="0.1">0.1×</button>
+            <button class="btn" data-speed="0.25">0.25×</button>
+            <button class="btn" data-speed="0.5">0.5×</button>
+            <button class="btn active" data-speed="1">1×</button>
+            <button class="btn" data-speed="2">2×</button>
+            <button class="btn" data-speed="5">5×</button>
+            <button class="btn" data-speed="15">15×</button>
           </div>
         </div>
 
         <div class="control-field">
           <label for="rangeFriction">
-            <span>Коэффициент трения пола (μ):</span>
+            <span data-i18n="labelFloorFriction">Коэффициент трения пола (μ):</span>
             <strong id="labelFrictionVal">1.00 (Резина / Бетон)</strong>
           </label>
           <input type="range" id="rangeFriction" min="0" max="1.6" step="0.05" value="1.0">
         </div>
 
         <div class="checkbox-row">
-          <label><input type="checkbox" id="chkFollowLeader" checked> Камера за шагоходом + целью</label>
-          <label><input type="checkbox" id="chkShowForces" checked> Векторы сил (N, F_тр)</label>
+          <label><input type="checkbox" id="chkFollowLeader" checked> <span data-i18n="chkFollowCamera">Камера за шагоходом + целью</span></label>
+          <label><input type="checkbox" id="chkShowForces" checked> <span data-i18n="chkForceVectors">Векторы сил (N, F_тр)</span></label>
         </div>
       </section>
 
       <!-- Live Neural Network Visualization -->
       <section class="card">
         <div class="card-title">
-          <span>Нейросеть Шагохода (Actor-Critic + Рефлекс жука)</span>
-          <span id="nnDimLabel" style="color:#94a3b8;font-size:11px;">31 → 32 → 24 → 6</span>
+          <span data-i18n="nnCardTitle">Нейросеть Шагохода (Actor-Critic + Рефлекс жука)</span>
+          <span id="nnDimLabel" dir="ltr" style="color:#94a3b8;font-size:11px;">31 → 32 → 24 → 6</span>
         </div>
-        <div class="canvas-box">
+        <div class="canvas-box" dir="ltr">
           <canvas id="nnCanvas"></canvas>
         </div>
       </section>
@@ -214,24 +226,24 @@
       <!-- Live Learning Curve & Metrics -->
       <section class="card">
         <div class="card-title">
-          <span>Динамика обучения</span>
+          <span data-i18n="chartCardTitle">Динамика обучения</span>
           <span id="learningChartBadge" style="color:#34d399;font-size:11px;">● ИДЁТ ЗАПИСЬ</span>
         </div>
         <div class="metrics-grid">
           <div class="metric-item">
-            <div class="metric-label">Скор. к еде (ср.)</div>
+            <div class="metric-label" data-i18n="metricMeanVelLabel">Скор. к еде (ср.)</div>
             <div class="metric-val" id="metricMeanVel">0.000 м/с</div>
           </div>
           <div class="metric-item">
-            <div class="metric-label">Награда / шаг</div>
+            <div class="metric-label" data-i18n="metricMeanRewLabel">Награда / шаг</div>
             <div class="metric-val" id="metricMeanRew">0.000</div>
           </div>
           <div class="metric-item">
-            <div class="metric-label">Мощность мышц</div>
+            <div class="metric-label" data-i18n="metricPowerLabel">Мощность мышц</div>
             <div class="metric-val" id="metricPower">0.0 Вт</div>
           </div>
         </div>
-        <div class="canvas-box chart">
+        <div class="canvas-box chart" dir="ltr">
           <canvas id="chartCanvas"></canvas>
         </div>
       </section>
@@ -239,11 +251,11 @@
       <!-- Preserved Experiment Logs History -->
       <section class="card">
         <div class="card-title">
-          <span>Архив логов экспериментов (logs/)</span>
+          <span data-i18n="logsCardTitle">Архив логов экспериментов (logs/)</span>
           <span id="logsCountBadge" style="color:#94a3b8;font-size:11px;">0 файлов</span>
         </div>
         <div id="logsContainer" class="logs-list">
-          <div class="log-entry"><span>Инициализация журнала...</span></div>
+          <div class="log-entry"><span>...</span></div>
         </div>
       </section>
     </aside>

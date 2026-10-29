@@ -3,10 +3,28 @@ import { MORPHOLOGY_REGISTRY } from './morphologies/Morphologies.js';
 import { Renderer3D } from './render/Renderer3D.js';
 import { NeuralGraphRenderer, LearningChartRenderer } from './render/TelemetryRenderers.js';
 import { ExperimentLogger } from './logging/ExperimentLogger.js';
+import { TRANSLATIONS } from './i18n/translations.js';
+
+const LANG_STORAGE_KEY = 'steps_lang_v1';
+let currentLang = 'ru';
+try {
+  const savedLang = localStorage.getItem(LANG_STORAGE_KEY);
+  if (savedLang && TRANSLATIONS[savedLang]) {
+    currentLang = savedLang;
+  }
+} catch {
+  // ignore
+}
+
+function getT() {
+  return TRANSLATIONS[currentLang] || TRANSLATIONS.ru;
+}
 
 const arenaCanvas = document.getElementById('arenaCanvas');
 const nnCanvas = document.getElementById('nnCanvas');
 const chartCanvas = document.getElementById('chartCanvas');
+const sidebarPane = document.getElementById('sidebarPane');
+const selectLanguage = document.getElementById('selectLanguage');
 
 const renderer3D = new Renderer3D(arenaCanvas);
 const nnRenderer = new NeuralGraphRenderer(nnCanvas);
@@ -55,10 +73,11 @@ const btnToggleFreeze = document.getElementById('btnToggleFreeze');
 let currentAmbitionPreset = 'min';
 
 function formatAmbitionLabel(val, preset) {
-  if (preset === 'infinite' || val >= 0.54) return '∞ (Вечное обучение — 100%)';
-  if (val <= 0.21) return `${val.toFixed(2)} м/с (Минимум / Шаг)`;
-  if (val <= 0.39) return `${val.toFixed(2)} м/с (Бодрый скачок)`;
-  return `${val.toFixed(2)} м/с (Турбо-галоп)`;
+  const t = getT();
+  if (preset === 'infinite' || val >= 0.54) return t.ambitionInfinite;
+  if (val <= 0.21) return t.ambitionMin(val.toFixed(2));
+  if (val <= 0.39) return t.ambitionBound(val.toFixed(2));
+  return t.ambitionTurbo(val.toFixed(2));
 }
 
 const metricMeanVel = document.getElementById('metricMeanVel');
@@ -69,29 +88,151 @@ const logsContainer = document.getElementById('logsContainer');
 const logsCountBadge = document.getElementById('logsCountBadge');
 
 function formatFrictionLabel(mu) {
-  if (mu < 0.05) return `${mu.toFixed(2)} (Абсолютный лёд — 0 тяги!)`;
-  if (mu < 0.35) return `${mu.toFixed(2)} (Скользкий лёд)`;
-  if (mu < 0.75) return `${mu.toFixed(2)} (Гладкий пластик)`;
-  if (mu <= 1.15) return `${mu.toFixed(2)} (Резина / Бетон)`;
-  return `${mu.toFixed(2)} (Высокий зацеп)`;
+  const t = getT();
+  if (mu < 0.05) return t.frictionZero(mu.toFixed(2));
+  if (mu < 0.35) return t.frictionLow(mu.toFixed(2));
+  if (mu < 0.75) return t.frictionMid(mu.toFixed(2));
+  if (mu <= 1.15) return t.frictionNormal(mu.toFixed(2));
+  return t.frictionHigh(mu.toFixed(2));
+}
+
+function getMorphDescriptionText(morphKey) {
+  const t = getT();
+  return morphKey === 'quadruped' ? t.morphDescQuadruped : t.morphDescTripod;
 }
 
 function renderLogsList(logs) {
+  const t = getT();
   if (!logs || logs.length === 0) {
-    logsCountBadge.textContent = '0 файлов';
-    logsContainer.innerHTML = '<div class="log-entry"><span>Нет сохранённых логов</span></div>';
+    logsCountBadge.textContent = t.logsCount(0);
+    logsContainer.innerHTML = `<div class="log-entry"><span>${t.logsEmpty}</span></div>`;
     return;
   }
-  logsCountBadge.textContent = `${logs.length} файл(ов)`;
+  logsCountBadge.textContent = t.logsCount(logs.length);
   logsContainer.innerHTML = logs.slice(0, 12).map(l => {
-    const tag = l.filename === 'current_experiment.json' ? '🟢 Текущий' : '📦 Архив';
-    const food = l.totalFoodCollected !== undefined ? `Еда: ${l.totalFoodCollected}` : '';
+    const tag = l.filename === 'current_experiment.json' ? t.logTagCurrent : t.logTagArchive;
+    const food = l.totalFoodCollected !== undefined ? `${t.logFoodShort} ${l.totalFoodCollected}` : '';
     const upd = l.updatesCount !== undefined ? `Upd: ${l.updatesCount}` : '';
     return `<div class="log-entry" title="${l.filename}">
       <span>${tag} <strong>${l.morphology || 'tripod'}/${(l.algorithm || 'ppo').toUpperCase()}</strong></span>
       <span>${upd} ${food}</span>
     </div>`;
   }).join('');
+}
+
+function translateMetaState(m, t) {
+  if (!m) return { modeTitle: t.metaBannerLearningWalk, reasonText: '' };
+  if (currentLang === 'ru' && m.modeTitle && m.reasonText) {
+    return { modeTitle: m.modeTitle, reasonText: m.reasonText };
+  }
+  const leader = sim && sim.creatures ? sim.creatures[0] : null;
+  const food = leader ? leader.foodCollected : 0;
+  const minF = (sim && sim.trainer && sim.trainer.minFoodsToConsolidate) ? sim.trainer.minFoodsToConsolidate : 2;
+  const vStr = (m.competenceEMA || 0).toFixed(2);
+  const tStr = (m.targetCompetence || 0.18).toFixed(2);
+
+  if (m.mode === 'LEARNING_RIGHTING') {
+    const upY = leader ? leader.getTorsoFrame().up.y.toFixed(2) : '-0.50';
+    return {
+      modeTitle: t.metaBannerRighting,
+      reasonText: t.metaReasonRighting(upY, m.rightingAttempts || 1, m.rightingSkillPct || 20)
+    };
+  }
+  if (m.mode === 'CONSOLIDATED') {
+    if (sim && sim.trainer && sim.trainer.manualFreeze) {
+      return {
+        modeTitle: t.metaBannerManualFrozen,
+        reasonText: t.metaReasonManualFrozen
+      };
+    }
+    return {
+      modeTitle: t.metaBannerConsolidated,
+      reasonText: t.metaReasonConsolidated(vStr, tStr, food)
+    };
+  }
+  // LEARNING_WALK
+  if (m.ambitionPreset === 'infinite' || (sim && sim.trainer && sim.trainer.alwaysLearn)) {
+    return {
+      modeTitle: t.metaBannerInfinite,
+      reasonText: t.metaReasonInfinite(vStr, food)
+    };
+  }
+  if ((m.targetCompetence || 0.18) >= 0.44) {
+    return {
+      modeTitle: t.metaBannerLearningTurbo,
+      reasonText: t.metaReasonLearning(food, minF, vStr, tStr)
+    };
+  }
+  if ((m.targetCompetence || 0.18) >= 0.25) {
+    return {
+      modeTitle: t.metaBannerLearningBound,
+      reasonText: t.metaReasonLearning(food, minF, vStr, tStr)
+    };
+  }
+  return {
+    modeTitle: t.metaBannerLearningWalk,
+    reasonText: t.metaReasonLearning(food, minF, vStr, tStr)
+  };
+}
+
+function applyLanguage(lang) {
+  if (!TRANSLATIONS[lang]) lang = 'ru';
+  currentLang = lang;
+  try {
+    localStorage.setItem(LANG_STORAGE_KEY, lang);
+  } catch {
+    // ignore
+  }
+  const t = getT();
+  document.documentElement.lang = lang;
+  if (sidebarPane) {
+    sidebarPane.dir = lang === 'he' ? 'rtl' : 'ltr';
+  }
+  if (selectLanguage && selectLanguage.value !== lang) {
+    selectLanguage.value = lang;
+  }
+
+  for (const el of document.querySelectorAll('[data-i18n]')) {
+    const key = el.getAttribute('data-i18n');
+    if (typeof t[key] === 'string') {
+      el.textContent = t[key];
+    }
+  }
+
+  if (selectMorphology && morphDescription) {
+    morphDescription.textContent = getMorphDescriptionText(selectMorphology.value);
+  }
+  if (rangeFriction && labelFrictionVal) {
+    labelFrictionVal.textContent = formatFrictionLabel(parseFloat(rangeFriction.value));
+  }
+  if (rangeAmbition && labelAmbitionVal) {
+    labelAmbitionVal.textContent = formatAmbitionLabel(parseFloat(rangeAmbition.value), currentAmbitionPreset);
+  }
+  if (btnPause) {
+    btnPause.textContent = paused ? t.btnResume : t.btnPause;
+  }
+  if (expStatusBadge && !isFastTraining) {
+    expStatusBadge.textContent = paused ? t.statusPaused : t.statusActive;
+  }
+  if (btnFastTrain && !isFastTraining) {
+    btnFastTrain.textContent = t.btnFastTrain;
+  }
+
+  renderLogsList(logger.savedLogsList);
+  if (sim) {
+    const isLearningNow = !sim.trainer.metaState || sim.trainer.metaState.isLearningActive;
+    chartRenderer.render(sim.history, isLearningNow, t);
+    const leader = sim.creatures[sim.bestCreatureIdx || 0] || sim.creatures[0];
+    nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null, t);
+    updateHUD(true);
+  }
+}
+
+if (selectLanguage) {
+  selectLanguage.value = currentLang;
+  selectLanguage.addEventListener('change', () => {
+    applyLanguage(selectLanguage.value);
+  });
 }
 
 const CREATURE_STORAGE_KEY = 'steps_saved_creature_v1';
@@ -147,7 +288,7 @@ async function startNewExperiment({ clearSaved = false } = {}) {
   const floorFriction = parseFloat(rangeFriction.value);
 
   const spec = MORPHOLOGY_REGISTRY[morphologyKey];
-  morphDescription.textContent = spec.description;
+  morphDescription.textContent = getMorphDescriptionText(morphologyKey);
   nnDimLabel.textContent = `${spec.obsDim} → 32 → 24 → ${spec.actDim}`;
 
   sim = new ArenaSimulation({
@@ -166,7 +307,7 @@ async function startNewExperiment({ clearSaved = false } = {}) {
   }
   renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
 
-  chartRenderer.render(sim.history, true);
+  chartRenderer.render(sim.history, true, getT());
 
   await logger.startNewExperiment({
     morphology: morphologyKey,
@@ -191,7 +332,7 @@ async function restoreOrStartExperiment() {
   if (ckpt && ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
     applyRestoredUIState(ckpt);
     const spec = MORPHOLOGY_REGISTRY[ckpt.morphologyKey];
-    morphDescription.textContent = spec.description;
+    morphDescription.textContent = getMorphDescriptionText(ckpt.morphologyKey);
     nnDimLabel.textContent = `${spec.obsDim} → 32 → 24 → ${spec.actDim}`;
 
     sim = new ArenaSimulation({
@@ -204,10 +345,11 @@ async function restoreOrStartExperiment() {
     sim.importCheckpoint(ckpt);
     renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
 
+    const t = getT();
     const isLearningNow = !sim.trainer.metaState || sim.trainer.metaState.isLearningActive;
-    chartRenderer.render(sim.history, isLearningNow);
+    chartRenderer.render(sim.history, isLearningNow, t);
     const leader = sim.creatures[0];
-    nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
+    nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null, t);
     await logger.refreshLogsList();
     renderLogsList(logger.savedLogsList);
     updateHUD(true);
@@ -246,8 +388,9 @@ btnNewExperiment.addEventListener('click', () => {
 
 function setPausedState(nextPaused, source = 'ui') {
   paused = nextPaused;
-  btnPause.textContent = paused ? 'Продолжить' : 'Пауза';
-  expStatusBadge.textContent = paused ? '⏸ ПАУЗА' : '● АКТИВЕН';
+  const t = getT();
+  btnPause.textContent = paused ? t.btnResume : t.btnPause;
+  expStatusBadge.textContent = paused ? t.statusPaused : t.statusActive;
   expStatusBadge.style.color = paused ? '#fbbf24' : '#4ade80';
   saveCreatureCheckpoint();
   logger.recordUserEvent(paused ? 'pause' : 'resume', { source }, sim, renderer3D, getUIState());
@@ -256,7 +399,7 @@ function setPausedState(nextPaused, source = 'ui') {
 function handleUpdateEntry(updateEntry) {
   if (!updateEntry) return;
   const isLearningNow = !sim.trainer.metaState || sim.trainer.metaState.isLearningActive;
-  chartRenderer.render(sim.history, isLearningNow);
+  chartRenderer.render(sim.history, isLearningNow, getT());
   saveCreatureCheckpoint();
   const fullSnapshot = logger.buildTelemetrySnapshot(sim, renderer3D, getUIState());
   logger.logUpdate(
@@ -311,7 +454,7 @@ btnStepOnce.addEventListener('click', () => {
   handleUpdateEntry(updateEntry);
   logger.recordUserEvent('btn_step_once', {}, sim, renderer3D, getUIState());
   const leader = sim.creatures[sim.bestCreatureIdx || 0];
-  nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
+  nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null, getT());
   updateHUD();
 });
 
@@ -321,7 +464,7 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
   if (!sim || isFastTraining) return;
   isFastTraining = true;
   btnFastTrain.disabled = true;
-  expStatusBadge.textContent = '⚡ ТУРБО-ОБУЧЕНИЕ...';
+  expStatusBadge.textContent = getT().statusFastTrain;
   expStatusBadge.style.color = '#38bdf8';
 
   const c0 = sim.creatures[0];
@@ -332,7 +475,7 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
       updateEntry = sim.stepControl();
     }
     handleUpdateEntry(updateEntry);
-    btnFastTrain.textContent = `⚡ Обучение без рендера: ${u} / ${targetUpdates} эпох...`;
+    btnFastTrain.textContent = getT().btnFastTrainProgress(u, targetUpdates);
 
     if (u % 3 === 0) {
       updateHUD();
@@ -357,7 +500,7 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
   }
 
   btnFastTrain.disabled = false;
-  btnFastTrain.textContent = `⚡ Быстро обучить без рендера (+25 эпох)`;
+  btnFastTrain.textContent = getT().btnFastTrain;
   isFastTraining = false;
   updateHUD();
 }
@@ -466,23 +609,24 @@ let lastVelHudUpdateNow = 0;
 
 function updateHUD(forceVelUpdate = false) {
   if (!sim) return;
+  const t = getT();
   const leader = sim.creatures[0];
 
   hudUpdate.textContent = sim.trainer.updateCount;
-  hudSimTime.textContent = `${Math.floor(sim.simTime)} с`;
+  hudSimTime.textContent = `${Math.floor(sim.simTime)} ${t.unitSec}`;
   hudTotalFood.textContent = leader.foodCollected;
 
   const now = performance.now();
   if (forceVelUpdate || now - lastVelHudUpdateNow >= 280) {
     lastVelHudUpdateNow = now;
-    hudLeaderVel.textContent = `${(leader.smoothedVelocityTowardFood || 0).toFixed(2)} м/с`;
+    hudLeaderVel.textContent = `${(leader.smoothedVelocityTowardFood || 0).toFixed(2)} ${t.unitMps}`;
   }
 
   const m = sim.trainer.metaState;
   const isLearningNow = !m || m.isLearningActive;
 
   if (learningChartBadge) {
-    learningChartBadge.textContent = isLearningNow ? '● ИДЁТ ЗАПИСЬ' : '⏸ ЗАФИКСИРОВАНО';
+    learningChartBadge.textContent = isLearningNow ? t.chartBadgeRecording : t.chartBadgeFrozen;
     learningChartBadge.style.color = isLearningNow ? '#34d399' : '#94a3b8';
   }
 
@@ -495,9 +639,9 @@ function updateHUD(forceVelUpdate = false) {
       ? sim.recentStepRewards.reduce((a, b) => a + b, 0) / sim.recentStepRewards.length
       : 0;
 
-    metricMeanVel.textContent = `${meanVel.toFixed(3)} м/с`;
+    metricMeanVel.textContent = `${meanVel.toFixed(3)} ${t.unitMps}`;
     metricMeanRew.textContent = meanRew.toFixed(3);
-    metricPower.textContent = `${leader.lastMechanicalPower.toFixed(1)} Вт`;
+    metricPower.textContent = `${leader.lastMechanicalPower.toFixed(1)} ${t.unitWatt}`;
   }
 
   // Update Meta-Plasticity & Beetle Self-Righting Status Card on right panel
@@ -510,21 +654,22 @@ function updateHUD(forceVelUpdate = false) {
 
     metaActiveBadge.className = `meta-badge ${modeClass}`;
     metaActiveBadge.textContent = m.mode === 'CONSOLIDATED'
-      ? '⏸ ДООБУЧЕНИЕ ОТКЛЮЧЕНО'
+      ? t.metaBadgeConsolidated
       : m.mode === 'LEARNING_RIGHTING'
-        ? '🪲 ОБУЧЕНИЕ ПЕРЕВОРОТУ'
-        : '● ОБУЧЕНИЕ ИДЁТ';
+        ? t.metaBadgeRighting
+        : t.metaBadgeLearning;
 
+    const { modeTitle, reasonText } = translateMetaState(m, t);
     metaModeBanner.className = `meta-mode-banner ${modeClass}`;
-    metaModeBanner.textContent = m.modeTitle;
+    metaModeBanner.textContent = modeTitle;
 
     metaNeedVal.textContent = `${m.needToLearnPct}%`;
     metaNeedFill.style.inlineSize = `${Math.max(4, Math.min(100, m.needToLearnPct))}%`;
 
-    metaRightingVal.textContent = `${m.rightingSkillPct}% (встал сам: ${m.rightingSuccesses})`;
+    metaRightingVal.textContent = t.metaRightingStat(m.rightingSkillPct, m.rightingSuccesses);
     metaRightingFill.style.inlineSize = `${Math.max(8, Math.min(100, m.rightingSkillPct))}%`;
 
-    metaReasonBox.textContent = m.reasonText;
+    metaReasonBox.textContent = reasonText;
     metaReasonBox.style.borderInlineStartColor = m.mode === 'CONSOLIDATED'
       ? '#38bdf8'
       : m.mode === 'LEARNING_RIGHTING'
@@ -534,8 +679,8 @@ function updateHUD(forceVelUpdate = false) {
     if (btnToggleFreeze) {
       const isCons = m.mode === 'CONSOLIDATED';
       btnToggleFreeze.textContent = isCons
-        ? '🔓 Включить дообучение сейчас'
-        : '🔒 Заморозить веса сейчас';
+        ? t.btnUnfreezeNow
+        : t.btnFreezeNow;
       btnToggleFreeze.classList.toggle('emerald', isCons);
     }
   }
@@ -545,8 +690,8 @@ function updateHUD(forceVelUpdate = false) {
   const isOverturned = up.y < 0.35;
   btnUprightWalker.classList.toggle('amber-alert', isOverturned);
   btnUprightWalker.textContent = isOverturned
-    ? '⚠️ На спине (учится сам или нажми помочь)'
-    : '🤚 Помочь встать на ноги';
+    ? t.btnUprightAlert
+    : t.btnUpright;
 }
 
 let frameCounter = 0;
@@ -583,7 +728,7 @@ function animate(now = performance.now()) {
   if (frameCounter % 2 === 0) {
     const focusIdx = renderer3D.showAllPopulation ? (sim.bestCreatureIdx || 0) : 0;
     const leader = sim.creatures[focusIdx] || sim.creatures[0];
-    nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
+    nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null, getT());
     updateHUD();
   }
   // Periodic telemetry & checkpoint flush every ~2.0 seconds (120 frames) so creature state & trajectory stay up-to-date
@@ -597,6 +742,8 @@ window.addEventListener('beforeunload', () => {
   saveCreatureCheckpoint();
 });
 
+applyLanguage(currentLang);
 restoreOrStartExperiment().then(() => {
+  applyLanguage(currentLang);
   requestAnimationFrame(animate);
 });

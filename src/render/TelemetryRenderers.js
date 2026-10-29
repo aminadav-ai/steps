@@ -2,18 +2,19 @@
  * Real-time Neural Network Graph & Learning Curve Chart Renderers
  */
 
-const INPUT_LABELS = [
-  { idx: 0, label: 'cos(α) Еда' },
-  { idx: 1, label: 'sin(α) Еда' },
-  { idx: 2, label: 'Дист. Еда' },
-  { idx: 3, label: 'Скор. V_fwd' },
-  { idx: 6, label: 'Осанка Up_y' },
-  { idx: 10, label: 'CPG sin(ωt)' },
-  { idx: 11, label: 'CPG cos(ωt)' },
-  { idx: 12, label: 'Тяга×sin' },
-  { idx: 13, label: 'Тяга×cos' },
-  { idx: 14, label: 'Руль×sin' },
-  { idx: 15, label: 'Руль×cos' }
+const INPUT_OBS_INDICES = [0, 1, 2, 3, 6, 10, 11, 12, 13, 14, 15];
+const DEFAULT_INPUT_LABELS = [
+  'cos(α) Еда',
+  'sin(α) Еда',
+  'Дист. Еда',
+  'Скор. V_fwd',
+  'Осанка Up_y',
+  'CPG sin(ωt)',
+  'CPG cos(ωt)',
+  'Тяга×sin',
+  'Тяга×cos',
+  'Руль×sin',
+  'Руль×cos'
 ];
 
 export class NeuralGraphRenderer {
@@ -22,7 +23,7 @@ export class NeuralGraphRenderer {
     this.ctx = canvas.getContext('2d');
   }
 
-  render(brain, logicalDoFs) {
+  render(brain, logicalDoFs, t = null) {
     const dpr = window.devicePixelRatio || 1;
     const rect = this.canvas.getBoundingClientRect();
     const w = Math.max(260, Math.floor(rect.width * dpr));
@@ -48,12 +49,13 @@ export class NeuralGraphRenderer {
       w * 0.85  // Motor Outputs + Critic V(s)
     ];
 
-    const inNodes = INPUT_LABELS.map((item, i) => ({
+    const labels = (t && t.nnInLabels) ? t.nnInLabels : DEFAULT_INPUT_LABELS;
+    const inNodes = INPUT_OBS_INDICES.map((obsIdx, i) => ({
       x: colX[0],
-      y: ((i + 0.8) / (INPUT_LABELS.length + 0.6)) * h,
-      val: obs[item.idx] || 0,
-      label: item.label,
-      obsIdx: item.idx
+      y: ((i + 0.8) / (INPUT_OBS_INDICES.length + 0.6)) * h,
+      val: obs[obsIdx] || 0,
+      label: labels[i] || DEFAULT_INPUT_LABELS[i],
+      obsIdx
     }));
 
     const h1Count = 10;
@@ -71,12 +73,19 @@ export class NeuralGraphRenderer {
     }));
 
     const outCount = brain.actDim;
-    const outNodes = Array.from({ length: outCount }, (_, a) => ({
-      x: colX[3],
-      y: ((a + 0.7) / (outCount + 1.4)) * h,
-      val: mu[a] || 0,
-      label: logicalDoFs && logicalDoFs[a] ? logicalDoFs[a].name.replace('Лапа ', 'Л').replace(' (Подъём/Опора)', '').replace(' (Шаг вперёд/назад)', '') : `Out ${a + 1}`
-    }));
+    const outNodes = Array.from({ length: outCount }, (_, a) => {
+      const legNum = Math.floor(a / 2) + 1;
+      const isLift = a % 2 === 0;
+      const outLabel = t
+        ? (isLift && typeof t.nnOutLift === 'function' ? t.nnOutLift(legNum) : (!isLift && typeof t.nnOutStride === 'function' ? t.nnOutStride(legNum) : `Out ${a + 1}`))
+        : (logicalDoFs && logicalDoFs[a] ? logicalDoFs[a].name.replace('Лапа ', 'Л').replace(' (Подъём/Опора)', '').replace(' (Шаг вперёд/назад)', '') : `Out ${a + 1}`);
+      return {
+        x: colX[3],
+        y: ((a + 0.7) / (outCount + 1.4)) * h,
+        val: mu[a] || 0,
+        label: outLabel
+      };
+    });
 
     // 1. Draw Skip-Connection Synapses (actorSkip.W) from Inputs directly to Motor Outputs
     for (let a = 0; a < outCount; a++) {
@@ -183,7 +192,10 @@ export class NeuralGraphRenderer {
     const criticY = h - 14 * dpr;
     ctx.fillStyle = '#fbbf24';
     ctx.textAlign = 'right';
-    ctx.fillText(`Критик V(s) = ${val.toFixed(2)}`, w - 8 * dpr, criticY);
+    const criticText = (t && typeof t.nnCriticLabel === 'function')
+      ? t.nnCriticLabel(val.toFixed(2))
+      : `Критик V(s) = ${val.toFixed(2)}`;
+    ctx.fillText(criticText, w - 8 * dpr, criticY);
   }
 }
 
@@ -193,7 +205,7 @@ export class LearningChartRenderer {
     this.ctx = canvas.getContext('2d');
   }
 
-  render(history, isLearningActive = true) {
+  render(history, isLearningActive = true, t = null) {
     const dpr = window.devicePixelRatio || 1;
     const rect = this.canvas.getBoundingClientRect();
     const w = Math.max(260, Math.floor(rect.width * dpr));
@@ -228,7 +240,7 @@ export class LearningChartRenderer {
       ctx.fillStyle = '#94a3b8';
       ctx.font = `${Math.floor(11 * dpr)}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
-      ctx.fillText('Ожидание первого обновления весов (1.6 сек)...', w * 0.5, h * 0.5);
+      ctx.fillText(t && t.chartWaitingNote ? t.chartWaitingNote : 'Ожидание первого обновления весов (1.6 сек)...', w * 0.5, h * 0.5);
       return;
     }
 
@@ -287,14 +299,14 @@ export class LearningChartRenderer {
     // Legend
     ctx.textAlign = 'left';
     ctx.fillStyle = '#38bdf8';
-    ctx.fillText('● Скорость к еде (м/с)', padL + 4 * dpr, padT - 5 * dpr);
+    ctx.fillText(t && t.chartLegendVel ? t.chartLegendVel : '● Скорость к еде (м/с)', padL + 4 * dpr, padT - 5 * dpr);
     ctx.fillStyle = '#34d399';
-    ctx.fillText('● Средняя награда', padL + 135 * dpr, padT - 5 * dpr);
+    ctx.fillText(t && t.chartLegendRew ? t.chartLegendRew : '● Средняя награда', padL + 135 * dpr, padT - 5 * dpr);
 
     if (!isLearningActive) {
       ctx.textAlign = 'right';
       ctx.fillStyle = '#94a3b8';
-      ctx.fillText('⏸ Обучение выкл.', padL + plotW, padT + plotH + 14 * dpr);
+      ctx.fillText(t && t.chartPausedNote ? t.chartPausedNote : '⏸ Обучение выкл.', padL + plotW, padT + plotH + 14 * dpr);
     }
   }
 }
