@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://aminadav-ai.github.io/steps/assets/01_arena_preview.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://aminadav-ai.github.io/steps/assets/01_arena_preview.png">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=1.0.2">
 </head>
 <body>
   <main class="lab-layout">
@@ -59,11 +59,11 @@
       <!-- YouTube-style Center Pause / Play Overlay -->
       <div id="ytPausePlayOverlay" class="yt-overlay" data-icon="pause" hidden>
         <button id="ytOverlayBtn" type="button" class="yt-circle-btn" aria-label="Pause / Play">
-          <svg id="ytIconPause" class="yt-icon icon-pause" viewBox="0 0 36 36" width="42" height="42">
+          <svg id="ytIconPause" class="yt-icon icon-pause" viewBox="0 0 36 36" width="42" height="42" style="display: block;">
             <rect x="8.5" y="6.5" width="6.2" height="23" rx="1.8" fill="currentColor"></rect>
             <rect x="21.3" y="6.5" width="6.2" height="23" rx="1.8" fill="currentColor"></rect>
           </svg>
-          <svg id="ytIconPlay" class="yt-icon icon-play play-shift" viewBox="0 0 36 36" width="44" height="44">
+          <svg id="ytIconPlay" class="yt-icon icon-play play-shift" viewBox="0 0 36 36" width="44" height="44" style="display: none;">
             <path d="M 11,7 L 29,18 L 11,29 Z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path>
           </svg>
         </button>
@@ -282,6 +282,6 @@
     </aside>
   </main>
 
-  <script type="module" src="./src/main.js"></script>
+  <script type="module" src="./src/main.js?v=1.0.2"></script>
 </body>
 </html>
