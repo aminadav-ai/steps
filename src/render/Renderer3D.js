@@ -790,17 +790,6 @@ export class Renderer3D {
         ctx.fill();
       }
 
-      if (pNose && pFood && (fState === 'ACTIVE' || fTimer > 0.35)) {
-        ctx.strokeStyle = isLeader ? 'rgba(251, 191, 36, 0.65)' : 'rgba(52, 211, 153, 0.35)';
-        ctx.lineWidth = isLeader ? 2 : 1;
-        ctx.setLineDash([5, 5]);
-        ctx.beginPath();
-        ctx.moveTo(pNose.sx, pNose.sy);
-        ctx.lineTo(pFood.sx, pFood.sy);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-
       // Draw 3D Food Sphere (Nutrient Orb)
       if (pFood) {
         const rPx = Math.max(4, creature.foodRadius * 0.72 * pFood.scale);
