@@ -155,6 +155,33 @@ for (let i = 0; i < 6; i++) trainSim.stepControl();
 const afterThrowCom = walker.body.getCenterOfMass();
 console.log(`Шагоход схвачен и брошен мышью в новую точку: (${afterThrowCom.x.toFixed(2)}, ${afterThrowCom.z.toFixed(2)}), сглаженная скорость HUD=${walker.smoothedVelocityTowardFood.toFixed(2)} м/с`);
 
+console.log('\n=== 5. Проверка пробуждения дообучения при включении скользкого льда и падении скорости ===');
+trainSim.uprightCreature(0);
+trainSim.trainer.metaState.mode = 'CONSOLIDATED';
+trainSim.trainer.metaState.isLearningActive = false;
+trainSim.setFloorFriction(0.15);
+console.log(`После перевода ползунка трения на скользкий лёд (mu=0.15): mode=${trainSim.trainer.metaState.mode}, isLearningActive=${trainSim.trainer.metaState.isLearningActive}`);
+if (trainSim.trainer.metaState.mode !== 'LEARNING_WALK' || !trainSim.trainer.metaState.isLearningActive) {
+  console.error('ОШИБКА: При включении скользкого льда дообучение должно сразу пробуждаться!');
+  process.exit(1);
+}
+
+// Проверим также автоматическое пробуждение мета-чутья чисто по падению скорости из CONSOLIDATED
+trainSim.trainer.metaState.mode = 'CONSOLIDATED';
+trainSim.trainer.metaState.isLearningActive = false;
+trainSim.trainer.metaState.stallStepsCount = 0;
+trainSim.trainer.metaState.lowVelEpochsCount = 0;
+walker.smoothedVelocityTowardFood = 0.05;
+for (let s = 0; s < 32; s++) {
+  trainSim.stepControl();
+}
+console.log(`После просадки скорости на льду: mode=${trainSim.trainer.metaState.mode}, isLearningActive=${trainSim.trainer.metaState.isLearningActive}, comp=${trainSim.trainer.metaState.competenceEMA} м/с`);
+if (trainSim.trainer.metaState.mode !== 'LEARNING_WALK' || !trainSim.trainer.metaState.isLearningActive) {
+  console.error('ОШИБКА: При падении скорости на скользком льду мета-чутьё должно автоматически включать дообучение!');
+  process.exit(1);
+}
+console.log('ОК: Дообучение надёжно пробуждается при переходе на скользкий лёд и при просадке скорости.');
+
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);
 console.log(`После 25 эпох (1 шагоход): Vel=${lastMetrics.meanVelocity.toFixed(3)} m/s, Food=${lastMetrics.c0Food}, Mode=${lastMetrics.metaMode}`);

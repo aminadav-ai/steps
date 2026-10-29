@@ -698,7 +698,7 @@ export class PPOTrainer {
       reasonText: 'Формирование стабильного базового навыка ходьбы и наведения на цель',
       competenceEMA: 0.04,
       targetCompetence: 0.18,
-      relearnThreshold: 0.085,
+      relearnThreshold: 0.125,
       surpriseEMA: 0.25,
       needToLearnPct: 88,
       stableEpochsCount: 0,
@@ -724,14 +724,32 @@ export class PPOTrainer {
     this.bufVal = [];
     this.bufDone = [];
     this.stepCursor = 0;
+    this.epochVelSum = 0;
   }
 
   /**
    * External notification when environment changes (e.g. floor friction slider changed)
    */
-  notifyEnvironmentChange(reason = 'Изменились физические параметры среды — проверка адаптации') {
+  notifyEnvironmentChange(reason = 'Изменились физические параметры среды — проверка адаптации', nextMu = null) {
     this.metaState.surpriseEMA = Math.max(this.metaState.surpriseEMA, 0.9);
-    if (this.metaState.mode === 'CONSOLIDATED') {
+    if (this.manualFreeze || this.metaState.mode === 'LEARNING_RIGHTING') {
+      return;
+    }
+    const isSlipperyOrChanged = typeof nextMu === 'number' ? nextMu < 0.78 : true;
+    if (this.metaState.mode === 'CONSOLIDATED' || isSlipperyOrChanged) {
+      this.metaState.mode = 'LEARNING_WALK';
+      this.metaState.isLearningActive = true;
+      this.metaState.stableEpochsCount = 0;
+      this.metaState.lowVelEpochsCount = 0;
+      this.metaState.stallStepsCount = 0;
+      this.metaState.competenceEMA = Number(
+        Math.min(this.metaState.competenceEMA, (this.metaState.targetCompetence || 0.18) * 0.58).toFixed(3)
+      );
+      this.minTrainEpochsRemaining = Math.max(this.minTrainEpochsRemaining || 0, 2);
+      this.paramSigma = Math.max(this.paramSigma, 0.085);
+      this._sampleWorkerParamNoise();
+      this.metaState.needToLearnPct = Math.max(this.metaState.needToLearnPct || 0, 78);
+      this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ: АДАПТАЦИЯ К СРЕДЕ';
       this.metaState.reasonText = reason;
     }
   }
@@ -749,7 +767,7 @@ export class PPOTrainer {
     if (presetOrTarget === 'min') {
       this.metaState.ambitionPreset = 'min';
       this.metaState.targetCompetence = 0.18;
-      this.metaState.relearnThreshold = 0.085;
+      this.metaState.relearnThreshold = 0.125;
       this.minFoodsToConsolidate = 2;
       this.maxCpgGain = 1.95;
       this.brain.maxSkipRowNorm = 1.30;
@@ -757,7 +775,7 @@ export class PPOTrainer {
     } else if (presetOrTarget === 'bound') {
       this.metaState.ambitionPreset = 'bound';
       this.metaState.targetCompetence = 0.34;
-      this.metaState.relearnThreshold = 0.16;
+      this.metaState.relearnThreshold = 0.23;
       this.minFoodsToConsolidate = 4;
       this.maxCpgGain = 3.25;
       this.brain.maxSkipRowNorm = 1.80;
@@ -765,7 +783,7 @@ export class PPOTrainer {
     } else if (presetOrTarget === 'turbo') {
       this.metaState.ambitionPreset = 'turbo';
       this.metaState.targetCompetence = 0.48;
-      this.metaState.relearnThreshold = 0.24;
+      this.metaState.relearnThreshold = 0.32;
       this.minFoodsToConsolidate = 6;
       this.maxCpgGain = 3.90;
       this.brain.maxSkipRowNorm = 2.15;
@@ -782,7 +800,7 @@ export class PPOTrainer {
       const t = Math.max(0.14, Math.min(0.60, presetOrTarget));
       this.metaState.ambitionPreset = 'custom';
       this.metaState.targetCompetence = Number(t.toFixed(2));
-      this.metaState.relearnThreshold = Number((t * 0.48).toFixed(2));
+      this.metaState.relearnThreshold = Number((t * 0.68).toFixed(2));
       this.minFoodsToConsolidate = t < 0.22 ? 2 : t < 0.40 ? 4 : 6;
       this.maxCpgGain = Number((1.4 + (t - 0.14) * 5.6).toFixed(2));
       this.brain.maxSkipRowNorm = Number((1.10 + (t - 0.14) * 2.3).toFixed(2));
@@ -1043,11 +1061,31 @@ export class PPOTrainer {
 
     const { stepObs, stepAct, stepLogProb, stepVal } = this._pendingStep;
 
-    // Track stall steps for meta-plasticity wake-up detector
-    if (c0.lastVelocityTowardFood < 0.04) {
+    // Track actual velocity across the rollout and stall steps for meta-plasticity wake-up detector
+    this.epochVelSum = (this.epochVelSum || 0) + (c0.lastVelocityTowardFood || 0);
+    const smoothVel = c0.smoothedVelocityTowardFood !== undefined
+      ? c0.smoothedVelocityTowardFood
+      : (c0.lastVelocityTowardFood || 0);
+    const wakeVelThreshold = Math.max(0.06, this.metaState.relearnThreshold || ((this.metaState.targetCompetence || 0.18) * 0.68));
+    if (smoothVel < wakeVelThreshold && (c0.lastVelocityTowardFood || 0) < wakeVelThreshold) {
       this.metaState.stallStepsCount += 1;
     } else {
-      this.metaState.stallStepsCount = Math.max(0, this.metaState.stallStepsCount - 2);
+      this.metaState.stallStepsCount = Math.max(0, this.metaState.stallStepsCount - 1);
+    }
+
+    // Immediate mid-rollout wake-up if walker is in CONSOLIDATED mode and speed has stayed below threshold for ~1.2s (24 steps)
+    if (this.metaState.mode === 'CONSOLIDATED' && !this.manualFreeze && this.metaState.stallStepsCount >= 24) {
+      this.metaState.mode = 'LEARNING_WALK';
+      this.metaState.isLearningActive = true;
+      this.metaState.stableEpochsCount = 0;
+      this.metaState.stallStepsCount = 0;
+      this.metaState.competenceEMA = Number(Math.max(0, smoothVel).toFixed(3));
+      this.minTrainEpochsRemaining = Math.max(this.minTrainEpochsRemaining || 0, 2);
+      this.metaState.needToLearnPct = 78;
+      this.paramSigma = Math.max(this.paramSigma, 0.085);
+      this._sampleWorkerParamNoise();
+      this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ: АДАПТАЦИЯ К СРЕДЕ';
+      this.metaState.reasonText = `Мета-чутьё обнаружило снижение скорости (${Math.max(0, smoothVel).toFixed(2)} м/с < ${wakeVelThreshold.toFixed(2)} м/с) — дообучение включено!`;
     }
 
     this.bufObs.push(stepObs);
@@ -1085,13 +1123,19 @@ export class PPOTrainer {
   _evaluateMetaPlasticity(creatures, epochLocomotionScore, meanTdSurprise) {
     const c0 = creatures[0];
     // Compute effective goal-directed competence grounded in physical velocity toward food (m/s)
-    const meanEpochRew = epochLocomotionScore / Math.max(1, this.rolloutSteps);
+    const rolloutLen = Math.max(1, this.bufObs.length || this.rolloutSteps);
+    const meanEpochRew = epochLocomotionScore / rolloutLen;
+    const meanRolloutVel = (this.epochVelSum || 0) / rolloutLen;
     const recentVel = Math.max(0, c0.smoothedVelocityTowardFood || c0.lastVelocityTowardFood || 0);
+    const physicalVel = Math.max(0, 0.55 * recentVel + 0.45 * Math.max(0, meanRolloutVel));
     const rewVelComponent = Math.max(0, (meanEpochRew - 0.18) / 2.5);
-    const approxEpochVel = Math.max(0.0, Math.min(0.65, 0.55 * recentVel + 0.45 * rewVelComponent));
+    // Cap reward-based proxy so posture reward cannot mask low physical speed on slippery ice
+    const cappedRewVel = Math.min(rewVelComponent, physicalVel * 1.15 + 0.02);
+    const approxEpochVel = Math.max(0.0, Math.min(0.65, 0.65 * physicalVel + 0.35 * cappedRewVel));
 
+    const emaAlpha = approxEpochVel < this.metaState.competenceEMA ? 0.45 : 0.24;
     this.metaState.competenceEMA = Number(
-      (0.76 * this.metaState.competenceEMA + 0.24 * approxEpochVel).toFixed(3)
+      ((1 - emaAlpha) * this.metaState.competenceEMA + emaAlpha * approxEpochVel).toFixed(3)
     );
     this.metaState.surpriseEMA = Number(
       (0.75 * this.metaState.surpriseEMA + 0.25 * meanTdSurprise).toFixed(3)
@@ -1158,8 +1202,9 @@ export class PPOTrainer {
             : `Доводка скорости: ${comp.toFixed(2)} м/с → цель ${target.toFixed(2)} м/с`;
       }
     } else if (this.metaState.mode === 'CONSOLIDATED') {
-      // Monitor if environment changed, obstacle blocked path, or velocity dropped persistently
-      if (comp < this.metaState.relearnThreshold && this.metaState.stallStepsCount > 90) {
+      // Monitor if environment changed (e.g. slippery ice), obstacle blocked path, or velocity dropped below threshold
+      const wakeVelThreshold = Math.max(0.06, this.metaState.relearnThreshold || (target * 0.68));
+      if (comp < wakeVelThreshold || physicalVel < wakeVelThreshold) {
         this.metaState.lowVelEpochsCount += 1;
       } else {
         this.metaState.lowVelEpochsCount = Math.max(0, this.metaState.lowVelEpochsCount - 1);
@@ -1167,18 +1212,20 @@ export class PPOTrainer {
 
       const deficit = Math.max(0, target - comp);
       this.metaState.needToLearnPct = Math.round(
-        Math.min(95, 10 + (deficit / target) * 55 + (this.metaState.stallStepsCount > 60 ? 25 : 0))
+        Math.min(95, 10 + (deficit / target) * 55 + (this.metaState.stallStepsCount > 15 ? 25 : 0))
       );
 
-      if (this.metaState.lowVelEpochsCount >= 2 || this.metaState.stallStepsCount > 140) {
+      if (this.metaState.lowVelEpochsCount >= 1 || this.metaState.stallStepsCount >= 24) {
         this.metaState.mode = 'LEARNING_WALK';
         this.metaState.isLearningActive = true;
         this.metaState.stableEpochsCount = 0;
         this.metaState.stallStepsCount = 0;
+        this.minTrainEpochsRemaining = Math.max(this.minTrainEpochsRemaining || 0, 2);
         this.metaState.needToLearnPct = 78;
         this.paramSigma = Math.max(this.paramSigma, 0.085);
+        this._sampleWorkerParamNoise();
         this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ: АДАПТАЦИЯ К СРЕДЕ';
-        this.metaState.reasonText = `Мета-чутьё обнаружило просадку скорости (${comp.toFixed(2)} м/с) — дообучение включено!`;
+        this.metaState.reasonText = `Мета-чутьё обнаружило просадку скорости (${comp.toFixed(2)} м/с < ${wakeVelThreshold.toFixed(2)} м/с) — дообучение включено!`;
       } else {
         this.metaState.isLearningActive = false;
         this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
@@ -1492,6 +1539,10 @@ export class PPOTrainer {
     if (typeof data.modeBeforeOverturn === 'string') this.modeBeforeOverturn = data.modeBeforeOverturn;
     if (data.metaState && typeof data.metaState === 'object') {
       this.metaState = { ...this.metaState, ...data.metaState };
+      const minRelearn = Number(((this.metaState.targetCompetence || 0.18) * 0.68).toFixed(3));
+      if (!this.metaState.relearnThreshold || this.metaState.relearnThreshold < minRelearn) {
+        this.metaState.relearnThreshold = minRelearn;
+      }
     }
     if (typeof data.lastPolicyLoss === 'number') this.lastPolicyLoss = data.lastPolicyLoss;
     if (typeof data.lastValueLoss === 'number') this.lastValueLoss = data.lastValueLoss;
@@ -1534,6 +1585,7 @@ export class NESTrainer {
     this.workerReturns = new Float64Array(numWorkers);
     this.baselineReturn = 0.10;
     this.stepCursor = 0;
+    this.epochVelSum = 0;
     this.updateCount = 0;
     this.lastMeanStepReward = 0;
 
@@ -1552,7 +1604,7 @@ export class NESTrainer {
       reasonText: 'Эволюционный поиск моторного навыка шага и руления',
       competenceEMA: 0.03,
       targetCompetence: 0.18,
-      relearnThreshold: 0.085,
+      relearnThreshold: 0.125,
       ambitionPreset: 'min',
       surpriseEMA: 0.20,
       needToLearnPct: 85,
@@ -1577,31 +1629,31 @@ export class NESTrainer {
       this.alwaysLearn = false;
       this.metaState.ambitionPreset = 'min';
       this.metaState.targetCompetence = 0.18;
-      this.metaState.relearnThreshold = 0.085;
+      this.metaState.relearnThreshold = 0.125;
       this.minFoodsToConsolidate = 2;
     } else if (presetOrTarget === 'bound') {
       this.alwaysLearn = false;
       this.metaState.ambitionPreset = 'bound';
       this.metaState.targetCompetence = 0.34;
-      this.metaState.relearnThreshold = 0.15;
+      this.metaState.relearnThreshold = 0.23;
       this.minFoodsToConsolidate = 4;
     } else if (presetOrTarget === 'turbo') {
       this.alwaysLearn = false;
       this.metaState.ambitionPreset = 'turbo';
       this.metaState.targetCompetence = 0.46;
-      this.metaState.relearnThreshold = 0.22;
+      this.metaState.relearnThreshold = 0.31;
       this.minFoodsToConsolidate = 6;
     } else if (presetOrTarget === 'infinite') {
       this.alwaysLearn = true;
       this.metaState.ambitionPreset = 'infinite';
       this.metaState.targetCompetence = 0.60;
-      this.metaState.relearnThreshold = 0.35;
+      this.metaState.relearnThreshold = 0.45;
       this.minFoodsToConsolidate = 9999;
     } else if (typeof presetOrTarget === 'number') {
       this.alwaysLearn = presetOrTarget >= 0.54;
       this.metaState.ambitionPreset = 'custom';
       this.metaState.targetCompetence = Number(presetOrTarget.toFixed(2));
-      this.metaState.relearnThreshold = Number(Math.max(0.08, presetOrTarget * 0.46).toFixed(2));
+      this.metaState.relearnThreshold = Number(Math.max(0.10, presetOrTarget * 0.68).toFixed(2));
       this.minFoodsToConsolidate = presetOrTarget > 0.38 ? 5 : presetOrTarget > 0.24 ? 3 : 2;
     }
     const raisedAmbition = this.metaState.targetCompetence > prevTarget + 0.005 || presetOrTarget !== 'min';
@@ -1644,8 +1696,23 @@ export class NESTrainer {
     }
   }
 
-  notifyEnvironmentChange(reason = 'Изменились параметры среды — проверка адаптации') {
-    if (this.metaState.mode === 'CONSOLIDATED') {
+  notifyEnvironmentChange(reason = 'Изменились параметры среды — проверка адаптации', nextMu = null) {
+    this.metaState.surpriseEMA = Math.max(this.metaState.surpriseEMA || 0.2, 0.9);
+    if (this.manualFreeze || this.metaState.mode === 'LEARNING_RIGHTING') {
+      return;
+    }
+    const isSlipperyOrChanged = typeof nextMu === 'number' ? nextMu < 0.78 : true;
+    if (this.metaState.mode === 'CONSOLIDATED' || isSlipperyOrChanged) {
+      this.metaState.mode = 'LEARNING_WALK';
+      this.metaState.isLearningActive = true;
+      this.metaState.stableEpochsCount = 0;
+      this.metaState.lowVelEpochsCount = 0;
+      this.metaState.stallStepsCount = 0;
+      this.metaState.competenceEMA = Number(
+        Math.min(this.metaState.competenceEMA, (this.metaState.targetCompetence || 0.18) * 0.58).toFixed(3)
+      );
+      this.metaState.needToLearnPct = Math.max(this.metaState.needToLearnPct || 0, 78);
+      this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ (NES): АДАПТАЦИЯ К СРЕДЕ';
       this.metaState.reasonText = reason;
     }
   }
@@ -1753,13 +1820,39 @@ export class NESTrainer {
       const r = rewards[w];
       this.workerReturns[w] += r > 5.0 ? r - 8.5 : r;
     }
+    this.epochVelSum = (this.epochVelSum || 0) + (c0.lastVelocityTowardFood || 0);
+    const smoothVel = c0.smoothedVelocityTowardFood !== undefined
+      ? c0.smoothedVelocityTowardFood
+      : (c0.lastVelocityTowardFood || 0);
+    const wakeVelThreshold = Math.max(0.06, this.metaState.relearnThreshold || ((this.metaState.targetCompetence || 0.18) * 0.68));
+    if (smoothVel < wakeVelThreshold && (c0.lastVelocityTowardFood || 0) < wakeVelThreshold) {
+      this.metaState.stallStepsCount = (this.metaState.stallStepsCount || 0) + 1;
+    } else {
+      this.metaState.stallStepsCount = Math.max(0, (this.metaState.stallStepsCount || 0) - 1);
+    }
+
+    if (this.metaState.mode === 'CONSOLIDATED' && !this.manualFreeze && this.metaState.stallStepsCount >= 24) {
+      this.metaState.mode = 'LEARNING_WALK';
+      this.metaState.isLearningActive = true;
+      this.metaState.stableEpochsCount = 0;
+      this.metaState.stallStepsCount = 0;
+      this.metaState.competenceEMA = Number(Math.max(0, smoothVel).toFixed(3));
+      this.metaState.needToLearnPct = 78;
+      this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ (NES): АДАПТАЦИЯ К СРЕДЕ';
+      this.metaState.reasonText = `Мета-чутьё обнаружило снижение скорости (${Math.max(0, smoothVel).toFixed(2)} м/с) — дообучение включено!`;
+    }
+
     this.stepCursor += 1;
     if (this.stepCursor < this.horizonSteps) return null;
 
     const meanStepRew = this.workerReturns[0] / this.horizonSteps;
+    const meanRolloutVel = (this.epochVelSum || 0) / Math.max(1, this.horizonSteps);
+    this.epochVelSum = 0;
     this.lastMeanStepReward = meanStepRew;
+    const approxVel = Math.max(0, 0.55 * smoothVel + 0.45 * Math.max(0, meanRolloutVel));
+    const emaAlpha = approxVel < this.metaState.competenceEMA ? 0.45 : 0.25;
     this.metaState.competenceEMA = Number(
-      (0.75 * this.metaState.competenceEMA + 0.25 * Math.max(0, c0.lastVelocityTowardFood)).toFixed(3)
+      ((1 - emaAlpha) * this.metaState.competenceEMA + emaAlpha * approxVel).toFixed(3)
     );
 
     if (this.manualFreeze) {
@@ -1782,12 +1875,13 @@ export class NESTrainer {
         }
       }
     } else if (this.metaState.mode === 'CONSOLIDATED') {
-      if (this.metaState.competenceEMA < this.metaState.relearnThreshold) {
+      if (this.metaState.competenceEMA < wakeVelThreshold || approxVel < wakeVelThreshold) {
         this.metaState.mode = 'LEARNING_WALK';
         this.metaState.isLearningActive = true;
+        this.metaState.stableEpochsCount = 0;
         this.metaState.needToLearnPct = 75;
-        this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ (NES): АДАПТАЦИЯ';
-        this.metaState.reasonText = 'Скорость просела — возобновлён поиск параметров';
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ (NES): АДАПТАЦИЯ К СРЕДЕ';
+        this.metaState.reasonText = `Скорость просела (${this.metaState.competenceEMA.toFixed(2)} м/с < ${wakeVelThreshold.toFixed(2)} м/с) — возобновлён поиск параметров`;
       }
     }
 
@@ -1847,9 +1941,14 @@ export class NESTrainer {
     if (typeof data.minFoodsToConsolidate === 'number') this.minFoodsToConsolidate = data.minFoodsToConsolidate;
     if (data.metaState && typeof data.metaState === 'object') {
       this.metaState = { ...this.metaState, ...data.metaState };
+      const minRelearn = Number(((this.metaState.targetCompetence || 0.18) * 0.68).toFixed(3));
+      if (!this.metaState.relearnThreshold || this.metaState.relearnThreshold < minRelearn) {
+        this.metaState.relearnThreshold = minRelearn;
+      }
     }
     if (typeof data.lastMeanStepReward === 'number') this.lastMeanStepReward = data.lastMeanStepReward;
     this.stepCursor = 0;
+    this.epochVelSum = 0;
     this._sampleWorkerPopulation();
     return true;
   }

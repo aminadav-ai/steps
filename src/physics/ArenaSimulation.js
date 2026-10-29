@@ -343,8 +343,18 @@ export class ArenaSimulation {
 
   setFloorFriction(mu) {
     const nextMu = Math.max(0, Math.min(2.0, mu));
-    if (Math.abs(nextMu - this.floorFriction) >= 0.04 && this.trainer && this.trainer.notifyEnvironmentChange) {
-      this.trainer.notifyEnvironmentChange(`Изменилось трение пола (μ = ${nextMu.toFixed(2)}) — контроль сцепления`);
+    const prevNotified = this._lastNotifiedFriction !== undefined ? this._lastNotifiedFriction : this.floorFriction;
+    const isConsolidated = Boolean(this.trainer && this.trainer.metaState && this.trainer.metaState.mode === 'CONSOLIDATED');
+    if (
+      this.trainer &&
+      this.trainer.notifyEnvironmentChange &&
+      (Math.abs(nextMu - prevNotified) >= 0.04 || (nextMu < 0.78 && isConsolidated))
+    ) {
+      this._lastNotifiedFriction = nextMu;
+      this.trainer.notifyEnvironmentChange(
+        `Изменилось трение пола (μ = ${nextMu.toFixed(2)}) — адаптация походки к новому сцеплению`,
+        nextMu
+      );
     }
     this.floorFriction = nextMu;
     this.world.floorFriction = this.floorFriction;

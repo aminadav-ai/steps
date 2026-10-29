@@ -635,6 +635,7 @@ rangeFriction.addEventListener('input', () => {
   hudFriction.textContent = mu.toFixed(2);
   if (sim) {
     sim.setFloorFriction(mu);
+    updateHUD();
   }
 });
 
