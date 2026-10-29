@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://aminadav-ai.github.io/steps/assets/01_arena_preview.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://aminadav-ai.github.io/steps/assets/01_arena_preview.png">
-  <link rel="stylesheet" href="./styles.css?v=1.0.6">
+  <link rel="stylesheet" href="./styles.css?v=2.0.0">
 </head>
 <body>
   <main class="lab-layout">
@@ -171,6 +171,14 @@
           </div>
 
           <div class="control-field full">
+            <label for="selectActuator" data-i18n="labelActuator">Тип привода лап (Механика):</label>
+            <select id="selectActuator">
+              <option value="servo" data-i18n="optActuatorServo" selected>⚙️ Жёсткие сервоприводы (Revolute PD, Н·м)</option>
+              <option value="muscle" data-i18n="optActuatorMuscle">💪 Мягкие био-мышцы (XPBD-связки, v1)</option>
+            </select>
+          </div>
+
+          <div class="control-field full">
             <label for="selectAlgorithm" data-i18n="labelAlgorithm">Алгоритм обучения нейросети:</label>
             <select id="selectAlgorithm">
               <option value="ppo" data-i18n="optPPO" selected>PPO (Actor-Critic + GAE + Adam Backpropagation)</option>
@@ -281,6 +289,6 @@
     </aside>
   </main>
 
-  <script type="module" src="./src/main.js?v=1.0.6"></script>
+  <script type="module" src="./src/main.js?v=2.0.0"></script>
 </body>
 </html>

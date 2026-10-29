@@ -11,6 +11,11 @@ const iceSim = new ArenaSimulation({
 });
 
 const c0 = iceSim.creatures[0];
+if (iceSim.actuatorMode !== 'servo' || c0.actuatorMode !== 'servo' || c0.kneeNodes.length !== 3) {
+  console.error('ОШИБКА: По умолчанию во 2-й версии должны быть включены жёсткие сервоприводы (servo) с физическими узлами коленей!');
+  process.exit(1);
+}
+console.log(`Режим приводов по умолчанию: ${c0.actuatorMode} (узлов коленей: ${c0.kneeNodes.length}, всего физических узлов: ${c0.body.nodes.length})`);
 const initialCom = c0.body.getCenterOfMass();
 
 for (let step = 0; step < 60; step++) {
@@ -181,6 +186,28 @@ if (trainSim.trainer.metaState.mode !== 'LEARNING_WALK' || !trainSim.trainer.met
   process.exit(1);
 }
 console.log('ОК: Дообучение надёжно пробуждается при переходе на скользкий лёд и при просадке скорости.');
+
+console.log('\n=== 6. Проверка переключателя режима приводов: servo (по умолчанию) <-> muscle (v1) ===');
+const leg0 = walker.legControllers[0];
+console.log(`Сервопривод #0: isServo=${leg0.isServo}, угол=${(leg0.jointAngleRad * 180 / Math.PI).toFixed(1)}°, момент=${leg0.jointTorqueNm.toFixed(2)} Н·м (нагрузка ${(leg0.torqueLoadRatio * 100).toFixed(1)}%)`);
+if (!leg0.isServo || typeof leg0.jointTorqueNm !== 'number') {
+  console.error('ОШИБКА: В режиме servo должна рассчитываться телеметрия крутящего момента (Н·м) и угла шарнира!');
+  process.exit(1);
+}
+
+const muscleSim = new ArenaSimulation({
+  morphologyKey: 'tripod',
+  actuatorMode: 'muscle',
+  algorithm: 'ppo',
+  populationSize: 1,
+  floorFriction: 0.0
+});
+const m0 = muscleSim.creatures[0];
+if (m0.actuatorMode !== 'muscle' || m0.kneeNodes.length !== 0 || m0.legControllers[0].isServo !== false) {
+  console.error('ОШИБКА: При выборе режима muscle должна создаваться классическая био-мышечная конструкция v1!');
+  process.exit(1);
+}
+console.log(`Классический режим приводов: ${m0.actuatorMode} (узлов коленей: ${m0.kneeNodes.length}, всего физических узлов: ${m0.body.nodes.length})`);
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);

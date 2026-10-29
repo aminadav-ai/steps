@@ -903,9 +903,51 @@ export class Renderer3D {
       }
     }
 
-    // 4. Render 2-Segment Articulated Legs (Hip -> Knee -> Foot) + Muscle Tension Lines
+    // 4. Render 2-Segment Articulated Legs (Hip -> Knee -> Foot)
+    // In 'servo' mode (default in v2): uses physical kneeNodes + rigid robotic struts + cylindrical PD servo motor drums (no muscle lines)
+    // In 'muscle' mode (v1): draws active muscle tension lines + IK knee
+    const isServoMode = creature.actuatorMode !== 'muscle';
     const L_femur = 0.16;
-    const L_tibia = 0.16;
+    const drawServoDrum = (pJoint, radiusPx, loadRatio, rotorAngleRad) => {
+      if (!pJoint) return;
+      const rOuter = Math.max(4.5, radiusPx);
+      // Outer metallic servo housing
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.arc(pJoint.sx, pJoint.sy, rOuter, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Torque load ring (cyan/emerald at low torque -> amber -> crimson at peak torque N*m)
+      const load = Math.max(0, Math.min(1, loadRatio || 0));
+      ctx.strokeStyle = load > 0.65
+        ? '#fb7185'
+        : load > 0.32
+          ? '#fbbf24'
+          : '#38bdf8';
+      ctx.lineWidth = Math.max(1.8, rOuter * 0.34);
+      ctx.beginPath();
+      ctx.arc(pJoint.sx, pJoint.sy, rOuter * 0.78, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Rotor angle indicator tick
+      const tickAngle = rotorAngleRad || 0;
+      ctx.strokeStyle = '#f8fafc';
+      ctx.lineWidth = Math.max(1.3, rOuter * 0.22);
+      ctx.beginPath();
+      ctx.moveTo(pJoint.sx, pJoint.sy);
+      ctx.lineTo(
+        pJoint.sx + Math.cos(tickAngle) * (rOuter * 0.72),
+        pJoint.sy + Math.sin(tickAngle) * (rOuter * 0.72)
+      );
+      ctx.stroke();
+
+      // Center shaft bolt
+      ctx.fillStyle = '#e2e8f0';
+      ctx.beginPath();
+      ctx.arc(pJoint.sx, pJoint.sy, Math.max(1.6, rOuter * 0.25), 0, Math.PI * 2);
+      ctx.fill();
+    };
+
     for (let i = 0; i < creature.footNodes.length; i++) {
       const hip = creature.hipNodes[i];
       const foot = creature.footNodes[i];
@@ -914,39 +956,42 @@ export class Renderer3D {
       const hipPos = posOf(hip);
       const footPos = posOf(foot);
 
-      // Compute exact 3D knee joint position using 2-link inverse kinematics
-      // Knee bends outward/forward along the leg's sagittal plane
-      const mid = new Vec3(
-        0.5 * (hipPos.x + footPos.x),
-        0.5 * (hipPos.y + footPos.y),
-        0.5 * (hipPos.z + footPos.z)
-      );
-      const legVec = Vec3.sub(footPos, hipPos);
-      const legLen = Math.max(0.05, legVec.length());
-      const halfSpan = Math.min(L_femur * 0.98, legLen * 0.5);
-      const kneeOut = Math.sqrt(Math.max(0.0004, L_femur * L_femur - halfSpan * halfSpan));
-
-      // Outward radial + anterior knee direction
-      const bendDir = new Vec3(
-        forward.x * 0.65 + (hipPos.x - com.x) * 1.4,
-        0.25,
-        forward.z * 0.65 + (hipPos.z - com.z) * 1.4
-      ).normalize();
-
-      const kneePos = new Vec3(
-        mid.x + bendDir.x * kneeOut,
-        mid.y + bendDir.y * kneeOut,
-        mid.z + bendDir.z * kneeOut
-      );
+      let kneePos;
+      if (isServoMode && creature.kneeNodes && creature.kneeNodes[i]) {
+        // Real physical 3D knee node from XPBD rigid-link simulation
+        kneePos = posOf(creature.kneeNodes[i]);
+      } else {
+        // Visual 2-link IK fallback for v1 bio-muscle mode
+        const mid = new Vec3(
+          0.5 * (hipPos.x + footPos.x),
+          0.5 * (hipPos.y + footPos.y),
+          0.5 * (hipPos.z + footPos.z)
+        );
+        const legVec = Vec3.sub(footPos, hipPos);
+        const legLen = Math.max(0.05, legVec.length());
+        const halfSpan = Math.min(L_femur * 0.98, legLen * 0.5);
+        const kneeOut = Math.sqrt(Math.max(0.0004, L_femur * L_femur - halfSpan * halfSpan));
+        const bendDir = new Vec3(
+          forward.x * 0.65 + (hipPos.x - com.x) * 1.4,
+          0.25,
+          forward.z * 0.65 + (hipPos.z - com.z) * 1.4
+        ).normalize();
+        kneePos = new Vec3(
+          mid.x + bendDir.x * kneeOut,
+          mid.y + bendDir.y * kneeOut,
+          mid.z + bendDir.z * kneeOut
+        );
+      }
 
       const pHip = proj(hipPos);
       const pKnee = proj(kneePos);
       const pFoot = proj(footPos);
 
-      // Draw active muscle lines colored by instantaneous force (cyan = pull, orange/red = push)
       const liftDof = creature.logicalDoFs[i * 2];
       const strideDof = creature.logicalDoFs[i * 2 + 1];
-      if (isFocused && liftDof && strideDof) {
+
+      // In 'muscle' (v1) mode only: draw active muscle lines colored by instantaneous force
+      if (!isServoMode && isFocused && liftDof && strideDof) {
         for (const mus of [liftDof.primary, strideDof.primary]) {
           const pA = proj(posOf(mus.nodeA));
           const pB = proj(posOf(mus.nodeB));
@@ -966,20 +1011,47 @@ export class Renderer3D {
 
       // Draw Femur (Hip -> Knee) and Tibia (Knee -> Foot)
       if (pHip && pKnee && pFoot) {
-        ctx.strokeStyle = isLeader ? '#f8fafc' : '#cbd5e1';
-        ctx.lineWidth = Math.max(2.0, 0.026 * pKnee.scale);
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(pHip.sx, pHip.sy);
-        ctx.lineTo(pKnee.sx, pKnee.sy);
-        ctx.lineTo(pFoot.sx, pFoot.sy);
-        ctx.stroke();
+        if (isServoMode) {
+          // Rigid Robotic Link Casing (outer dark armor + bright structural core)
+          ctx.strokeStyle = '#0f172a';
+          ctx.lineWidth = Math.max(4.5, 0.048 * pKnee.scale);
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.beginPath();
+          ctx.moveTo(pHip.sx, pHip.sy);
+          ctx.lineTo(pKnee.sx, pKnee.sy);
+          ctx.lineTo(pFoot.sx, pFoot.sy);
+          ctx.stroke();
 
-        // Knee joint cap
-        ctx.fillStyle = '#fb923c';
-        ctx.beginPath();
-        ctx.arc(pKnee.sx, pKnee.sy, Math.max(2.5, 0.028 * pKnee.scale), 0, Math.PI * 2);
-        ctx.fill();
+          ctx.strokeStyle = isLeader ? '#e2e8f0' : '#cbd5e1';
+          ctx.lineWidth = Math.max(2.2, 0.024 * pKnee.scale);
+          ctx.beginPath();
+          ctx.moveTo(pHip.sx, pHip.sy);
+          ctx.lineTo(pKnee.sx, pKnee.sy);
+          ctx.lineTo(pFoot.sx, pFoot.sy);
+          ctx.stroke();
+
+          // Knee Revolute PD Servo Motor Drum
+          const kneeServo = liftDof ? liftDof.primary : null;
+          const kneeLoad = kneeServo ? (kneeServo.torqueLoadRatio ?? Math.min(1, Math.abs(kneeServo.appliedForce || 0) / 90.0)) : 0;
+          const kneeAng = Math.atan2(pFoot.sy - pKnee.sy, pFoot.sx - pKnee.sx);
+          drawServoDrum(pKnee, 0.042 * pKnee.scale, kneeLoad, kneeAng);
+        } else {
+          ctx.strokeStyle = isLeader ? '#f8fafc' : '#cbd5e1';
+          ctx.lineWidth = Math.max(2.0, 0.026 * pKnee.scale);
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(pHip.sx, pHip.sy);
+          ctx.lineTo(pKnee.sx, pKnee.sy);
+          ctx.lineTo(pFoot.sx, pFoot.sy);
+          ctx.stroke();
+
+          // Knee joint cap (v1 bio-muscle mode)
+          ctx.fillStyle = '#fb923c';
+          ctx.beginPath();
+          ctx.arc(pKnee.sx, pKnee.sy, Math.max(2.5, 0.028 * pKnee.scale), 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       // Foot contact ring on floor
@@ -995,11 +1067,26 @@ export class Renderer3D {
       }
     }
 
-    // 5. Render 3D Nodes (Torso, Hips, Head Sensor, Feet)
+    // 5. Render 3D Nodes (Torso, Hips / Hip Servo Drums, Head Sensor, Feet)
     for (const node of creature.body.nodes) {
+      if (node.role === 'knee') continue; // Drawn as servo drum / knee joint in step 4
       const p = proj(posOf(node));
       if (!p) continue;
       const rPx = Math.max(3, node.radius * p.scale * 0.85);
+
+      if (isServoMode && node.role === 'hip') {
+        const hipIdx = creature.hipNodes.indexOf(node);
+        if (hipIdx >= 0) {
+          const strideDof = creature.logicalDoFs[hipIdx * 2 + 1];
+          const hipServo = strideDof ? strideDof.primary : null;
+          const hipLoad = hipServo ? (hipServo.torqueLoadRatio ?? Math.min(1, Math.abs(hipServo.appliedForce || 0) / 85.0)) : 0;
+          const kneeNode = creature.kneeNodes && creature.kneeNodes[hipIdx];
+          const pKnee = kneeNode ? proj(posOf(kneeNode)) : null;
+          const hipAng = pKnee ? Math.atan2(pKnee.sy - p.sy, pKnee.sx - p.sx) : 0;
+          drawServoDrum(p, rPx * 1.08, hipLoad, hipAng);
+          continue;
+        }
+      }
 
       if (node.role === 'foot') {
         ctx.fillStyle = node.inContact ? '#4ade80' : '#94a3b8';

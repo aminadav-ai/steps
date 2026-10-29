@@ -24,12 +24,14 @@ const WORKER_PALETTE = [
 export class ArenaSimulation {
   constructor({
     morphologyKey = 'tripod',
+    actuatorMode = 'servo',
     algorithm = 'ppo',
     populationSize = 1,
     arenaHalfSize = 11.0,
     floorFriction = 1.0
   } = {}) {
     this.morphologyKey = morphologyKey;
+    this.actuatorMode = actuatorMode; // 'servo' (default in v2) | 'muscle' (v1 bio-muscles)
     this.algorithm = algorithm;
     this.populationSize = populationSize;
     this.arenaHalfSize = arenaHalfSize;
@@ -80,7 +82,7 @@ export class ArenaSimulation {
     for (let i = 0; i < this.populationSize; i++) {
       const origin = this._computeSpawnOrigin(i);
       const color = WORKER_PALETTE[i % WORKER_PALETTE.length];
-      const creature = morph.build({ id: i, origin, color });
+      const creature = morph.build({ id: i, origin, color, actuatorMode: this.actuatorMode });
       this.world.addBody(creature.body);
       this.creatures.push(creature);
       this._spawnFoodForCreature(creature, true);
@@ -133,7 +135,8 @@ export class ArenaSimulation {
     const fresh = this.morphSpec.build({
       id: idx,
       origin,
-      color: oldCreature.color
+      color: oldCreature.color,
+      actuatorMode: this.actuatorMode
     });
     fresh.foodCollected = oldCreature.foodCollected;
     fresh.cumulativeReward = oldCreature.cumulativeReward;
@@ -169,7 +172,8 @@ export class ArenaSimulation {
     const template = this.morphSpec.build({
       id: idx,
       origin: new Vec3(0, 0, 0),
-      color: c.color
+      color: c.color,
+      actuatorMode: this.actuatorMode
     });
 
     // Apply Euclidean rigid rotation (around Y) + translation to (com.x, 0.015, com.z)
@@ -747,9 +751,10 @@ export class ArenaSimulation {
   exportCheckpoint(uiState = null, cameraState = null) {
     const c0 = this.creatures[0];
     return {
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString(),
       morphologyKey: this.morphologyKey,
+      actuatorMode: this.actuatorMode,
       algorithm: this.algorithm,
       populationSize: this.populationSize,
       arenaHalfSize: this.arenaHalfSize,

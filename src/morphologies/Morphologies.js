@@ -5,13 +5,27 @@ import { ArticulatedBody, Vec3 } from '../physics/Physics3D.js';
  * and sensor vector for a creature.
  */
 export class CreatureInstance {
-  constructor({ id, morphologyKey, body, frameRefs, footNodes, hipNodes, legControllers, color, spawnOrigin }) {
+  constructor({
+    id,
+    morphologyKey,
+    actuatorMode = 'servo',
+    body,
+    frameRefs,
+    footNodes,
+    hipNodes,
+    kneeNodes = [],
+    legControllers,
+    color,
+    spawnOrigin
+  }) {
     this.id = id;
     this.morphologyKey = morphologyKey;
+    this.actuatorMode = actuatorMode; // 'servo' (Rigid Revolute PD Servos) | 'muscle' (Soft XPBD Bio-Muscles)
     this.body = body;
     this.frameRefs = frameRefs; // { top, bottom, front, tail, backLeft, backRight }
     this.footNodes = footNodes;
     this.hipNodes = hipNodes || [];
+    this.kneeNodes = kneeNodes || [];
     this.legControllers = legControllers || [];
     this.color = color;
     this.spawnOrigin = spawnOrigin.clone();
@@ -204,6 +218,7 @@ function attachOrthogonalLeg({
   body,
   id,
   legIdx,
+  actuatorMode = 'servo',
   hipNode,
   frontAnchor,
   rearAnchor,
@@ -217,6 +232,10 @@ function attachOrthogonalLeg({
   liftStrokeDown = 0.125,
   color
 }) {
+  const isServoMode = actuatorMode !== 'muscle';
+  const L_femur = 0.195;
+  const L_tibia = 0.195;
+
   const restFootPos = new Vec3(hipNode.pos.x, footY, hipNode.pos.z);
   const restHipPos = hipNode.pos.clone();
   const restFrontPos = frontAnchor.pos.clone();
@@ -224,18 +243,135 @@ function attachOrthogonalLeg({
   const restLatPos = lateralAnchor.pos.clone();
   const restOppLatPos = oppositeLateralAnchor ? oppositeLateralAnchor.pos.clone() : null;
   const restDorsalPos = dorsalAnchor ? dorsalAnchor.pos.clone() : null;
+  const restComX = 0.5 * (restFrontPos.x + restRearPos.x);
+  const restComZ = 0.5 * (restFrontPos.z + restRearPos.z);
+
+  // Exact 3D Revolute 2-Link Knee Kinematics in canonical torso frame:
+  // Guarantees ||kneePos - restHipPos|| === L_femur and ||kneePos - targetFootPos|| === L_tibia
+  const computeKneeTarget3D = targetFootPos => {
+    const ux = targetFootPos.x - restHipPos.x;
+    const uy = targetFootPos.y - restHipPos.y;
+    const uz = targetFootPos.z - restHipPos.z;
+    const rawD = Math.hypot(ux, uy, uz);
+    const maxReach = (L_femur + L_tibia) * 0.992;
+    const d = Math.max(0.05, Math.min(maxReach, rawD));
+    const scale = rawD > 1e-6 ? d / rawD : 1.0;
+    const cx = ux * scale;
+    const cy = uy * scale;
+    const cz = uz * scale;
+
+    const midX = restHipPos.x + 0.5 * cx;
+    const midY = restHipPos.y + 0.5 * cy;
+    const midZ = restHipPos.z + 0.5 * cz;
+
+    // Outward + anterior sagittal knee bend vector orthogonalized against leg chord u
+    const bx0 = 0.65 + (restHipPos.x - restComX) * 1.4;
+    const by0 = 0.25;
+    const bz0 = (restHipPos.z - restComZ) * 1.4;
+    const dotBU = (bx0 * cx + by0 * cy + bz0 * cz) / Math.max(1e-6, d * d);
+    let px = bx0 - dotBU * cx;
+    let py = by0 - dotBU * cy;
+    let pz = bz0 - dotBU * cz;
+    const pLen = Math.hypot(px, py, pz);
+    if (pLen > 1e-6) {
+      px /= pLen;
+      py /= pLen;
+      pz /= pLen;
+    } else {
+      px = 1.0;
+      py = 0.0;
+      pz = 0.0;
+    }
+
+    const hKnee = Math.sqrt(Math.max(1e-5, L_femur * L_femur - 0.25 * d * d));
+    return new Vec3(
+      midX + px * hKnee,
+      midY + py * hKnee,
+      midZ + pz * hKnee
+    );
+  };
+
+  let knee = null;
+  let kneeFrontServo = null;
+  let kneeRearServo = null;
+  let kneeLatServo = null;
+  let kneeDorsalServo = null;
+
+  if (isServoMode) {
+    const restKneePos = computeKneeTarget3D(restFootPos);
+    knee = body.addNode({
+      id: `c${id}_knee_${legIdx}`,
+      x: restKneePos.x,
+      y: restKneePos.y,
+      z: restKneePos.z,
+      mass: 0.04,
+      radius: 0.038,
+      friction: 0.25,
+      role: 'knee',
+      color
+    });
+  }
 
   const foot = body.addNode({
     id: `c${id}_foot_${legIdx}`,
     x: restFootPos.x,
     y: restFootPos.y,
     z: restFootPos.z,
-    mass: 0.24,
+    mass: isServoMode ? 0.22 : 0.24,
     radius: 0.06,
     friction: 1.65, // High-traction rubber foot pad
     role: 'foot',
     color
   });
+
+  if (isServoMode && knee) {
+    // True Rigid Femur and Tibia links (0.0 compliance = rigid robotic segments)
+    body.addBone(hipNode, knee, L_femur, 0.0, 'femur');
+    body.addBone(knee, foot, L_tibia, 0.0, 'tibia');
+
+    kneeFrontServo = body.addMuscle({
+      name: `leg${legIdx}_knee_front_servo`,
+      nodeA: frontAnchor,
+      nodeB: knee,
+      pivotNode: hipNode,
+      minFactor: 0.25,
+      maxFactor: 2.20,
+      maxForce: 95.0,
+      compliance: 0.00012
+    });
+    kneeRearServo = body.addMuscle({
+      name: `leg${legIdx}_knee_rear_servo`,
+      nodeA: rearAnchor,
+      nodeB: knee,
+      pivotNode: hipNode,
+      minFactor: 0.25,
+      maxFactor: 2.20,
+      maxForce: 95.0,
+      compliance: 0.00012
+    });
+    kneeLatServo = body.addMuscle({
+      name: `leg${legIdx}_knee_lat_servo`,
+      nodeA: lateralAnchor,
+      nodeB: knee,
+      pivotNode: hipNode,
+      minFactor: 0.25,
+      maxFactor: 2.20,
+      maxForce: 90.0,
+      compliance: 0.00012
+    });
+    if (dorsalAnchor) {
+      kneeDorsalServo = body.addMuscle({
+        name: `leg${legIdx}_knee_dorsal_servo`,
+        nodeA: dorsalAnchor,
+        nodeB: knee,
+        pivotNode: hipNode,
+        minFactor: 0.15,
+        maxFactor: 2.20,
+        maxForce: 95.0,
+        compliance: 0.00012
+      });
+    }
+  }
 
   const kneeLift = body.addMuscle({
     name: `leg${legIdx}_lift`,
@@ -309,7 +445,24 @@ function attachOrthogonalLeg({
       })
     : null;
 
+  kneeLift.isServo = isServoMode;
+  kneeLift.jointAngleRad = isServoMode ? Math.PI * 0.58 : 0;
+  kneeLift.maxTorqueNm = 22.0;
+  kneeLift.jointTorqueNm = 0.0;
+  kneeLift.torqueLoadRatio = 0.0;
+
+  strideFwd.isServo = isServoMode;
+  strideFwd.jointAngleRad = 0.0;
+  strideFwd.maxTorqueNm = 18.0;
+  strideFwd.jointTorqueNm = 0.0;
+  strideFwd.torqueLoadRatio = 0.0;
+
   const controller = {
+    isServo: isServoMode,
+    jointAngleRad: kneeLift.jointAngleRad,
+    jointTorqueNm: 0.0,
+    maxTorqueNm: 22.0,
+    torqueLoadRatio: 0.0,
     applyLegActions(actLift, actStride, diffTurn = 0, isRightingMode = false, upVec = null) {
       const footLocalUp = upVec
         ? (foot.pos.x - hipNode.pos.x) * upVec.x +
@@ -333,11 +486,29 @@ function attachOrthogonalLeg({
         dz = isRearCenter ? diffTurn * 0.24 : -outSign * (-actLift) * 0.10;
       }
 
-      const targetPos = new Vec3(
+      const rawTargetPos = new Vec3(
         restFootPos.x + dx,
         restFootPos.y + dy,
         restFootPos.z + dz
       );
+
+      // In servo mode, clamp targetPos strictly inside the 2-link rigid femur+tibia reach sphere (L_femur + L_tibia)
+      let targetPos = rawTargetPos;
+      if (isServoMode) {
+        const ux = rawTargetPos.x - restHipPos.x;
+        const uy = rawTargetPos.y - restHipPos.y;
+        const uz = rawTargetPos.z - restHipPos.z;
+        const rawDist = Math.hypot(ux, uy, uz);
+        const maxReach = (L_femur + L_tibia) * 0.992;
+        if (rawDist > maxReach) {
+          const s = maxReach / rawDist;
+          targetPos = new Vec3(
+            restHipPos.x + ux * s,
+            restHipPos.y + uy * s,
+            restHipPos.z + uz * s
+          );
+        }
+      }
 
       const targetLocalUp = targetPos.y - restHipPos.y;
       const crossingHipPlane =
@@ -370,6 +541,35 @@ function attachOrthogonalLeg({
         dorsalMuscle.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetPos));
       }
 
+      if (isServoMode && knee) {
+        const targetKneePos = computeKneeTarget3D(targetPos);
+        kneeFrontServo.setTargetLengthDirect(Vec3.dist(restFrontPos, targetKneePos));
+        kneeRearServo.setTargetLengthDirect(Vec3.dist(restRearPos, targetKneePos));
+        kneeLatServo.setTargetLengthDirect(Vec3.dist(restLatPos, targetKneePos));
+        if (kneeDorsalServo && restDorsalPos) {
+          kneeDorsalServo.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetKneePos));
+        }
+
+        // Compute Revolute PD Servo joint angle & torque telemetry (N*m) for robotics HUD & 3D drum rendering
+        const curChord = Math.max(0.05, Math.min(L_femur + L_tibia, Vec3.dist(hipNode.pos, foot.pos)));
+        const cosKnee = Math.max(-1, Math.min(1, (L_femur * L_femur + L_tibia * L_tibia - curChord * curChord) / (2 * L_femur * L_tibia)));
+        kneeLift.isServo = true;
+        kneeLift.jointAngleRad = Math.acos(cosKnee);
+        kneeLift.maxTorqueNm = 22.0;
+        kneeLift.jointTorqueNm = Math.max(-22.0, Math.min(22.0, kneeLift.appliedForce * L_tibia));
+        kneeLift.torqueLoadRatio = Math.min(1.0, Math.abs(kneeLift.jointTorqueNm) / 22.0);
+
+        strideFwd.isServo = true;
+        strideFwd.jointAngleRad = actStride * 0.65;
+        strideFwd.maxTorqueNm = 18.0;
+        strideFwd.jointTorqueNm = Math.max(-18.0, Math.min(18.0, (strideFwd.appliedForce - strideBwd.appliedForce) * L_femur));
+        strideFwd.torqueLoadRatio = Math.min(1.0, Math.abs(strideFwd.jointTorqueNm) / 18.0);
+
+        this.jointAngleRad = kneeLift.jointAngleRad;
+        this.jointTorqueNm = kneeLift.jointTorqueNm;
+        this.torqueLoadRatio = Math.max(kneeLift.torqueLoadRatio, strideFwd.torqueLoadRatio);
+      }
+
       return (
         kneeLift.instantPower +
         strideFwd.instantPower +
@@ -383,14 +583,19 @@ function attachOrthogonalLeg({
 
   return {
     foot,
+    knee,
     controller,
     liftDoF: {
-      name: `Лапа ${legIdx + 1}: Сгиб колена (Подъём/Опора)`,
+      name: isServoMode
+        ? `Лапа ${legIdx + 1}: Серво колена θ_knee (Н·м)`
+        : `Лапа ${legIdx + 1}: Сгиб колена (Подъём/Опора)`,
       primary: kneeLift,
       antagonist: null
     },
     strideDoF: {
-      name: `Лапа ${legIdx + 1}: Мах бедра (Шаг вперёд/назад)`,
+      name: isServoMode
+        ? `Лапа ${legIdx + 1}: Серво бедра θ_hip (Н·м)`
+        : `Лапа ${legIdx + 1}: Мах бедра (Шаг вперёд/назад)`,
       primary: strideFwd,
       antagonist: strideBwd
     }
@@ -405,7 +610,7 @@ function attachOrthogonalLeg({
  *   Leg 2: Rear-Center (x = -0.22, z =  0.00)
  * - 6 logical DoFs (2 per leg: Vertical Knee Lift + Horizontal Sagittal Stride)
  */
-function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }) {
+function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8', actuatorMode = 'servo' }) {
   const body = new ArticulatedBody();
 
   // Self-righting Gömböc / keel mass distribution:
@@ -484,6 +689,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
   lockRigidFrame(body, [torsoTop, torsoBottom, noseNode, tailNode, hips[0], hips[1], hips[2]]);
 
   const feet = [];
+  const knees = [];
   const legControllers = [];
   const logicalDoFs = [];
 
@@ -494,6 +700,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
       body,
       id,
       legIdx: i,
+      actuatorMode,
       hipNode: hips[i],
       frontAnchor: noseNode,
       rearAnchor: tailNode,
@@ -505,6 +712,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
       color
     });
     feet.push(leg.foot);
+    if (leg.knee) knees.push(leg.knee);
     legControllers.push(leg.controller);
     logicalDoFs.push(leg.liftDoF, leg.strideDoF);
   }
@@ -512,6 +720,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
   const creature = new CreatureInstance({
     id,
     morphologyKey: 'tripod',
+    actuatorMode,
     body,
     frameRefs: {
       top: torsoTop,
@@ -523,6 +732,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
     },
     footNodes: feet,
     hipNodes: hips,
+    kneeNodes: knees,
     legControllers,
     color,
     spawnOrigin: origin
@@ -535,7 +745,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8' }
  * Morphology #2: 4-Legged Quadruped Walker ("Четырёхногий шагоход «Квадрупод»")
  * - 8 logical DoFs (4 legs x 2 DoFs)
  */
-function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7' }) {
+function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7', actuatorMode = 'servo' }) {
   const body = new ArticulatedBody();
 
   const torsoTop = body.addNode({
@@ -610,6 +820,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
   lockRigidFrame(body, [torsoTop, torsoBottom, noseNode, tailNode, ...hips]);
 
   const feet = [];
+  const knees = [];
   const legControllers = [];
   const logicalDoFs = [];
   for (let i = 0; i < 4; i++) {
@@ -618,6 +829,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
       body,
       id,
       legIdx: i,
+      actuatorMode,
       hipNode: hips[i],
       frontAnchor: noseNode,
       rearAnchor: tailNode,
@@ -627,6 +839,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
       color
     });
     feet.push(leg.foot);
+    if (leg.knee) knees.push(leg.knee);
     legControllers.push(leg.controller);
     logicalDoFs.push(leg.liftDoF, leg.strideDoF);
   }
@@ -634,6 +847,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
   const creature = new CreatureInstance({
     id,
     morphologyKey: 'quadruped',
+    actuatorMode,
     body,
     frameRefs: {
       top: torsoTop,
@@ -645,6 +859,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
     },
     footNodes: feet,
     hipNodes: hips,
+    kneeNodes: knees,
     legControllers,
     color,
     spawnOrigin: origin

@@ -59,6 +59,7 @@ let simSpeed = 1;
 
 // DOM Elements
 const selectMorphology = document.getElementById('selectMorphology');
+const selectActuator = document.getElementById('selectActuator');
 const selectAlgorithm = document.getElementById('selectAlgorithm');
 const morphDescription = document.getElementById('morphDescription');
 const nnDimLabel = document.getElementById('nnDimLabel');
@@ -291,6 +292,9 @@ function applyRestoredUIState(ckpt) {
   if (ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
     selectMorphology.value = ckpt.morphologyKey;
   }
+  if (selectActuator && (ckpt.actuatorMode === 'servo' || ckpt.actuatorMode === 'muscle')) {
+    selectActuator.value = ckpt.actuatorMode;
+  }
   if (ckpt.algorithm) {
     selectAlgorithm.value = ckpt.algorithm;
   }
@@ -322,6 +326,7 @@ async function startNewExperiment({ clearSaved = false } = {}) {
     }
   }
   const morphologyKey = selectMorphology.value;
+  const actuatorMode = selectActuator ? selectActuator.value : 'servo';
   const algorithm = selectAlgorithm.value;
   const floorFriction = parseFloat(rangeFriction.value);
 
@@ -331,6 +336,7 @@ async function startNewExperiment({ clearSaved = false } = {}) {
 
   sim = new ArenaSimulation({
     morphologyKey,
+    actuatorMode,
     algorithm,
     populationSize: 1,
     arenaHalfSize: 11.0,
@@ -349,9 +355,10 @@ async function startNewExperiment({ clearSaved = false } = {}) {
 
   await logger.startNewExperiment({
     morphology: morphologyKey,
+    actuatorMode,
     algorithm,
     populationSize: 1,
-    config: { floorFriction, arenaHalfSize: 11.0 }
+    config: { floorFriction, arenaHalfSize: 11.0, actuatorMode }
   });
   saveCreatureCheckpoint();
   renderLogsList(logger.savedLogsList);
@@ -375,6 +382,7 @@ async function restoreOrStartExperiment() {
 
     sim = new ArenaSimulation({
       morphologyKey: ckpt.morphologyKey,
+      actuatorMode: ckpt.actuatorMode || (selectActuator ? selectActuator.value : 'servo'),
       algorithm: ckpt.algorithm || 'ppo',
       populationSize: 1,
       arenaHalfSize: 11.0,
@@ -405,6 +413,7 @@ function getUIState() {
     floorFriction: parseFloat(rangeFriction.value),
     followLeader: chkFollowLeader.checked,
     morphology: selectMorphology.value,
+    actuatorMode: selectActuator ? selectActuator.value : 'servo',
     algorithm: selectAlgorithm.value
   };
 }
@@ -414,6 +423,12 @@ selectMorphology.addEventListener('change', () => {
   logger.recordUserEvent('select_morphology', { morphology: selectMorphology.value }, sim, renderer3D, getUIState());
   startNewExperiment({ clearSaved: true });
 });
+if (selectActuator) {
+  selectActuator.addEventListener('change', () => {
+    logger.recordUserEvent('select_actuator', { actuatorMode: selectActuator.value }, sim, renderer3D, getUIState());
+    startNewExperiment({ clearSaved: true });
+  });
+}
 selectAlgorithm.addEventListener('change', () => {
   logger.recordUserEvent('select_algorithm', { algorithm: selectAlgorithm.value }, sim, renderer3D, getUIState());
   startNewExperiment({ clearSaved: true });
