@@ -437,19 +437,17 @@ function setPausedState(nextPaused, source = 'ui') {
   expStatusBadge.textContent = paused ? t.statusPaused : t.statusActive;
   expStatusBadge.style.color = paused ? '#fbbf24' : '#4ade80';
 
-  if (ytPausePlayOverlay && ytOverlayBtn && ytIconPause && ytIconPlay) {
+  if (ytPausePlayOverlay && ytOverlayBtn) {
     ytOverlayBtn.classList.remove('resuming');
     if (paused) {
       // 1. Show transparent circle with large Pause icon (||) for 1 second
+      ytPausePlayOverlay.dataset.icon = 'pause';
       ytPausePlayOverlay.hidden = false;
-      ytIconPause.hidden = false;
-      ytIconPlay.hidden = true;
       ytOverlayTimer = setTimeout(() => {
         ytOverlayTimer = null;
         if (paused && !isResumingTransition) {
           // 2. Switch to circle with Play triangle (▶) after 1 second
-          ytIconPause.hidden = true;
-          ytIconPlay.hidden = false;
+          ytPausePlayOverlay.dataset.icon = 'play';
         }
       }, 1000);
     } else {
@@ -468,10 +466,9 @@ function triggerResumeFromOverlay(source = 'yt_play_circle') {
     ytOverlayTimer = null;
   }
   isResumingTransition = true;
-  if (ytPausePlayOverlay && ytOverlayBtn && ytIconPause && ytIconPlay) {
+  if (ytPausePlayOverlay && ytOverlayBtn) {
+    ytPausePlayOverlay.dataset.icon = 'play';
     ytPausePlayOverlay.hidden = false;
-    ytIconPause.hidden = true;
-    ytIconPlay.hidden = false;
     ytOverlayBtn.classList.add('resuming');
   }
   ytOverlayTimer = setTimeout(() => {

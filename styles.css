@@ -229,6 +229,14 @@ canvas {
   display: block;
 }
 
+.yt-overlay[data-icon="pause"] .icon-play {
+  display: none !important;
+}
+
+.yt-overlay[data-icon="play"] .icon-pause {
+  display: none !important;
+}
+
 .yt-icon.play-shift {
   transform: translateX(2.5px);
 }
