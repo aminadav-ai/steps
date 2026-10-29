@@ -1,7 +1,8 @@
 /**
  * Client-side Experiment Logger that synchronizes with server.js (/api/experiment/*)
- * to ensure all previous experiment logs are preserved on disk (renamed with timestamps)
- * before starting any new experiment.
+ * ONLY when running locally in Antigravity (localhost / 127.0.0.1).
+ * Automatically disabled on GitHub Pages and public hosts so logs are recorded
+ * and displayed exclusively for the project author.
  */
 export class ExperimentLogger {
   constructor() {
@@ -11,10 +12,15 @@ export class ExperimentLogger {
     this.userEvents = [];
     this.cameraEvents = [];
     this._flushTimer = null;
-    this.staticMode = typeof window !== 'undefined' && window.location.hostname.endsWith('.github.io');
+
+    const host = (typeof window !== 'undefined' && window.location) ? window.location.hostname : '';
+    const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+    this.enabled = isLocalHost;
+    this.staticMode = !isLocalHost;
   }
 
   async startNewExperiment({ morphology, algorithm, populationSize, config }) {
+    if (!this.enabled || this.staticMode) return null;
     this.currentExperimentId = `exp_${Date.now()}`;
     this.userEvents = [{
       tWall: new Date().toISOString(),
@@ -24,7 +30,6 @@ export class ExperimentLogger {
       details: { morphology, algorithm, populationSize, config }
     }];
     this.cameraEvents = [];
-    if (this.staticMode) return null;
     try {
       const res = await fetch('./api/experiment/start', {
         method: 'POST',
@@ -39,6 +44,7 @@ export class ExperimentLogger {
       });
       if (!res.ok) {
         this.staticMode = true;
+        this.enabled = false;
         return null;
       }
       const data = await res.json();
@@ -49,12 +55,13 @@ export class ExperimentLogger {
       return data;
     } catch {
       this.staticMode = true;
+      this.enabled = false;
       return null;
     }
   }
 
   buildTelemetrySnapshot(sim, renderer3D, uiState = {}) {
-    if (!sim) return null;
+    if (!this.enabled || !sim) return null;
     return {
       capturedAt: new Date().toISOString(),
       uiState,
@@ -68,6 +75,7 @@ export class ExperimentLogger {
   }
 
   recordUserEvent(eventName, details = {}, sim = null, renderer3D = null, uiState = {}) {
+    if (!this.enabled || this.staticMode) return;
     const c0 = sim && sim.creatures ? sim.creatures[0] : null;
     const com = c0 ? c0.body.getCenterOfMass() : null;
     const upY = c0 ? c0.getTorsoFrame().up.y : null;
@@ -92,6 +100,7 @@ export class ExperimentLogger {
   }
 
   recordCameraEvent(camEvent, sim = null, renderer3D = null, uiState = {}) {
+    if (!this.enabled || this.staticMode) return;
     this.cameraEvents.push({
       tWall: new Date().toISOString(),
       simTime: sim ? Number(sim.simTime.toFixed(2)) : 0,
@@ -105,7 +114,7 @@ export class ExperimentLogger {
   }
 
   scheduleSnapshotFlush(sim, renderer3D, uiState = {}) {
-    if (!sim) return;
+    if (!this.enabled || this.staticMode || !sim) return;
     if (this._flushTimer) clearTimeout(this._flushTimer);
     this._flushTimer = setTimeout(() => {
       this._flushTimer = null;
@@ -115,7 +124,7 @@ export class ExperimentLogger {
   }
 
   async logUpdate(entry, morphology, algorithm, bestSnapshot = null) {
-    if (this.staticMode) return;
+    if (!this.enabled || this.staticMode) return;
     try {
       const res = await fetch('./api/experiment/log', {
         method: 'POST',
@@ -127,18 +136,23 @@ export class ExperimentLogger {
           bestSnapshot
         })
       });
-      if (!res.ok) this.staticMode = true;
+      if (!res.ok) {
+        this.staticMode = true;
+        this.enabled = false;
+      }
     } catch {
       this.staticMode = true;
+      this.enabled = false;
     }
   }
 
   async refreshLogsList() {
-    if (this.staticMode) return this.savedLogsList;
+    if (!this.enabled || this.staticMode) return this.savedLogsList;
     try {
       const res = await fetch('./api/experiment/list');
       if (!res.ok) {
         this.staticMode = true;
+        this.enabled = false;
         return this.savedLogsList;
       }
       const data = await res.json();
@@ -147,6 +161,7 @@ export class ExperimentLogger {
       }
     } catch {
       this.staticMode = true;
+      this.enabled = false;
     }
     return this.savedLogsList;
   }

@@ -106,6 +106,7 @@ const metricMeanVel = document.getElementById('metricMeanVel');
 const metricMeanRew = document.getElementById('metricMeanRew');
 const metricPower = document.getElementById('metricPower');
 const learningChartBadge = document.getElementById('learningChartBadge');
+const logsArchiveCard = document.getElementById('logsArchiveCard');
 const logsContainer = document.getElementById('logsContainer');
 const logsCountBadge = document.getElementById('logsCountBadge');
 
@@ -124,6 +125,10 @@ function getMorphDescriptionText(morphKey) {
 }
 
 function renderLogsList(logs) {
+  if (logsArchiveCard) {
+    logsArchiveCard.hidden = !logger.enabled;
+  }
+  if (!logger.enabled) return;
   const t = getT();
   if (!logs || logs.length === 0) {
     logsCountBadge.textContent = t.logsCount(0);
