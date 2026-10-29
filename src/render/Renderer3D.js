@@ -198,7 +198,10 @@ export class Renderer3D {
         const finalVx = wasCancelled ? 0 : throwVx * decay;
         const finalVz = wasCancelled ? 0 : throwVz * decay;
         this._sim.releaseCreature(0, finalVx, finalVz);
-        this.lockedFoodPos.set(NaN, NaN, NaN);
+        // Track the thrown walker directly without rotating camera yaw so the user sees where it lands and self-rights
+        this._postThrowTrackUntil = performance.now() + 3200;
+        this._wasTrackingThrowOrOverturn = true;
+        this.goalCamYaw = this.camYaw;
         const com = c0.body.getCenterOfMass();
         if (typeof this.onSceneInteract === 'function' && dragStartWorldPos) {
           this.onSceneInteract({
@@ -447,35 +450,52 @@ export class Renderer3D {
 
     if (this.followLeader && leader && !this.activeDragMode) {
       const food = leader.foodPos;
-      // Only re-frame camera when a new food target is ACTIVE or begins DROPPING from the sky
-      const hasVisibleTarget = leader.foodState === 'ACTIVE' || leader.foodState === 'DROPPING';
-      const foodChanged =
-        hasVisibleTarget && (
-          Number.isNaN(this.lockedFoodPos.x) ||
-          Math.hypot(food.x - this.lockedFoodPos.x, food.z - this.lockedFoodPos.z) > 0.01
-        );
+      const com = leader.body.getCenterOfMass();
+      const isOverturned = leader.getTorsoFrame().up.y < 0.48;
+      const inPostThrow = performance.now() < (this._postThrowTrackUntil || 0);
 
-      if (foodChanged) {
-        this.lockedFoodPos.copy(food);
-        const com = leader.body.getCenterOfMass();
+      if (inPostThrow || isOverturned) {
+        // Keep camera angle (yaw) fixed and follow the walker directly so the user clearly sees where it landed and how it self-rights
+        this._wasTrackingThrowOrOverturn = true;
+        this.goalCamYaw = this.camYaw;
+        this.goalCamTarget.set(com.x, 0.18, com.z);
+        this.goalCamDist = Math.max(3.4, Math.min(4.8, this.camDist));
+      } else {
+        // Only re-frame camera when a new food target is ACTIVE or begins DROPPING from the sky, or right after recovery
+        const hasVisibleTarget = leader.foodState === 'ACTIVE' || leader.foodState === 'DROPPING';
+        const foodChanged =
+          hasVisibleTarget && (
+            Number.isNaN(this.lockedFoodPos.x) ||
+            Math.hypot(food.x - this.lockedFoodPos.x, food.z - this.lockedFoodPos.z) > 0.01
+          );
 
-        // Center the stage between the walker's current position and the new food target
-        const midX = 0.5 * (com.x + food.x);
-        const midZ = 0.5 * (com.z + food.z);
-        this.goalCamTarget.set(midX, 0.18, midZ);
+        if (this._wasTrackingThrowOrOverturn || foodChanged) {
+          const justRecovered = Boolean(this._wasTrackingThrowOrOverturn);
+          this._wasTrackingThrowOrOverturn = false;
+          this.lockedFoodPos.copy(food);
 
-        // Choose distance so both walker and food target fit comfortably inside the frame
-        const span = Math.hypot(food.x - com.x, food.z - com.z);
-        this.goalCamDist = Math.max(3.1, Math.min(8.0, span * 1.15 + 1.9));
+          // Center the stage between the walker's current position and the food target
+          const midX = 0.5 * (com.x + food.x);
+          const midZ = 0.5 * (com.z + food.z);
+          this.goalCamTarget.set(midX, 0.18, midZ);
 
-        // Choose a clean 3/4 side-angle viewpoint relative to the walker->food line
-        // picking the side closest to current camYaw for a gentle, minimal rotation
-        const pathAngle = Math.atan2(food.z - com.z, food.x - com.x);
-        const candA = pathAngle + Math.PI * 0.62;
-        const candB = pathAngle - Math.PI * 0.62;
-        const diffA = Math.atan2(Math.sin(candA - this.camYaw), Math.cos(candA - this.camYaw));
-        const diffB = Math.atan2(Math.sin(candB - this.camYaw), Math.cos(candB - this.camYaw));
-        this.goalCamYaw = Math.abs(diffA) <= Math.abs(diffB) ? this.camYaw + diffA : this.camYaw + diffB;
+          // Choose distance so both walker and food target fit comfortably inside the frame
+          const span = Math.hypot(food.x - com.x, food.z - com.z);
+          this.goalCamDist = Math.max(3.1, Math.min(8.0, span * 1.15 + 1.9));
+
+          if (justRecovered) {
+            // Preserve user's viewing angle after recovery from a throw
+            this.goalCamYaw = this.camYaw;
+          } else {
+            // Choose a clean 3/4 side-angle viewpoint relative to the walker->food line
+            const pathAngle = Math.atan2(food.z - com.z, food.x - com.x);
+            const candA = pathAngle + Math.PI * 0.62;
+            const candB = pathAngle - Math.PI * 0.62;
+            const diffA = Math.atan2(Math.sin(candA - this.camYaw), Math.cos(candA - this.camYaw));
+            const diffB = Math.atan2(Math.sin(candB - this.camYaw), Math.cos(candB - this.camYaw));
+            this.goalCamYaw = Math.abs(diffA) <= Math.abs(diffB) ? this.camYaw + diffA : this.camYaw + diffB;
+          }
+        }
       }
 
       // Smoothly glide camera to the locked stage framing, and remain 100% stationary once settled!
