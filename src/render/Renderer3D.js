@@ -221,9 +221,13 @@ export class Renderer3D {
 
     if (this.followLeader && leader) {
       const food = leader.foodPos;
+      // Only re-frame camera when a new food target is ACTIVE or begins DROPPING from the sky
+      const hasVisibleTarget = leader.foodState === 'ACTIVE' || leader.foodState === 'DROPPING';
       const foodChanged =
-        Number.isNaN(this.lockedFoodPos.x) ||
-        Math.hypot(food.x - this.lockedFoodPos.x, food.z - this.lockedFoodPos.z) > 0.01;
+        hasVisibleTarget && (
+          Number.isNaN(this.lockedFoodPos.x) ||
+          Math.hypot(food.x - this.lockedFoodPos.x, food.z - this.lockedFoodPos.z) > 0.01
+        );
 
       if (foodChanged) {
         this.lockedFoodPos.copy(food);
@@ -444,59 +448,155 @@ export class Renderer3D {
     const com = creature.body.getCenterOfMass();
     const { forward, right } = creature.getTorsoFrame();
 
-    // 1. Target line from creature nose to its food sphere
+    // 1. Render 3-Phase Animated Food Lifecycle (DISSOLVING 1s -> WAITING 1s -> DROPPING 1s -> ACTIVE)
     const pNose = proj(posOf(creature.frameRefs.front));
-    const pFood = proj(creature.foodPos);
-    const pFoodShadow = proj(new Vec3(creature.foodPos.x, 0.005, creature.foodPos.z));
+    const fState = creature.foodState || 'ACTIVE';
+    const fTimer = Math.max(0.0, Math.min(1.0, creature.foodStateTimer || 0.0));
 
-    if (pFoodShadow) {
-      ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
-      ctx.beginPath();
-      ctx.ellipse(
-        pFoodShadow.sx,
-        pFoodShadow.sy,
-        Math.max(3, creature.foodRadius * pFoodShadow.scale * 0.9),
-        Math.max(2, creature.foodRadius * pFoodShadow.scale * 0.45),
-        0,
-        0,
-        Math.PI * 2
+    if (fState === 'DISSOLVING') {
+      // Phase 1 (1.0s): Eaten food orb shrinks, rises slightly, and dissolves with golden-emerald absorption rings
+      const dPos = new Vec3(
+        creature.dissolvePos.x,
+        0.16 + 0.24 * fTimer,
+        creature.dissolvePos.z
       );
-      ctx.fill();
-    }
+      const pDissolve = proj(dPos);
+      const pGround = proj(new Vec3(creature.dissolvePos.x, 0.005, creature.dissolvePos.z));
+      const fadeAlpha = Math.max(0.0, 1.0 - fTimer);
 
-    if (pNose && pFood) {
-      ctx.strokeStyle = isLeader ? 'rgba(251, 191, 36, 0.65)' : 'rgba(52, 211, 153, 0.35)';
-      ctx.lineWidth = isLeader ? 2 : 1;
-      ctx.setLineDash([5, 5]);
-      ctx.beginPath();
-      ctx.moveTo(pNose.sx, pNose.sy);
-      ctx.lineTo(pFood.sx, pFood.sy);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Draw 3D Food Sphere (Nutrient Orb)
-    if (pFood) {
-      const rPx = Math.max(4, creature.foodRadius * 0.72 * pFood.scale);
-      const grad = ctx.createRadialGradient(
-        pFood.sx - rPx * 0.3,
-        pFood.sy - rPx * 0.3,
-        rPx * 0.1,
-        pFood.sx,
-        pFood.sy,
-        rPx
-      );
-      grad.addColorStop(0, '#a7f3d0');
-      grad.addColorStop(0.5, '#10b981');
-      grad.addColorStop(1, '#065f46');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(pFood.sx, pFood.sy, rPx, 0, Math.PI * 2);
-      ctx.fill();
-      if (isLeader) {
-        ctx.strokeStyle = '#fbbf24';
-        ctx.lineWidth = 1.8;
+      if (pGround) {
+        const ringR = Math.max(6, (0.18 + 0.55 * fTimer) * pGround.scale);
+        ctx.strokeStyle = `rgba(251, 191, 36, ${(0.75 * fadeAlpha).toFixed(3)})`;
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.ellipse(pGround.sx, pGround.sy, ringR, ringR * 0.48, 0, 0, Math.PI * 2);
         ctx.stroke();
+      }
+
+      if (pDissolve) {
+        const shrink = Math.max(0.08, 1.0 - 0.88 * fTimer * fTimer);
+        const rPx = Math.max(2, creature.foodRadius * 0.72 * pDissolve.scale * shrink);
+
+        ctx.save();
+        ctx.globalAlpha = alpha * fadeAlpha;
+
+        // Expanding glowing halo around dissolving orb
+        const haloR = rPx * (1.4 + 2.2 * fTimer);
+        const haloGrad = ctx.createRadialGradient(pDissolve.sx, pDissolve.sy, rPx * 0.2, pDissolve.sx, pDissolve.sy, haloR);
+        haloGrad.addColorStop(0, 'rgba(253, 224, 71, 0.85)');
+        haloGrad.addColorStop(0.5, 'rgba(52, 211, 153, 0.45)');
+        haloGrad.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+        ctx.fillStyle = haloGrad;
+        ctx.beginPath();
+        ctx.arc(pDissolve.sx, pDissolve.sy, haloR, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Shrinking core orb
+        ctx.fillStyle = '#fde047';
+        ctx.beginPath();
+        ctx.arc(pDissolve.sx, pDissolve.sy, rPx, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Energy particles streaming toward walker's nose
+        if (pNose) {
+          for (let k = 0; k < 5; k++) {
+            const u = (fTimer + k * 0.18) % 1.0;
+            const px = pDissolve.sx + (pNose.sx - pDissolve.sx) * u + Math.sin(u * 10 + k) * 6 * (1 - u);
+            const py = pDissolve.sy + (pNose.sy - pDissolve.sy) * u - Math.sin(u * Math.PI) * 10;
+            ctx.fillStyle = k % 2 === 0 ? '#fde047' : '#34d399';
+            ctx.beginPath();
+            ctx.arc(px, py, Math.max(1.8, 3.5 * (1 - u)), 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+      }
+    } else if (fState === 'WAITING') {
+      // Phase 2 (1.0s): Complete pause between eaten orb and new orb — arena is clear!
+    } else {
+      // Phase 3 ('DROPPING' from sky for 1.0s) or Phase 4 ('ACTIVE' on floor)
+      const pFood = proj(creature.foodPos);
+      const pFoodShadow = proj(new Vec3(creature.foodPos.x, 0.005, creature.foodPos.z));
+      const heightAboveFloor = Math.max(0, creature.foodPos.y - 0.16);
+
+      if (fState === 'DROPPING' && pFood && pFoodShadow) {
+        // Draw vertical sky-drop light beam and landing ripple ring
+        const pSkyTop = proj(new Vec3(creature.foodPos.x, 3.4, creature.foodPos.z));
+        if (pSkyTop) {
+          const beamAlpha = Math.max(0.0, 0.55 * (1.0 - fTimer));
+          const beamGrad = ctx.createLinearGradient(pSkyTop.sx, pSkyTop.sy, pFoodShadow.sx, pFoodShadow.sy);
+          beamGrad.addColorStop(0, 'rgba(56, 189, 248, 0.0)');
+          beamGrad.addColorStop(0.5, `rgba(52, 211, 153, ${beamAlpha.toFixed(3)})`);
+          beamGrad.addColorStop(1, `rgba(251, 191, 36, ${(beamAlpha * 1.3).toFixed(3)})`);
+          ctx.strokeStyle = beamGrad;
+          ctx.lineWidth = Math.max(2, 0.12 * pFoodShadow.scale * (1.0 - 0.5 * fTimer));
+          ctx.beginPath();
+          ctx.moveTo(pSkyTop.sx, pSkyTop.sy);
+          ctx.lineTo(pFoodShadow.sx, pFoodShadow.sy);
+          ctx.stroke();
+        }
+
+        if (fTimer > 0.68) {
+          const bounceProg = (fTimer - 0.68) / 0.32;
+          const rippleR = Math.max(5, (0.18 + 0.55 * bounceProg) * pFoodShadow.scale);
+          ctx.strokeStyle = `rgba(52, 211, 153, ${(0.7 * (1 - bounceProg)).toFixed(3)})`;
+          ctx.lineWidth = 2.0;
+          ctx.beginPath();
+          ctx.ellipse(pFoodShadow.sx, pFoodShadow.sy, rippleR, rippleR * 0.48, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+
+      if (pFoodShadow) {
+        const shadowScale = Math.max(0.25, 1.0 - heightAboveFloor * 0.24);
+        ctx.fillStyle = `rgba(16, 185, 129, ${(0.28 * shadowScale).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.ellipse(
+          pFoodShadow.sx,
+          pFoodShadow.sy,
+          Math.max(3, creature.foodRadius * pFoodShadow.scale * 0.9 * shadowScale),
+          Math.max(2, creature.foodRadius * pFoodShadow.scale * 0.45 * shadowScale),
+          0,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+
+      if (pNose && pFood && (fState === 'ACTIVE' || fTimer > 0.35)) {
+        ctx.strokeStyle = isLeader ? 'rgba(251, 191, 36, 0.65)' : 'rgba(52, 211, 153, 0.35)';
+        ctx.lineWidth = isLeader ? 2 : 1;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(pNose.sx, pNose.sy);
+        ctx.lineTo(pFood.sx, pFood.sy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      // Draw 3D Food Sphere (Nutrient Orb)
+      if (pFood) {
+        const rPx = Math.max(4, creature.foodRadius * 0.72 * pFood.scale);
+        const grad = ctx.createRadialGradient(
+          pFood.sx - rPx * 0.3,
+          pFood.sy - rPx * 0.3,
+          rPx * 0.1,
+          pFood.sx,
+          pFood.sy,
+          rPx
+        );
+        grad.addColorStop(0, '#a7f3d0');
+        grad.addColorStop(0.5, '#10b981');
+        grad.addColorStop(1, '#065f46');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(pFood.sx, pFood.sy, rPx, 0, Math.PI * 2);
+        ctx.fill();
+        if (isLeader) {
+          ctx.strokeStyle = '#fbbf24';
+          ctx.lineWidth = 1.8;
+          ctx.stroke();
+        }
       }
     }
 

@@ -47,6 +47,19 @@ const metaNeedFill = document.getElementById('metaNeedFill');
 const metaRightingVal = document.getElementById('metaRightingVal');
 const metaRightingFill = document.getElementById('metaRightingFill');
 const metaReasonBox = document.getElementById('metaReasonBox');
+const ambitionButtons = document.getElementById('ambitionButtons');
+const rangeAmbition = document.getElementById('rangeAmbition');
+const labelAmbitionVal = document.getElementById('labelAmbitionVal');
+const btnToggleFreeze = document.getElementById('btnToggleFreeze');
+
+let currentAmbitionPreset = 'bound';
+
+function formatAmbitionLabel(val, preset) {
+  if (preset === 'infinite' || val >= 0.54) return '∞ (Вечное обучение — 100%)';
+  if (val <= 0.21) return `${val.toFixed(2)} м/с (Минимум / Шаг)`;
+  if (val <= 0.39) return `${val.toFixed(2)} м/с (Бодрый скачок)`;
+  return `${val.toFixed(2)} м/с (Турбо-галоп)`;
+}
 
 const metricMeanVel = document.getElementById('metricMeanVel');
 const metricMeanRew = document.getElementById('metricMeanRew');
@@ -96,6 +109,13 @@ async function startNewExperiment() {
     arenaHalfSize: 11.0,
     floorFriction
   });
+  if (sim.trainer && typeof sim.trainer.setLearningAmbition === 'function') {
+    if (currentAmbitionPreset === 'custom') {
+      sim.trainer.setLearningAmbition(parseFloat(rangeAmbition.value));
+    } else {
+      sim.trainer.setLearningAmbition(currentAmbitionPreset);
+    }
+  }
   renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
 
   chartRenderer.render(sim.history);
@@ -286,6 +306,60 @@ chkShowForces.addEventListener('change', () => {
   logger.recordUserEvent('toggle_force_vectors', { showForceVectors: chkShowForces.checked }, sim, renderer3D, getUIState());
 });
 
+if (ambitionButtons) {
+  ambitionButtons.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-ambition]');
+    if (!btn) return;
+    const preset = btn.dataset.ambition;
+    currentAmbitionPreset = preset;
+    for (const b of ambitionButtons.querySelectorAll('button')) {
+      b.classList.toggle('active', b === btn);
+    }
+    if (sim && sim.trainer && typeof sim.trainer.setLearningAmbition === 'function') {
+      sim.trainer.setLearningAmbition(preset);
+      const tVal = Math.min(0.55, sim.trainer.metaState.targetCompetence);
+      rangeAmbition.value = tVal.toFixed(2);
+      labelAmbitionVal.textContent = formatAmbitionLabel(tVal, preset);
+    }
+    logger.recordUserEvent('set_learning_ambition', { preset, targetCompetence: sim?.trainer?.metaState?.targetCompetence }, sim, renderer3D, getUIState());
+    updateHUD();
+  });
+}
+
+if (rangeAmbition) {
+  rangeAmbition.addEventListener('input', () => {
+    const val = parseFloat(rangeAmbition.value);
+    currentAmbitionPreset = val >= 0.54 ? 'infinite' : 'custom';
+    if (ambitionButtons) {
+      for (const b of ambitionButtons.querySelectorAll('button')) {
+        b.classList.toggle('active', currentAmbitionPreset === 'infinite' && b.dataset.ambition === 'infinite');
+      }
+    }
+    labelAmbitionVal.textContent = formatAmbitionLabel(val, currentAmbitionPreset);
+    if (sim && sim.trainer && typeof sim.trainer.setLearningAmbition === 'function') {
+      sim.trainer.setLearningAmbition(val);
+    }
+    updateHUD();
+  });
+
+  rangeAmbition.addEventListener('change', () => {
+    const val = parseFloat(rangeAmbition.value);
+    logger.recordUserEvent('slider_learning_ambition', { targetCompetence: val }, sim, renderer3D, getUIState());
+  });
+}
+
+if (btnToggleFreeze) {
+  btnToggleFreeze.addEventListener('click', () => {
+    if (!sim || !sim.trainer || typeof sim.trainer.toggleManualFreeze !== 'function') return;
+    sim.trainer.toggleManualFreeze();
+    logger.recordUserEvent('toggle_manual_freeze', {
+      mode: sim.trainer.metaState.mode,
+      isLearningActive: sim.trainer.metaState.isLearningActive
+    }, sim, renderer3D, getUIState());
+    updateHUD();
+  });
+}
+
 function updateHUD() {
   if (!sim) return;
   const leader = sim.creatures[0];
@@ -337,6 +411,14 @@ function updateHUD() {
       : m.mode === 'LEARNING_RIGHTING'
         ? '#f59e0b'
         : '#34d399';
+
+    if (btnToggleFreeze) {
+      const isCons = m.mode === 'CONSOLIDATED';
+      btnToggleFreeze.textContent = isCons
+        ? '🔓 Включить дообучение сейчас'
+        : '🔒 Заморозить веса сейчас';
+      btnToggleFreeze.classList.toggle('emerald', isCons);
+    }
   }
 
   // Highlight the "Help Stand Up" button if the walker is tilted onto its side or back

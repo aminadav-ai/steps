@@ -16,8 +16,11 @@ export class CreatureInstance {
     this.color = color;
     this.spawnOrigin = spawnOrigin.clone();
 
-    // Task state (Food foraging)
+    // Task state (Food foraging & 3-phase animated food lifecycle)
     this.foodPos = new Vec3(0, 0.16, 0);
+    this.dissolvePos = new Vec3(0, 0.16, 0);
+    this.foodState = 'ACTIVE'; // 'ACTIVE' | 'DISSOLVING' (1s) | 'WAITING' (1s) | 'DROPPING' (1s)
+    this.foodStateTimer = 0;
     this.foodRadius = 0.24;
     this.foodCollected = 0;
     this.prevFoodDist = 0;
@@ -94,12 +97,13 @@ export class CreatureInstance {
     const dirX = toFood.x * invDist;
     const dirZ = toFood.z * invDist;
 
-    // When overturned on its back (up.y < 0.35), the creature completely ignores food and walking gates
-    // and focuses 100% of its sensory-motor attention on body posture and flipping back onto its feet!
+    // When overturned on its back (up.y < 0.35) OR during the 2s pause between eaten food and new sky-drop,
+    // the creature ignores food and walking gates!
     const isOverturned = up.y < 0.35;
-    const foodForward = isOverturned ? 0.0 : (dirX * forward.x + dirZ * forward.z);
-    const foodRight = isOverturned ? 0.0 : (dirX * right.x + dirZ * right.z);
-    const normDist = isOverturned ? 0.0 : Math.tanh(distToFood / 5.0);
+    const noActiveFood = isOverturned || this.foodState === 'DISSOLVING' || this.foodState === 'WAITING';
+    const foodForward = noActiveFood ? 0.0 : (dirX * forward.x + dirZ * forward.z);
+    const foodRight = noActiveFood ? 0.0 : (dirX * right.x + dirZ * right.z);
+    const normDist = noActiveFood ? 0.0 : Math.tanh(distToFood / 5.0);
 
     // Egocentric linear velocity of CoM
     const velForward = Math.tanh((comVel.x * forward.x + comVel.y * forward.y + comVel.z * forward.z) / 2.0);
@@ -116,10 +120,10 @@ export class CreatureInstance {
     const clockSin = Math.sin(this.phase);
     const clockCos = Math.cos(this.phase);
 
-    // Non-negative forward gate (0 when food is behind or when overturned)
-    const angleToFood = isOverturned ? 0.0 : Math.atan2(foodRight, foodForward);
-    const forwardGate = isOverturned ? 0.0 : Math.max(0.0, foodForward);
-    const turnDrive = isOverturned ? 0.0 : Math.tanh(2.2 * angleToFood);
+    // Non-negative forward gate (0 when food is behind, when overturned, or while waiting for next sky-drop)
+    const angleToFood = noActiveFood ? 0.0 : Math.atan2(foodRight, foodForward);
+    const forwardGate = noActiveFood ? 0.0 : Math.max(0.0, foodForward);
+    const turnDrive = noActiveFood ? 0.0 : Math.tanh(2.2 * angleToFood);
 
     const obs = [
       foodForward,              // 0: cos(angle to food)
@@ -204,9 +208,9 @@ function attachOrthogonalLeg({
   dorsalAnchor = null,
   isRearCenter = false,
   footY = 0.06,
-  strideStroke = 0.16,
-  liftStrokeUp = 0.09,
-  liftStrokeDown = 0.10,
+  strideStroke = 0.185,
+  liftStrokeUp = 0.11,
+  liftStrokeDown = 0.125,
   color
 }) {
   const restFootPos = new Vec3(hipNode.pos.x, footY, hipNode.pos.z);

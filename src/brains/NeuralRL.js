@@ -144,6 +144,7 @@ export class ActorCriticBrain {
     this.rightingPhase = 0;
 
     this.adamStepCount = 0;
+    this.maxSkipRowNorm = 1.80;
 
     // Live activation buffers for UI visualization
     this.lastObs = new Float64Array(obsDim);
@@ -489,11 +490,11 @@ export class ActorCriticBrain {
           skipW[row + c] = 0;
           continue;
         }
-        const w = Math.max(-0.95, Math.min(0.95, skipW[row + c]));
+        const w = Math.max(-1.25, Math.min(1.25, skipW[row + c]));
         skipW[row + c] = w;
         normSq += w * w;
       }
-      const maxRowNorm = 1.25;
+      const maxRowNorm = this.maxSkipRowNorm || 1.80;
       if (normSq > maxRowNorm * maxRowNorm) {
         const scale = maxRowNorm / Math.sqrt(normSq);
         for (let c = 10; c <= 15 && c < this.obsDim; c++) {
@@ -594,14 +595,21 @@ export class PPOTrainer {
     this.modeBeforeOverturn = 'LEARNING_WALK';
 
     // Homeostatic Meta-Plasticity Sense ("Чутьё нейросети: нужно ли дообучаться или нет")
+    // Default ambition = 'bound' ("Бодрый скачок": trains energetic bounding gallop up to ~0.34+ m/s)
+    this.maxCpgGain = 3.25;
+    this.minFoodsToConsolidate = 4;
+    this.alwaysLearn = false;
+    this.manualFreeze = false;
+
     this.metaState = {
       mode: 'LEARNING_WALK', // 'LEARNING_WALK' | 'CONSOLIDATED' | 'LEARNING_RIGHTING'
+      ambitionPreset: 'bound',
       isLearningActive: true,
-      modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ',
-      reasonText: 'Формирование моторного навыка шага и наведения на цель',
-      competenceEMA: 0.03,
-      targetCompetence: 0.145,
-      relearnThreshold: 0.085,
+      modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ: РАЗГОН СКАЧКА К ЦЕЛИ',
+      reasonText: 'Формирование бодрого пружинистого скачка и точного наведения на цель',
+      competenceEMA: 0.04,
+      targetCompetence: 0.34,
+      relearnThreshold: 0.16,
       surpriseEMA: 0.25,
       needToLearnPct: 88,
       stableEpochsCount: 0,
@@ -636,6 +644,104 @@ export class PPOTrainer {
     this.metaState.surpriseEMA = Math.max(this.metaState.surpriseEMA, 0.9);
     if (this.metaState.mode === 'CONSOLIDATED') {
       this.metaState.reasonText = reason;
+    }
+  }
+
+  /**
+   * Adjusts the balance between learning and consolidation ("Амбиции обучения / Порог мастерства").
+   * Supports presets: 'min' (calm crawl), 'bound' (energetic hop, default), 'turbo' (max gallop), 'infinite' (always learn),
+   * or a numeric target speed in [0.14, 0.60] m/s.
+   */
+  setLearningAmbition(presetOrTarget) {
+    this.manualFreeze = false;
+    if (presetOrTarget === 'min') {
+      this.metaState.ambitionPreset = 'min';
+      this.metaState.targetCompetence = 0.17;
+      this.metaState.relearnThreshold = 0.085;
+      this.minFoodsToConsolidate = 2;
+      this.maxCpgGain = 1.65;
+      this.brain.maxSkipRowNorm = 1.18;
+      this.alwaysLearn = false;
+    } else if (presetOrTarget === 'bound') {
+      this.metaState.ambitionPreset = 'bound';
+      this.metaState.targetCompetence = 0.34;
+      this.metaState.relearnThreshold = 0.16;
+      this.minFoodsToConsolidate = 4;
+      this.maxCpgGain = 3.25;
+      this.brain.maxSkipRowNorm = 1.80;
+      this.alwaysLearn = false;
+    } else if (presetOrTarget === 'turbo') {
+      this.metaState.ambitionPreset = 'turbo';
+      this.metaState.targetCompetence = 0.48;
+      this.metaState.relearnThreshold = 0.24;
+      this.minFoodsToConsolidate = 6;
+      this.maxCpgGain = 3.90;
+      this.brain.maxSkipRowNorm = 2.15;
+      this.alwaysLearn = false;
+    } else if (presetOrTarget === 'infinite') {
+      this.metaState.ambitionPreset = 'infinite';
+      this.metaState.targetCompetence = 0.60;
+      this.metaState.relearnThreshold = 0.45;
+      this.minFoodsToConsolidate = 99999;
+      this.maxCpgGain = 3.90;
+      this.brain.maxSkipRowNorm = 2.15;
+      this.alwaysLearn = true;
+    } else if (typeof presetOrTarget === 'number') {
+      const t = Math.max(0.14, Math.min(0.60, presetOrTarget));
+      this.metaState.ambitionPreset = 'custom';
+      this.metaState.targetCompetence = Number(t.toFixed(2));
+      this.metaState.relearnThreshold = Number((t * 0.48).toFixed(2));
+      this.minFoodsToConsolidate = t < 0.22 ? 2 : t < 0.40 ? 4 : 6;
+      this.maxCpgGain = Number((1.4 + (t - 0.14) * 5.6).toFixed(2));
+      this.brain.maxSkipRowNorm = Number((1.10 + (t - 0.14) * 2.3).toFixed(2));
+      this.alwaysLearn = t >= 0.59;
+    }
+
+    // Immediately re-evaluate if the walker should wake up to train harder or consolidate now!
+    if (this.metaState.mode !== 'LEARNING_RIGHTING') {
+      if (this.alwaysLearn || this.metaState.competenceEMA < this.metaState.targetCompetence) {
+        this.metaState.mode = 'LEARNING_WALK';
+        this.metaState.isLearningActive = true;
+        this.metaState.stableEpochsCount = 0;
+        this.paramSigma = Math.max(this.paramSigma, 0.09);
+        this.metaState.needToLearnPct = Math.round(
+          Math.max(35, Math.min(98, ((this.metaState.targetCompetence - this.metaState.competenceEMA) / this.metaState.targetCompetence) * 90 + 25))
+        );
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: РАЗГОН СКАЧКА К ЦЕЛИ';
+        this.metaState.reasonText = this.alwaysLearn
+          ? 'Включён режим непрерывного обучения (100% пластичность без остановки)'
+          : `Планка мастерства повышена до ${this.metaState.targetCompetence.toFixed(2)} м/с — шагоход разгоняет прыгучую походку!`;
+      } else {
+        this.metaState.mode = 'CONSOLIDATED';
+        this.metaState.isLearningActive = false;
+        this.metaState.needToLearnPct = 10;
+        this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
+        this.metaState.reasonText = `Текущая скорость (${this.metaState.competenceEMA.toFixed(2)} м/с) уже выше порога ${this.metaState.targetCompetence.toFixed(2)} м/с — веса зафиксированы`;
+      }
+    }
+  }
+
+  /**
+   * Manual toggle to either freeze weights immediately or force active learning
+   */
+  toggleManualFreeze() {
+    if (this.metaState.mode === 'LEARNING_RIGHTING') return;
+    if (this.metaState.mode === 'CONSOLIDATED') {
+      this.manualFreeze = false;
+      this.metaState.mode = 'LEARNING_WALK';
+      this.metaState.isLearningActive = true;
+      this.metaState.stableEpochsCount = 0;
+      this.metaState.needToLearnPct = 80;
+      this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ (ВКЛЮЧЕНО ВРУЧНУЮ)';
+      this.metaState.reasonText = 'Пользователь вручную запустил процесс дообучения походки';
+    } else {
+      this.manualFreeze = true;
+      this.alwaysLearn = false;
+      this.metaState.mode = 'CONSOLIDATED';
+      this.metaState.isLearningActive = false;
+      this.metaState.needToLearnPct = 0;
+      this.metaState.modeTitle = '🔒 ОБУЧЕНИЕ ЗАМОРОЖЕНО ВРУЧНУЮ';
+      this.metaState.reasonText = 'Веса нейросети зафиксированы пользователем — шагоход идёт на текущем навыке';
     }
   }
 
@@ -820,8 +926,9 @@ export class PPOTrainer {
       return null;
     }
 
-    // If walker suddenly tipped over during this step, discard step from walking buffer
-    if (upY0 < 0.32) {
+    // If walker suddenly tipped over OR is in the 2-second pause between food orbs (DISSOLVING / WAITING),
+    // do not push non-locomotion steps into the walking rollout buffer!
+    if (upY0 < 0.32 || c0.foodState === 'DISSOLVING' || c0.foodState === 'WAITING') {
       return null;
     }
 
@@ -883,34 +990,51 @@ export class PPOTrainer {
     const comp = this.metaState.competenceEMA;
     const target = this.metaState.targetCompetence;
     const foodCount = c0.foodCollected;
+    const minFoods = this.minFoodsToConsolidate || 4;
+
+    if (this.manualFreeze) {
+      this.metaState.mode = 'CONSOLIDATED';
+      this.metaState.isLearningActive = false;
+      this.metaState.needToLearnPct = 0;
+      return;
+    }
+
+    if (this.alwaysLearn) {
+      this.metaState.mode = 'LEARNING_WALK';
+      this.metaState.isLearningActive = true;
+      this.metaState.needToLearnPct = 100;
+      this.metaState.modeTitle = '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: МАКСИМАЛЬНЫЙ РАЗГОН';
+      this.metaState.reasonText = `Непрерывное обучение включено (тек. эффективность ~${comp.toFixed(2)} м/с, целей: ${foodCount})`;
+      return;
+    }
 
     if (this.metaState.mode === 'LEARNING_WALK') {
-      if (comp >= target && foodCount >= 2) {
+      if (comp >= target && foodCount >= minFoods) {
         this.metaState.stableEpochsCount += 1;
       } else {
         this.metaState.stableEpochsCount = Math.max(0, this.metaState.stableEpochsCount - 1);
       }
 
       const rawNeed = Math.round(
-        Math.max(15, Math.min(98, ((target * 1.25 - comp) / (target * 1.25)) * 85 + (foodCount < 2 ? 25 : 0)))
+        Math.max(15, Math.min(98, ((target * 1.20 - comp) / (target * 1.20)) * 85 + (foodCount < minFoods ? 20 : 0)))
       );
       this.metaState.needToLearnPct = rawNeed;
 
-      // Transition to CONSOLIDATED once the walker has collected >= 2 foods and maintained high velocity for 2 epochs
-      if (this.metaState.stableEpochsCount >= 2 && foodCount >= 2) {
+      // Transition to CONSOLIDATED once the walker has collected >= minFoods and maintained high velocity for 2 epochs
+      if (this.metaState.stableEpochsCount >= 2 && foodCount >= minFoods) {
         this.metaState.mode = 'CONSOLIDATED';
         this.metaState.isLearningActive = false;
         this.metaState.lowVelEpochsCount = 0;
         this.metaState.stallStepsCount = 0;
-        this.metaState.needToLearnPct = 12;
+        this.metaState.needToLearnPct = 10;
         this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
-        this.metaState.reasonText = `Скорость к цели (${comp.toFixed(2)} м/с) выше порога ${target.toFixed(2)} м/с, собрано целей: ${foodCount} — веса защищены от переобучения`;
+        this.metaState.reasonText = `Бодрый скачок освоен (${comp.toFixed(2)} м/с ≥ ${target.toFixed(2)} м/с, целей: ${foodCount}) — веса защищены от переобучения`;
       } else {
         this.metaState.isLearningActive = true;
-        this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ';
-        this.metaState.reasonText = foodCount < 2
-          ? `Набор базового опыта: собрано ${foodCount}/2 целей (эффективность ~${comp.toFixed(2)} м/с)`
-          : `Оптимизация походки: скорость ${comp.toFixed(2)} м/с стремится к порогу мастерства ${target.toFixed(2)} м/с`;
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: РАЗГОН СКАЧКА К ЦЕЛИ';
+        this.metaState.reasonText = foodCount < minFoods
+          ? `Разгон прыгучей походки: собрано ${foodCount}/${minFoods} целей (эффективность ~${comp.toFixed(2)} / ${target.toFixed(2)} м/с)`
+          : `Доводка скорости скачка: ${comp.toFixed(2)} м/с → цель ${target.toFixed(2)} м/с`;
       }
     } else if (this.metaState.mode === 'CONSOLIDATED') {
       // Monitor if environment changed, obstacle blocked path, or velocity dropped persistently
@@ -1031,12 +1155,13 @@ export class PPOTrainer {
             skipW[i] = 0.85 * this.bestSkipW[i] + 0.15 * skipW[i];
           }
         }
-        // Ensure resonance CPG drive & steering gain stay healthy and bilaterally symmetric
+        // Ensure resonance CPG drive & steering gain ramp up energetically to maxCpgGain for bounding gallop!
         if (tpl) {
-          const targetGain = Math.min(2.6, 1.15 + 0.10 * this.updateCount);
+          const maxGain = this.maxCpgGain || 3.25;
+          const targetGain = Math.min(maxGain, 1.35 + 0.16 * this.updateCount);
           for (let i = 0; i < skipW.length; i++) {
             if (Math.abs(tpl[i]) > 1e-4) {
-              skipW[i] = 0.78 * skipW[i] + 0.22 * (tpl[i] * targetGain);
+              skipW[i] = 0.72 * skipW[i] + 0.28 * (tpl[i] * targetGain);
             }
           }
         }
@@ -1244,8 +1369,9 @@ export class NESTrainer {
       modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): ХОДЬБА К ЦЕЛИ',
       reasonText: 'Эволюционный поиск моторного навыка шага и руления',
       competenceEMA: 0.03,
-      targetCompetence: 0.140,
-      relearnThreshold: 0.080,
+      targetCompetence: 0.34,
+      relearnThreshold: 0.15,
+      ambitionPreset: 'bound',
       surpriseEMA: 0.20,
       needToLearnPct: 85,
       stableEpochsCount: 0,
@@ -1255,8 +1381,78 @@ export class NESTrainer {
       rightingSuccesses: 0,
       rightingSkillPct: brain.getRightingSkillPct()
     };
+    this.alwaysLearn = false;
+    this.manualFreeze = false;
+    this.minFoodsToConsolidate = 4;
 
     this._sampleWorkerPopulation();
+  }
+
+  setLearningAmbition(presetOrTarget) {
+    this.manualFreeze = false;
+    if (presetOrTarget === 'min') {
+      this.alwaysLearn = false;
+      this.metaState.ambitionPreset = 'min';
+      this.metaState.targetCompetence = 0.18;
+      this.metaState.relearnThreshold = 0.085;
+      this.minFoodsToConsolidate = 2;
+    } else if (presetOrTarget === 'bound') {
+      this.alwaysLearn = false;
+      this.metaState.ambitionPreset = 'bound';
+      this.metaState.targetCompetence = 0.34;
+      this.metaState.relearnThreshold = 0.15;
+      this.minFoodsToConsolidate = 4;
+    } else if (presetOrTarget === 'turbo') {
+      this.alwaysLearn = false;
+      this.metaState.ambitionPreset = 'turbo';
+      this.metaState.targetCompetence = 0.46;
+      this.metaState.relearnThreshold = 0.22;
+      this.minFoodsToConsolidate = 6;
+    } else if (presetOrTarget === 'infinite') {
+      this.alwaysLearn = true;
+      this.metaState.ambitionPreset = 'infinite';
+      this.metaState.targetCompetence = 0.60;
+      this.metaState.relearnThreshold = 0.35;
+      this.minFoodsToConsolidate = 9999;
+    } else if (typeof presetOrTarget === 'number') {
+      this.alwaysLearn = presetOrTarget >= 0.54;
+      this.metaState.ambitionPreset = 'custom';
+      this.metaState.targetCompetence = Number(presetOrTarget.toFixed(2));
+      this.metaState.relearnThreshold = Number(Math.max(0.08, presetOrTarget * 0.46).toFixed(2));
+      this.minFoodsToConsolidate = presetOrTarget > 0.38 ? 5 : presetOrTarget > 0.24 ? 3 : 2;
+    }
+    if (this.alwaysLearn || this.metaState.competenceEMA < this.metaState.targetCompetence) {
+      if (this.metaState.mode === 'CONSOLIDATED') {
+        this.metaState.mode = 'LEARNING_WALK';
+        this.metaState.isLearningActive = true;
+        this.metaState.stableEpochsCount = 0;
+        this.metaState.needToLearnPct = 82;
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ: РАЗГОН ПОХОДКИ';
+        this.metaState.reasonText = this.alwaysLearn
+          ? 'Включён режим непрерывного обучения (100% пластичность без остановки)'
+          : `Планка мастерства повышена до ${this.metaState.targetCompetence.toFixed(2)} м/с — шагоход доучивает мощный прыжок!`;
+      }
+    }
+  }
+
+  toggleManualFreeze() {
+    if (this.metaState.mode === 'CONSOLIDATED') {
+      this.manualFreeze = false;
+      this.metaState.mode = 'LEARNING_WALK';
+      this.metaState.isLearningActive = true;
+      this.metaState.stableEpochsCount = 0;
+      this.metaState.needToLearnPct = 85;
+      this.metaState.modeTitle = '🟢 РУЧНОЕ ПРОБУЖДЕНИЕ: ДООБУЧЕНИЕ ВКЛЮЧЕНО';
+      this.metaState.reasonText = 'Пользователь вручную запустил дообучение для улучшения походки';
+    } else {
+      this.manualFreeze = true;
+      this.alwaysLearn = false;
+      this.metaState.mode = 'CONSOLIDATED';
+      this.metaState.isLearningActive = false;
+      this.metaState.needToLearnPct = 0;
+      this.metaState.modeTitle = '🛡️ РУЧНАЯ КОНСОЛИДАЦИЯ: ОБУЧЕНИЕ ОСТАНОВЛЕНО';
+      this.metaState.reasonText = 'Пользователь зафиксировал текущие веса нейросети вручную';
+    }
   }
 
   notifyEnvironmentChange(reason = 'Изменились параметры среды — проверка адаптации') {
@@ -1359,6 +1555,10 @@ export class NESTrainer {
       return null;
     }
 
+    if (upY0 < 0.32 || c0.foodState === 'DISSOLVING' || c0.foodState === 'WAITING') {
+      return null;
+    }
+
     for (let w = 0; w < this.numWorkers; w++) {
       const r = rewards[w];
       this.workerReturns[w] += r > 5.0 ? r - 8.5 : r;
@@ -1372,8 +1572,16 @@ export class NESTrainer {
       (0.75 * this.metaState.competenceEMA + 0.25 * Math.max(0, c0.lastVelocityTowardFood)).toFixed(3)
     );
 
-    if (this.metaState.mode === 'LEARNING_WALK') {
-      if (this.metaState.competenceEMA >= this.metaState.targetCompetence && c0.foodCollected >= 2) {
+    if (this.manualFreeze) {
+      this.metaState.mode = 'CONSOLIDATED';
+      this.metaState.isLearningActive = false;
+      this.metaState.needToLearnPct = 0;
+    } else if (this.alwaysLearn) {
+      this.metaState.mode = 'LEARNING_WALK';
+      this.metaState.isLearningActive = true;
+      this.metaState.needToLearnPct = 100;
+    } else if (this.metaState.mode === 'LEARNING_WALK') {
+      if (this.metaState.competenceEMA >= this.metaState.targetCompetence && c0.foodCollected >= (this.minFoodsToConsolidate || 4)) {
         this.metaState.stableEpochsCount += 1;
         if (this.metaState.stableEpochsCount >= 2) {
           this.metaState.mode = 'CONSOLIDATED';

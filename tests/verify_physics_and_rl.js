@@ -51,6 +51,7 @@ let firstMetrics = null;
 let lastMetrics = null;
 
 for (let s = 0; s < 32 * 25; s++) {
+  trainSim._isHeadlessFastTrain = true;
   const upd = trainSim.stepControl();
   if (upd) {
     if (!firstMetrics) firstMetrics = upd;
@@ -62,6 +63,41 @@ for (let s = 0; s < 32 * 25; s++) {
     }
   }
 }
+trainSim._isHeadlessFastTrain = false;
+
+console.log('\n=== 2б. Проверка 3-секундной анимации шарика еды (1с растворение -> 1с пауза -> 1с падение с неба) ===');
+const wFood = trainSim.creatures[0];
+// Поместим шарик еды прямо перед носом шагохода для проверки фаз анимации
+const nosePos = wFood.getTorsoFrame().center;
+wFood.foodPos.set(nosePos.x, 0.16, nosePos.z);
+wFood.foodState = 'ACTIVE';
+wFood.foodStateTimer = 0;
+trainSim.stepControl();
+console.log(`Сразу после поедания: foodState=${wFood.foodState}, dissolvePos=(${wFood.dissolvePos.x.toFixed(2)}, ${wFood.dissolvePos.z.toFixed(2)})`);
+if (wFood.foodState !== 'DISSOLVING') {
+  console.error('ОШИБКА: После поедания должен включаться режим DISSOLVING');
+  process.exit(1);
+}
+for (let i = 0; i < 20; i++) trainSim.stepControl(); // +1.0s
+console.log(`Через 1.0 с (конец растворения): foodState=${wFood.foodState}`);
+if (wFood.foodState !== 'WAITING') {
+  console.error('ОШИБКА: После 1.0 с растворения должна включаться 1-секундная пауза WAITING');
+  process.exit(1);
+}
+for (let i = 0; i < 10; i++) trainSim.stepControl(); // +0.5s into WAITING
+for (let i = 0; i < 12; i++) trainSim.stepControl(); // into DROPPING
+console.log(`Через 2.1 с (начало падения с неба): foodState=${wFood.foodState}, высота шарика y=${wFood.foodPos.y.toFixed(2)} м`);
+if (wFood.foodState !== 'DROPPING' || wFood.foodPos.y <= 1.0) {
+  console.error('ОШИБКА: Новый шарик должен падать сверху с неба в фазе DROPPING');
+  process.exit(1);
+}
+for (let i = 0; i < 20; i++) trainSim.stepControl(); // finish drop
+console.log(`Через 3.1 с (приземление шарика): foodState=${wFood.foodState}, высота шарика y=${wFood.foodPos.y.toFixed(2)} м`);
+if (wFood.foodState !== 'ACTIVE' || Math.abs(wFood.foodPos.y - 0.16) > 1e-3) {
+  console.error('ОШИБКА: После падения шарик должен перейти в состояние ACTIVE на высоте 0.16 м');
+  process.exit(1);
+}
+console.log('ОК: Трёхфазный цикл шарика еды (1с растворение -> 1с пауза -> 1с падение с неба) работает штатно.');
 
 console.log('\n=== 3. Проверка «Рефлекса жука» (обучение перевороту со спины на ноги без участия еды) ===');
 const walker = trainSim.creatures[0];

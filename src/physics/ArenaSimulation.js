@@ -39,7 +39,7 @@ export class ArenaSimulation {
     this.substepsPerControl = 10;
     this.subDt = this.controlDt / this.substepsPerControl; // 0.005s (200 Hz physics)
     this.substepCursor = 0;
-    this.cpgOmega = 2 * Math.PI * 1.45; // 1.45 Hz natural stride frequency
+    this.cpgOmega = 2 * Math.PI * 1.65; // 1.65 Hz lively bounding stride frequency
     this.simTime = 0;
     this.totalSteps = 0;
     this.totalFoodCollected = 0;
@@ -244,6 +244,43 @@ export class ArenaSimulation {
     this.simTime += subDt;
     this.substepCursor += 1;
 
+    // Advance 3-phase animated food lifecycle (1s DISSOLVING -> 1s WAITING -> 1s SKY-DROPPING -> ACTIVE)
+    if (!this._isHeadlessFastTrain) {
+      for (let i = 0; i < this.populationSize; i++) {
+        const c = this.creatures[i];
+        if (c.foodState === 'DISSOLVING') {
+          c.foodStateTimer += subDt;
+          if (c.foodStateTimer >= 1.0) {
+            c.foodState = 'WAITING';
+            c.foodStateTimer = 0.0;
+          }
+        } else if (c.foodState === 'WAITING') {
+          c.foodStateTimer += subDt;
+          if (c.foodStateTimer >= 1.0) {
+            this._spawnFoodForCreature(c, false);
+            c.foodState = 'DROPPING';
+            c.foodStateTimer = 0.0;
+            c.foodPos.y = 3.20;
+          }
+        } else if (c.foodState === 'DROPPING') {
+          c.foodStateTimer += subDt;
+          const p = Math.min(1.0, c.foodStateTimer / 1.0);
+          if (p <= 0.72) {
+            const u = p / 0.72;
+            c.foodPos.y = 0.16 + 3.04 * (1.0 - u * u);
+          } else {
+            const v = (p - 0.72) / 0.28;
+            c.foodPos.y = 0.16 + 0.42 * 4.0 * v * (1.0 - v);
+          }
+          if (c.foodStateTimer >= 1.0) {
+            c.foodPos.y = 0.16;
+            c.foodState = 'ACTIVE';
+            c.foodStateTimer = 0.0;
+          }
+        }
+      }
+    }
+
     if (this.substepCursor < this.substepsPerControl) {
       return null;
     }
@@ -290,6 +327,7 @@ export class ArenaSimulation {
       const alignCos = (dx * invD) * forward.x + (dz * invD) * forward.z;
 
       const isOverturnedNow = up.y < 0.35;
+      const isWaitingForFood = c.foodState === 'DISSOLVING' || c.foodState === 'WAITING';
       const prevUpY = c.prevUpY !== undefined ? c.prevUpY : up.y;
       c.prevUpY = up.y;
 
@@ -303,6 +341,11 @@ export class ArenaSimulation {
         r = 3.5 * upVel + 0.35 * up.y + contactBonus;
         c.lastVelocityTowardFood = 0;
         dones[i] = 1;
+      } else if (isWaitingForFood) {
+        // During the 1s dissolve + 1s pause between food orbs, hold distance reference steady
+        c.prevFoodDist = newDist;
+        c.lastVelocityTowardFood = 0;
+        r = 0.08 * Math.max(0, up.y - 0.55);
       } else {
         // Normal upright walking reward components:
         // 1) Approach velocity reward (favors moving nose-first toward food)
@@ -315,9 +358,9 @@ export class ArenaSimulation {
         // 4) Mechanical power penalty (smooth, efficient locomotion)
         r -= 0.00035 * c.lastMechanicalPower;
 
-        // Check if food reached! (center or front hip within reach radius)
+        // Check if food reached! (center or front hip within reach radius, and orb is near ground level)
         const frontDist = Math.hypot(c.foodPos.x - c.frameRefs.front.pos.x, c.foodPos.z - c.frameRefs.front.pos.z);
-        if (newDist < 0.46 || frontDist < 0.38) {
+        if ((newDist < 0.46 || frontDist < 0.38) && c.foodPos.y <= 0.65) {
           r += 8.5; // Major foraging reward
           c.foodCollected += 1;
           this.totalFoodCollected += 1;
@@ -332,7 +375,16 @@ export class ArenaSimulation {
             });
             this.c0LastFoodSpawnTime = this.simTime;
           }
-          this._spawnFoodForCreature(c, false);
+          if (this._isHeadlessFastTrain) {
+            this._spawnFoodForCreature(c, false);
+            c.foodState = 'ACTIVE';
+            c.foodStateTimer = 0;
+          } else {
+            // Start 1.0s animated dissolve at current spot, followed by 1.0s pause, then 1.0s sky drop!
+            c.dissolvePos.copy(c.foodPos);
+            c.foodState = 'DISSOLVING';
+            c.foodStateTimer = 0.0;
+          }
         }
       }
 
