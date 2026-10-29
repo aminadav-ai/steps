@@ -97,14 +97,14 @@ export class ArenaSimulation {
 
   _spawnFoodForCreature(creature, initial = false) {
     const com = creature.body.getCenterOfMass();
-    // Adaptive curriculum distance: starts at 1.4..2.4 m, grows with foodCollected up to 5.5 m
-    const minDist = 1.35 + Math.min(2.0, creature.foodCollected * 0.25);
-    const maxDist = 2.25 + Math.min(3.5, creature.foodCollected * 0.45);
+    // Adaptive curriculum distance: starts at 1.15..1.85 m, grows with foodCollected up to 5.0 m
+    const minDist = 1.15 + Math.min(2.2, creature.foodCollected * 0.25);
+    const maxDist = 1.85 + Math.min(3.5, creature.foodCollected * 0.45);
     const dist = minDist + Math.random() * (maxDist - minDist);
 
-    // On first spawn, place food generally in front (+X with +/- 50 deg spread) so initial gradient is rich
+    // On first spawn, place food generally in front (+X with +/- 35 deg spread) so initial gradient is rich
     const angle = initial
-      ? (Math.random() - 0.5) * 1.6
+      ? (Math.random() - 0.5) * 1.1
       : Math.random() * Math.PI * 2;
 
     const margin = 1.4;

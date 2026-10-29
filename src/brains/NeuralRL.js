@@ -571,9 +571,9 @@ export class PPOTrainer {
       (a, b) => workerTotalReward[b] - workerTotalReward[a]
     );
     const bestWorker = rankedWorkers[0];
-    if (workerTotalReward[bestWorker] > workerTotalReward[0] + 0.5) {
+    if (bestWorker !== undefined && workerTotalReward[bestWorker] > workerTotalReward[0] + 0.25) {
       const skipW = this.brain.actorSkip.W;
-      const topWeights = [0.18, 0.09, 0.04];
+      const topWeights = [0.52, 0.22, 0.10];
       for (let rank = 0; rank < Math.min(3, rankedWorkers.length); rank++) {
         const wIdx = rankedWorkers[rank];
         if (workerTotalReward[wIdx] > workerTotalReward[0]) {

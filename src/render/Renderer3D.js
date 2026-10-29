@@ -13,15 +13,15 @@ export class Renderer3D {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
 
-    // 3D Orbit Camera state
+    // 3D Orbit Camera state (focused closely on the single main creature)
     this.camYaw = -0.75;
-    this.camPitch = 0.52;
-    this.camDist = 9.2;
-    this.camTarget = new Vec3(0, 0.2, 0);
-    this.filteredLeaderPos = new Vec3(0, 0.2, 0);
+    this.camPitch = 0.44;
+    this.camDist = 3.1;
+    this.camTarget = new Vec3(0, 0.18, 0);
+    this.filteredLeaderPos = new Vec3(0, 0.18, 0);
     this.followLeader = true;
     this.showForceVectors = true;
-    this.showAllPopulation = true;
+    this.showAllPopulation = false;
 
     this._initPointerControls();
   }
@@ -59,7 +59,7 @@ export class Renderer3D {
 
     this.canvas.addEventListener('wheel', e => {
       e.preventDefault();
-      this.camDist = Math.max(2.8, Math.min(24.0, this.camDist * (1 + e.deltaY * 0.001)));
+      this.camDist = Math.max(1.3, Math.min(22.0, this.camDist * (1 + e.deltaY * 0.001)));
     }, { passive: false });
   }
 
@@ -104,12 +104,12 @@ export class Renderer3D {
     const height = this.canvas.height;
     const fovScale = Math.min(width, height) * 0.92;
 
-    const leaderIdx = sim.bestCreatureIdx || 0;
-    const leader = sim.creatures[leaderIdx] || sim.creatures[0];
+    const focusIdx = this.showAllPopulation ? (sim.bestCreatureIdx || 0) : 0;
+    const leader = sim.creatures[focusIdx] || sim.creatures[0];
 
     if (this.followLeader && leader) {
       const com = leader.body.getCenterOfMass();
-      // Stage 1: Heavy low-pass filter on CoM removes 1.65 Hz stepping sway
+      // Stage 1: Heavy low-pass filter on CoM removes 1.45 Hz stepping sway
       this.filteredLeaderPos.x += (com.x - this.filteredLeaderPos.x) * 0.025;
       this.filteredLeaderPos.z += (com.z - this.filteredLeaderPos.z) * 0.025;
 
@@ -126,10 +126,10 @@ export class Renderer3D {
         this.camTarget.x += nx * excess * 0.04;
         this.camTarget.z += nz * excess * 0.04;
       }
-      this.camTarget.y = 0.20;
+      this.camTarget.y = 0.18;
     } else {
       this.camTarget.x += (0 - this.camTarget.x) * 0.05;
-      this.camTarget.y = 0.20;
+      this.camTarget.y = 0.18;
       this.camTarget.z += (0 - this.camTarget.z) * 0.05;
     }
 
@@ -161,24 +161,29 @@ export class Renderer3D {
     // 2. Render 3D Floor Grid & Arena Containment Walls
     this._renderArenaFloorAndWalls(ctx, proj, sim.arenaHalfSize, sim.floorFriction);
 
-    // 3. Sort creatures back-to-front by distance from camera, keeping Leader on top
-    const indices = [];
-    for (let i = 0; i < sim.creatures.length; i++) {
-      if (!this.showAllPopulation && i !== leaderIdx && i !== 0) continue;
-      indices.push(i);
-    }
-    indices.sort((a, b) => {
-      if (a === leaderIdx) return 1;
-      if (b === leaderIdx) return -1;
-      const dA = Vec3.dist(sim.creatures[a].body.getCenterOfMass(), camPos);
-      const dB = Vec3.dist(sim.creatures[b].body.getCenterOfMass(), camPos);
-      return dB - dA;
-    });
+    // 3. Render strictly the single main creature (idx 0) unless population view is enabled
+    if (!this.showAllPopulation) {
+      if (sim.creatures[0]) {
+        this._renderCreatureAndFood(ctx, proj, sim.creatures[0], true, true, 1.0, interpAlpha);
+      }
+    } else {
+      const indices = [];
+      for (let i = 0; i < sim.creatures.length; i++) {
+        indices.push(i);
+      }
+      indices.sort((a, b) => {
+        if (a === focusIdx) return 1;
+        if (b === focusIdx) return -1;
+        const dA = Vec3.dist(sim.creatures[a].body.getCenterOfMass(), camPos);
+        const dB = Vec3.dist(sim.creatures[b].body.getCenterOfMass(), camPos);
+        return dB - dA;
+      });
 
-    for (const idx of indices) {
-      const isFocused = idx === leaderIdx || idx === 0;
-      const alpha = isFocused ? 1.0 : 0.42;
-      this._renderCreatureAndFood(ctx, proj, sim.creatures[idx], isFocused, idx === leaderIdx, alpha, interpAlpha);
+      for (const idx of indices) {
+        const isFocused = idx === focusIdx || idx === 0;
+        const alpha = isFocused ? 1.0 : 0.42;
+        this._renderCreatureAndFood(ctx, proj, sim.creatures[idx], isFocused, idx === focusIdx, alpha, interpAlpha);
+      }
     }
   }
 

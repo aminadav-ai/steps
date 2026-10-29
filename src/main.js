@@ -179,13 +179,13 @@ chkShowAllPop.addEventListener('change', () => {
 
 function updateHUD() {
   if (!sim) return;
-  const leaderIdx = sim.bestCreatureIdx || 0;
-  const leader = sim.creatures[leaderIdx] || sim.creatures[0];
+  const focusIdx = renderer3D.showAllPopulation ? (sim.bestCreatureIdx || 0) : 0;
+  const leader = sim.creatures[focusIdx] || sim.creatures[0];
 
   hudUpdate.textContent = sim.trainer.updateCount;
   hudSimTime.textContent = `${sim.simTime.toFixed(1)} с`;
   hudTotalFood.textContent = sim.totalFoodCollected;
-  hudLeaderId.textContent = leaderIdx;
+  hudLeaderId.textContent = focusIdx;
   hudLeaderFood.textContent = leader.foodCollected;
   hudLeaderVel.textContent = `${leader.lastVelocityTowardFood.toFixed(2)} м/с`;
 
@@ -233,7 +233,8 @@ function animate(now = performance.now()) {
 
   frameCounter++;
   if (frameCounter % 2 === 0) {
-    const leader = sim.creatures[sim.bestCreatureIdx || 0];
+    const focusIdx = renderer3D.showAllPopulation ? (sim.bestCreatureIdx || 0) : 0;
+    const leader = sim.creatures[focusIdx] || sim.creatures[0];
     nnRenderer.render(sim.brain, leader ? leader.logicalDoFs : null);
     updateHUD();
   }
