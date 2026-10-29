@@ -376,7 +376,7 @@ function updateHUD(forceVelUpdate = false) {
   const leader = sim.creatures[0];
 
   hudUpdate.textContent = sim.trainer.updateCount;
-  hudSimTime.textContent = `${sim.simTime.toFixed(1)} с`;
+  hudSimTime.textContent = `${Math.floor(sim.simTime)} с`;
   hudTotalFood.textContent = leader.foodCollected;
 
   const now = performance.now();
