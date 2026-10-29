@@ -11,6 +11,7 @@ export class ExperimentLogger {
     this.userEvents = [];
     this.cameraEvents = [];
     this._flushTimer = null;
+    this.staticMode = typeof window !== 'undefined' && window.location.hostname.endsWith('.github.io');
   }
 
   async startNewExperiment({ morphology, algorithm, populationSize, config }) {
@@ -23,8 +24,9 @@ export class ExperimentLogger {
       details: { morphology, algorithm, populationSize, config }
     }];
     this.cameraEvents = [];
+    if (this.staticMode) return null;
     try {
-      const res = await fetch('/api/experiment/start', {
+      const res = await fetch('./api/experiment/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -35,14 +37,18 @@ export class ExperimentLogger {
           config
         })
       });
+      if (!res.ok) {
+        this.staticMode = true;
+        return null;
+      }
       const data = await res.json();
       if (data.archivedPreviousLog) {
         this.lastArchivedFile = data.archivedPreviousLog;
       }
       await this.refreshLogsList();
       return data;
-    } catch (err) {
-      console.warn('[ExperimentLogger] Running in standalone/offline mode:', err.message);
+    } catch {
+      this.staticMode = true;
       return null;
     }
   }
@@ -109,8 +115,9 @@ export class ExperimentLogger {
   }
 
   async logUpdate(entry, morphology, algorithm, bestSnapshot = null) {
+    if (this.staticMode) return;
     try {
-      await fetch('/api/experiment/log', {
+      const res = await fetch('./api/experiment/log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -120,20 +127,26 @@ export class ExperimentLogger {
           bestSnapshot
         })
       });
+      if (!res.ok) this.staticMode = true;
     } catch {
-      // Ignore network error if static file opened directly
+      this.staticMode = true;
     }
   }
 
   async refreshLogsList() {
+    if (this.staticMode) return this.savedLogsList;
     try {
-      const res = await fetch('/api/experiment/list');
+      const res = await fetch('./api/experiment/list');
+      if (!res.ok) {
+        this.staticMode = true;
+        return this.savedLogsList;
+      }
       const data = await res.json();
       if (data.ok && Array.isArray(data.logs)) {
         this.savedLogsList = data.logs;
       }
     } catch {
-      // Ignore
+      this.staticMode = true;
     }
     return this.savedLogsList;
   }
