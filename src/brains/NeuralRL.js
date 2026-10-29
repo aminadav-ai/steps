@@ -345,7 +345,33 @@ export class ActorCriticBrain {
     this.actorL1.adamStep(actorLr, 0.9, 0.999, 1e-8, s, 0.8);
     this.actorL2.adamStep(actorLr, 0.9, 0.999, 1e-8, s, 0.8);
     this.actorOut.adamStep(actorLr, 0.9, 0.999, 1e-8, s, 0.8);
-    this.actorSkip.adamStep(actorLr * 1.5, 0.9, 0.999, 1e-8, s, 0.8);
+    this.actorSkip.adamStep(actorLr * 1.35, 0.9, 0.999, 1e-8, s, 0.8);
+
+    // Gentle L2 weight decay on deep residual MLP layers + row norm bounding on actorSkip.W
+    // to prevent post-convergence saturation / over-aggressive thrashing after 30+ updates
+    for (const layer of [this.actorL1, this.actorL2, this.actorOut]) {
+      const W = layer.W;
+      for (let i = 0; i < W.length; i++) {
+        W[i] *= 0.9992;
+      }
+    }
+    const skipW = this.actorSkip.W;
+    for (let a = 0; a < this.actDim; a++) {
+      const row = a * this.obsDim;
+      let normSq = 0;
+      for (let c = 0; c < this.obsDim; c++) {
+        const w = Math.max(-0.95, Math.min(0.95, skipW[row + c]));
+        skipW[row + c] = w;
+        normSq += w * w;
+      }
+      const maxRowNorm = 1.25;
+      if (normSq > maxRowNorm * maxRowNorm) {
+        const scale = maxRowNorm / Math.sqrt(normSq);
+        for (let c = 0; c < this.obsDim; c++) {
+          skipW[row + c] *= scale;
+        }
+      }
+    }
 
     this.criticL1.adamStep(criticLr, 0.9, 0.999, 1e-8, s, 1.0);
     this.criticL2.adamStep(criticLr, 0.9, 0.999, 1e-8, s, 1.0);
@@ -529,7 +555,8 @@ export class PPOTrainer {
     this.bufDone.push(Uint8Array.from(dones));
 
     for (let w = 0; w < this.numWorkers; w++) {
-      if (rewards[w] > 0.35) {
+      // Only add smooth high-velocity locomotion steps to eliteReplay (exclude 8.5 food-capture spike steps)
+      if (rewards[w] > 0.35 && rewards[w] < 4.0) {
         this.eliteReplay.push({
           obs: stepObs[w],
           act: stepAct[w],
@@ -702,9 +729,10 @@ export class PPOTrainer {
         }
 
         // Self-Imitation Learning (SIL) on top elite transitions
+        const lrDecay = 1.0 / (1.0 + 0.04 * this.updateCount);
         if (this.eliteReplay.length >= 8) {
           const silSamples = 8;
-          const silWeight = 0.18 / silSamples;
+          const silWeight = (0.14 * lrDecay) / silSamples;
           for (let s = 0; s < silSamples; s++) {
             const sample = this.eliteReplay[Math.floor(Math.random() * this.eliteReplay.length)];
             const cache = this.brain.forwardActor(sample.obs, false, null);
@@ -716,13 +744,13 @@ export class PPOTrainer {
           }
         }
 
-        this.brain.stepAdam(this.actorLr, this.criticLr);
+        this.brain.stepAdam(this.actorLr * lrDecay, this.criticLr);
         numBatches++;
       }
     }
 
     this.updateCount += 1;
-    this.paramSigma = Math.max(0.06, this.paramSigma * 0.985);
+    this.paramSigma = Math.max(0.035, this.paramSigma * 0.968);
     this._sampleWorkerParamNoise();
 
     this.lastPolicyLoss = totalPolicyLoss / Math.max(1, numBatches);

@@ -315,10 +315,25 @@ export class ArenaSimulation {
       }
 
       // Penalize excessive tilt in reward only; episode reset / body teleportation is completely disabled
-      // so every creature lives one continuous, unbroken physical life on the arena!
+      // for the main observed walker (i === 0) so it lives one continuous, unbroken physical life on the arena!
       const flipped = up.y < 0.12 || center.y < 0.08;
       if (flipped) {
         r -= 2.2;
+        dones[i] = 1;
+      }
+
+      if (up.y < 0.25) {
+        c.overturnSteps = (c.overturnSteps || 0) + 1;
+      } else {
+        c.overturnSteps = 0;
+      }
+
+      // Background parallel workers (i > 0) or headless fast-training automatically upright in-place
+      // after 12 overturned steps (0.6s) so they never lie upside-down poisoning the PPO rollout buffer.
+      if (c.overturnSteps >= 12 && (i > 0 || this._isHeadlessFastTrain)) {
+        this.uprightCreature(i);
+        c.overturnSteps = 0;
+        dones[i] = 1;
       }
 
       if (i === 0) {
