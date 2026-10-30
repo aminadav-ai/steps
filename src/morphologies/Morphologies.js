@@ -855,7 +855,7 @@ function attachOrthogonalLeg({
         // Ventral mode (normal walking, standing tall, squatting onto bottom, and bipedal duck self-righting):
         dx = actStride * strideStroke + yawDiffStride;
         dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
-        dz = enableHipRoll ? (actHipRoll * (isRightingMode ? 0.075 : 0.048)) : 0;
+        dz = enableHipRoll ? (actHipRoll * 0.056) : 0;
       } else {
         // Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.42, actLift < 0):
         dx = actStride * 0.26;

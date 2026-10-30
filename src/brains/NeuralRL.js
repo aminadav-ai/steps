@@ -165,8 +165,13 @@ export class ActorCriticBrain {
     this.rightingSuccesses = 0;
     this.rightingPhase = 0;
     this.duckRightingBestProgress = 0;
+    this.rightingHiddenDim = 16;
+    this.rightingH1 = null;
+    this.rightingOut = null;
     this._duckRightingPerturbW = new Float64Array(obsDim * actDim);
     this._duckRightingPerturbB = new Float64Array(actDim);
+    this._duckRightingPerturbOutW = new Float64Array(16 * actDim);
+    this._duckRightingLastH = new Float64Array(16);
     this._duckRightingPerturbReady = false;
 
     this.adamStepCount = 0;
@@ -194,6 +199,8 @@ export class ActorCriticBrain {
       criticL2: this.criticL2.toJSON(),
       criticOut: this.criticOut.toJSON(),
       rightingLayer: this.rightingLayer.toJSON(),
+      rightingH1: this.rightingH1 ? this.rightingH1.toJSON() : null,
+      rightingOut: this.rightingOut ? this.rightingOut.toJSON() : null,
       cpgTemplate: this.cpgTemplate ? Array.from(this.cpgTemplate) : null,
       logStd: Array.from(this.logStd),
       rightingGain: this.rightingGain,
@@ -218,6 +225,11 @@ export class ActorCriticBrain {
     this.criticL2.fromJSON(data.criticL2);
     this.criticOut.fromJSON(data.criticOut);
     this.rightingLayer.fromJSON(data.rightingLayer);
+    if (data.rightingH1 && data.rightingOut) {
+      this._ensureDuckRightingLayers();
+      this.rightingH1.fromJSON(data.rightingH1);
+      this.rightingOut.fromJSON(data.rightingOut);
+    }
     if (Array.isArray(data.cpgTemplate) && this.cpgTemplate && data.cpgTemplate.length === this.cpgTemplate.length) {
       this.cpgTemplate.set(data.cpgTemplate);
     }
@@ -372,20 +384,42 @@ export class ActorCriticBrain {
     this.cpgTemplate = Float64Array.from(this.actorSkip.W);
   }
 
-  _sampleDuckRightingPerturb() {
+  _ensureDuckRightingLayers() {
+    if (!this.rightingH1) {
+      this.rightingH1 = new DenseLayer(this.obsDim, this.rightingHiddenDim, 0.14);
+      // Zero food inputs (0..5) in hidden righting layer
+      for (let h = 0; h < this.rightingHiddenDim; h++) {
+        const row = h * this.obsDim;
+        for (let c = 0; c < 6; c++) this.rightingH1.W[row + c] = 0.0;
+      }
+    }
+    if (!this.rightingOut) {
+      this.rightingOut = new DenseLayer(this.rightingHiddenDim, this.actDim, 0.08);
+    }
+  }
+
+  _sampleDuckRightingPerturb(scale = 1.0) {
     if (!this._duckRightingPerturbW || !this._duckRightingPerturbB) return;
+    this._ensureDuckRightingLayers();
     this._duckRightingPerturbReady = true;
     // Sample a coherent neural exploration hypothesis over posture, CPG clock, and proprioception (cols 6..obsDim-1)
+    // plus non-linear hidden layer readout weights (rightingOut)
     for (let a = 0; a < this.actDim; a++) {
-      this._duckRightingPerturbB[a] = randn() * 0.22;
+      this._duckRightingPerturbB[a] = randn() * 0.22 * scale;
       const row = a * this.obsDim;
       for (let c = 0; c < this.obsDim; c++) {
         if (c < 6) {
           this._duckRightingPerturbW[row + c] = 0.0; // Ignore food position while trying to stand up
         } else if (c <= 11) {
-          this._duckRightingPerturbW[row + c] = randn() * 0.20; // Posture (up.y, pitch, roll) & internal rhythm
+          this._duckRightingPerturbW[row + c] = randn() * 0.20 * scale; // Posture (up.y, pitch, roll) & internal rhythm
         } else {
-          this._duckRightingPerturbW[row + c] = randn() * 0.08; // Joint proprioception & foot contacts
+          this._duckRightingPerturbW[row + c] = randn() * 0.08 * scale; // Joint proprioception & foot contacts
+        }
+      }
+      if (this._duckRightingPerturbOutW) {
+        const outRow = a * this.rightingHiddenDim;
+        for (let h = 0; h < this.rightingHiddenDim; h++) {
+          this._duckRightingPerturbOutW[outRow + h] = randn() * 0.16 * scale;
         }
       }
     }
@@ -394,8 +428,8 @@ export class ActorCriticBrain {
   /**
    * Forward pass of the Self-Righting Sub-Network when the walker is overturned (up.y < 0.35).
    * For the 14-DoF Duck, zero hardcoded formulas or scripted hints are used:
-   * the neural network (rightingLayer + per-attempt parameter exploration) must discover how to coordinate
-   * its 10 leg servos and 4 neck/head servos by itself from posture & proprioceptive sensors.
+   * a 2-layer non-linear neural network (rightingH1 -> tanh -> rightingOut + rightingLayer skip)
+   * with per-attempt parameter exploration must discover how to roll onto its feet and hold upright balance.
    */
   forwardRightingReflex(obs, dt = 0.05, recordVis = true) {
     this.rightingPhase = (this.rightingPhase + dt * 6.8) % (Math.PI * 2);
@@ -405,9 +439,24 @@ export class ActorCriticBrain {
     const mu = new Float64Array(this.actDim);
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
-      if (!this._duckRightingPerturbReady) {
-        this._sampleDuckRightingPerturb();
+      if (!this._duckRightingPerturbReady || !this.rightingH1 || !this.rightingOut) {
+        this._sampleDuckRightingPerturb(1.0);
       }
+
+      // Compute non-linear hidden representation hR = tanh(rightingH1 * obs) (ignoring food cols 0..5)
+      const hR = this._duckRightingLastH;
+      for (let h = 0; h < this.rightingHiddenDim; h++) {
+        const row = h * this.obsDim;
+        let sum = this.rightingH1.b[h];
+        for (let c = 6; c < this.obsDim; c++) {
+          sum += this.rightingH1.W[row + c] * obs[c];
+        }
+        hR[h] = Math.tanh(sum);
+      }
+
+      const zOut = new Float64Array(this.actDim);
+      this.rightingOut.forward(hR, zOut);
+
       for (let a = 0; a < this.actDim; a++) {
         const row = a * this.obsDim;
         let pSum = this._duckRightingPerturbB ? this._duckRightingPerturbB[a] : 0.0;
@@ -416,7 +465,13 @@ export class ActorCriticBrain {
             pSum += this._duckRightingPerturbW[row + c] * obs[c];
           }
         }
-        mu[a] = Math.tanh(zRight[a] + pSum);
+        if (this._duckRightingPerturbOutW) {
+          const outRow = a * this.rightingHiddenDim;
+          for (let h = 0; h < this.rightingHiddenDim; h++) {
+            pSum += this._duckRightingPerturbOutW[outRow + h] * hR[h];
+          }
+        }
+        mu[a] = Math.tanh(zRight[a] + zOut[a] + pSum);
       }
     } else {
       // Keep roll direction consistent throughout the attempt for radial Tripod/Quadruped walkers
@@ -491,9 +546,11 @@ export class ActorCriticBrain {
     const progress = Math.max(0, maxUpY - startUpY) + Math.max(0, endUpY - startUpY);
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
+      this._ensureDuckRightingLayers();
       const upDelta = endUpY - startUpY;
       const peakGain = Math.max(0, maxUpY - startUpY);
-      const attemptScore = upDelta + 0.65 * peakGain + 0.015 * contactSteps;
+      const uprightBonus = endUpY > 0.5 ? (endUpY - 0.5) * 0.8 : 0.0;
+      const attemptScore = upDelta + 0.65 * peakGain + uprightBonus + 0.015 * contactSteps;
       if (peakGain > this.duckRightingBestProgress) {
         this.duckRightingBestProgress = peakGain;
       }
@@ -517,11 +574,21 @@ export class ActorCriticBrain {
               Math.min(0.8, this.rightingLayer.W[row + c] + stepScale * this._duckRightingPerturbW[row + c])
             );
           }
+          if (this.rightingOut && this._duckRightingPerturbOutW) {
+            const outRow = a * this.rightingHiddenDim;
+            for (let h = 0; h < this.rightingHiddenDim; h++) {
+              this.rightingOut.W[outRow + h] = Math.max(
+                -0.8,
+                Math.min(0.8, this.rightingOut.W[outRow + h] + stepScale * this._duckRightingPerturbOutW[outRow + h])
+              );
+            }
+          }
         }
       }
 
       if (lastObs && lastAct && progress > 0.01) {
         const lr = 0.012;
+        const hR = this._duckRightingLastH;
         for (let a = 0; a < this.actDim; a++) {
           const row = a * this.obsDim;
           for (let c = 6; c < this.obsDim; c++) {
@@ -530,11 +597,29 @@ export class ActorCriticBrain {
               Math.min(0.8, this.rightingLayer.W[row + c] + lr * progress * lastAct[a] * lastObs[c])
             );
           }
+          if (this.rightingOut && hR) {
+            const outRow = a * this.rightingHiddenDim;
+            for (let h = 0; h < this.rightingHiddenDim; h++) {
+              this.rightingOut.W[outRow + h] = Math.max(
+                -0.8,
+                Math.min(0.8, this.rightingOut.W[outRow + h] + lr * progress * lastAct[a] * hR[h])
+              );
+            }
+          }
         }
       }
 
-      // Sample a fresh neural motor hypothesis for the next attempt
-      this._sampleDuckRightingPerturb();
+      // IMPORTANT: Do NOT disrupt an ongoing successful stand-up!
+      // Only sample a brand-new random hypothesis when the attempt stalled or rolled backward;
+      // if the duck is actively rising (upDelta > 0.06) or already semi-upright (endUpY >= 0.25),
+      // keep the current working weights and only decay the exploratory perturbation slightly!
+      if (upDelta > 0.06 || endUpY >= 0.25) {
+        for (let i = 0; i < this._duckRightingPerturbW.length; i++) this._duckRightingPerturbW[i] *= 0.65;
+        for (let i = 0; i < this._duckRightingPerturbB.length; i++) this._duckRightingPerturbB[i] *= 0.65;
+        for (let i = 0; i < this._duckRightingPerturbOutW.length; i++) this._duckRightingPerturbOutW[i] *= 0.65;
+      } else {
+        this._sampleDuckRightingPerturb(1.0);
+      }
       return this.getRightingSkillPct();
     }
 
@@ -1105,15 +1190,17 @@ export class PPOTrainer {
     const stepVal = new Float64Array(this.numWorkers);
 
     const c0 = creatures[0];
+    const isDuck0 = c0.morphologyKey === 'duck';
     const upY0 = c0.getTorsoFrame().up.y;
-    const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < 0.22;
+    const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < (isDuck0 ? 0.25 : 0.22);
+    const confirmDelay = isDuck0 ? 3 : (this.overturnConfirmDelay || 20);
 
     if (!this.wasOverturned) {
       if (isPhysicallyTiltedOnBack) {
         this.overturnConfirmSteps = (this.overturnConfirmSteps || 0) + 1;
-        // During the 1.0s initial confirmation pause: after 0.3s (6 steps) of staying tilted (< 0.22),
-        // lie still and let momentum settle; during the first 0.3s let dynamic somersaults/rolls carry through!
-        if (this.overturnConfirmSteps < (this.overturnConfirmDelay || 20)) {
+        // For radial spiders (Tripod/Quadruped), wait 1.0s on back before starting;
+        // for the Duck, never force calmAct=0 ("dead pause") — let the neural network act continuously!
+        if (!isDuck0 && this.overturnConfirmSteps < confirmDelay) {
           if (this.overturnConfirmSteps >= 6) {
             const obs = c0.getObservation();
             const calmAct = new Float64Array(this.brain.actDim);
@@ -1129,63 +1216,76 @@ export class PPOTrainer {
       }
     }
 
-      const isRecoveredUpright = upY0 >= 0.65 && !c0.hasInvertedLeg();
-      const isOverturned0 =
-        !c0.isGrabbed &&
-        !(c0.postThrowTimer > 0) &&
-        ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= (this.overturnConfirmDelay || 20)) ||
-          (this.wasOverturned && !isRecoveredUpright));
+    if (this.wasOverturned && isDuck0) {
+      const anyFootContact = c0.footNodes.some(f => f.inContact);
+      if (upY0 >= 0.84 && !c0.hasInvertedLeg() && anyFootContact) {
+        this.uprightHoldSteps = (this.uprightHoldSteps || 0) + 1;
+      } else if (upY0 < 0.78) {
+        this.uprightHoldSteps = 0;
+      }
+    } else {
+      this.uprightHoldSteps = 0;
+    }
 
-      // 1. Check if main walker is confirmed overturned on its back/side -> engage Self-Righting Reflex!
-      if (isOverturned0) {
-        if (!this.wasOverturned) {
-          this.wasOverturned = true;
-          this.rightingPauseStepsRemaining = 0;
-          this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
-          // Note: We do NOT wipe this._resetBuffers() here because the terminal crash step (dones[0] = 1)
-          // is already recorded at the end of bufDone, so GAE cleanly separates pre-fall steps from post-recovery steps
-          // and teaches the walking policy to avoid self-inflicted falls!
-          this.rightingStepCursor = 0;
-          this.rightingStartUpY = upY0;
-          this.rightingMaxUpY = upY0;
-          this.rightingContactSteps = 0;
-        }
+    const isRecoveredUpright = isDuck0
+      ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && !c0.hasInvertedLeg())
+      : (upY0 >= 0.65 && !c0.hasInvertedLeg());
 
-        this.metaState.mode = 'LEARNING_RIGHTING';
-        this.metaState.isLearningActive = true;
-        this.metaState.needToLearnPct = 100;
-        this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
-        this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
-        this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
+    const isOverturned0 =
+      !c0.isGrabbed &&
+      !(c0.postThrowTimer > 0) &&
+      ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= confirmDelay) ||
+        (this.wasOverturned && !isRecoveredUpright));
 
-        const obs = c0.getObservation();
-        // Natural beetle rest pause between righting attempts so chassis settles before the next heave
-        if (this.rightingPauseStepsRemaining > 0) {
-          const calmAct = new Float64Array(this.brain.actDim);
-          c0.lastState = obs;
-          c0.lastAction = calmAct;
-          c0.applyActionVector(calmAct, false);
-          this.metaState.reasonText = `Передышка на спине перед попыткой #${this.metaState.rightingAttempts} (гашение колебаний, навык ${this.metaState.rightingSkillPct}%)`;
-          this._pendingStep = { isRightingStep: true, isRestPause: true, obs, act: calmAct, upY: upY0 };
-          return;
-        }
+    // 1. Check if main walker is confirmed overturned on its back/side -> engage Self-Righting Network!
+    if (isOverturned0) {
+      if (!this.wasOverturned) {
+        this.wasOverturned = true;
+        this.uprightHoldSteps = 0;
+        this.rightingPauseStepsRemaining = 0;
+        this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
+        this.rightingStepCursor = 0;
+        this.rightingStartUpY = upY0;
+        this.rightingMaxUpY = upY0;
+        this.rightingContactSteps = 0;
+      }
 
-        this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+      this.metaState.mode = 'LEARNING_RIGHTING';
+      this.metaState.isLearningActive = true;
+      this.metaState.needToLearnPct = 100;
+      this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
+      this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
+      this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
 
-        const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
+      const obs = c0.getObservation();
+      // Rest pause between righting attempts (only for radial spiders; disabled for the Duck so we never interrupt its neural network!)
+      if (!isDuck0 && this.rightingPauseStepsRemaining > 0) {
+        const calmAct = new Float64Array(this.brain.actDim);
         c0.lastState = obs;
-        c0.lastAction = muRight;
-        // Unlock dorsal beetle stroke while upside down (upY0 < 0.42); once torso rolls past 0.42, re-engage ventral stops to catch the floor!
-        c0.applyActionVector(muRight, upY0 < 0.42);
-
-        this._pendingStep = { isRightingStep: true, isRestPause: false, obs, act: muRight, upY: upY0 };
+        c0.lastAction = calmAct;
+        c0.applyActionVector(calmAct, false);
+        this.metaState.reasonText = `Передышка на спине перед попыткой #${this.metaState.rightingAttempts} (гашение колебаний, навык ${this.metaState.rightingSkillPct}%)`;
+        this._pendingStep = { isRightingStep: true, isRestPause: true, obs, act: calmAct, upY: upY0 };
         return;
       }
 
-      // 2. If walker just recovered from overturned back onto its feet!
-      if (this.wasOverturned && isRecoveredUpright) {
-        this._completeRightingRecovery();
-      }
+      this.metaState.reasonText = isDuck0 && (this.uprightHoldSteps || 0) > 0
+        ? `Удерживает вертикальный баланс стоя (${this.uprightHoldSteps}/8, up.y=${upY0.toFixed(2)}) — попытка #${this.metaState.rightingAttempts}`
+        : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+
+      const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
+      c0.lastState = obs;
+      c0.lastAction = muRight;
+      c0.applyActionVector(muRight, upY0 < 0.42);
+
+      this._pendingStep = { isRightingStep: true, isRestPause: false, obs, act: muRight, upY: upY0 };
+      return;
+    }
+
+    // 2. If walker just recovered from overturned back onto its feet!
+    if (this.wasOverturned && isRecoveredUpright) {
+      this._completeRightingRecovery();
+    }
 
     const isTrainingWalk = this.metaState.mode === 'LEARNING_WALK';
 
@@ -1229,6 +1329,7 @@ export class PPOTrainer {
 
   _completeRightingRecovery() {
     this.wasOverturned = false;
+    this.uprightHoldSteps = 0;
     this.overturnConfirmSteps = 0;
     this.rightingPauseStepsRemaining = 0;
     this.brain.rightingSuccesses += 1;
@@ -1261,14 +1362,18 @@ export class PPOTrainer {
       return null;
     }
 
-    // Handle Beetle Self-Righting Learning step when overturned on back:
+    // Handle Self-Righting Learning step when overturned on back/side:
     if (this._pendingStep.isRightingStep) {
-      if (this.wasOverturned && upY0 >= 0.65 && !c0.hasInvertedLeg()) {
+      const isDuck0 = c0.morphologyKey === 'duck';
+      const canCompleteNow = isDuck0
+        ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && !c0.hasInvertedLeg())
+        : (upY0 >= 0.65 && !c0.hasInvertedLeg());
+      if (this.wasOverturned && canCompleteNow) {
         this._completeRightingRecovery();
         return null;
       }
 
-      if (this._pendingStep.isRestPause) {
+      if (!isDuck0 && this._pendingStep.isRestPause) {
         this.rightingPauseStepsRemaining = Math.max(0, (this.rightingPauseStepsRemaining || 0) - 1);
         if (this.rightingPauseStepsRemaining === 0) {
           this.rightingStartUpY = upY0;
@@ -1283,7 +1388,8 @@ export class PPOTrainer {
       const anyContact = c0.footNodes.some(f => f.inContact);
       if (anyContact) this.rightingContactSteps += 1;
 
-      if (this.rightingStepCursor >= this.rightingHorizon) {
+      const horizon = isDuck0 ? 24 : this.rightingHorizon;
+      if (this.rightingStepCursor >= horizon) {
         const skillPct = this.brain.updateRightingReflex({
           startUpY: this.rightingStartUpY,
           maxUpY: this.rightingMaxUpY,
@@ -1298,8 +1404,8 @@ export class PPOTrainer {
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
         this.rightingContactSteps = 0;
-        // If still overturned on its back/side after this attempt, pause for 0.4s like a real beetle!
-        if (upY0 < 0.35) {
+        // Only radial beetles pause; the Duck's neural network runs continuously without interruption!
+        if (!isDuck0 && upY0 < 0.35) {
           this.rightingPauseStepsRemaining = this.rightingPauseDuration || 8;
         }
       }
@@ -1948,13 +2054,15 @@ export class NESTrainer {
 
   selectActions(creatures) {
     const c0 = creatures[0];
+    const isDuck0 = c0.morphologyKey === 'duck';
     const upY0 = c0.getTorsoFrame().up.y;
-    const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < 0.22;
+    const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < (isDuck0 ? 0.25 : 0.22);
+    const confirmDelay = isDuck0 ? 3 : 24;
 
     if (!this.wasOverturned) {
       if (isPhysicallyTiltedOnBack) {
         this.overturnConfirmSteps = (this.overturnConfirmSteps || 0) + 1;
-        if (this.overturnConfirmSteps < 24 && this.overturnConfirmSteps >= 6) {
+        if (!isDuck0 && this.overturnConfirmSteps < confirmDelay && this.overturnConfirmSteps >= 6) {
           const obs = c0.getObservation();
           const calmAct = new Float64Array(this.brain.actDim);
           c0.lastState = obs;
@@ -1968,13 +2076,29 @@ export class NESTrainer {
       }
     }
 
+    if (this.wasOverturned && isDuck0) {
+      const anyFootContact = c0.footNodes.some(f => f.inContact);
+      if (upY0 >= 0.84 && !c0.hasInvertedLeg() && anyFootContact) {
+        this.uprightHoldSteps = (this.uprightHoldSteps || 0) + 1;
+      } else if (upY0 < 0.78) {
+        this.uprightHoldSteps = 0;
+      }
+    } else {
+      this.uprightHoldSteps = 0;
+    }
+
+    const isRecoveredUpright = isDuck0
+      ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && !c0.hasInvertedLeg())
+      : (upY0 >= 0.65 && !c0.hasInvertedLeg());
+
     const isOverturned0 =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= 24) || (this.wasOverturned && upY0 < 0.65));
+      ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= confirmDelay) || (this.wasOverturned && !isRecoveredUpright));
     if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
+        this.uprightHoldSteps = 0;
         this.rightingPauseStepsRemaining = 0;
         this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
         this.stepCursor = 0;
@@ -1992,7 +2116,7 @@ export class NESTrainer {
       this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
 
       const obs = c0.getObservation();
-      if (this.rightingPauseStepsRemaining > 0) {
+      if (!isDuck0 && this.rightingPauseStepsRemaining > 0) {
         const calmAct = new Float64Array(this.brain.actDim);
         c0.lastState = obs;
         c0.lastAction = calmAct;
@@ -2002,7 +2126,9 @@ export class NESTrainer {
         return;
       }
 
-      this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`;
+      this.metaState.reasonText = isDuck0 && (this.uprightHoldSteps || 0) > 0
+        ? `Удерживает вертикальный баланс стоя (${this.uprightHoldSteps}/8, up.y=${upY0.toFixed(2)}) — попытка #${this.metaState.rightingAttempts}`
+        : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`;
 
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
       c0.lastState = obs;
@@ -2012,8 +2138,9 @@ export class NESTrainer {
       return;
     }
 
-    if (this.wasOverturned && upY0 >= 0.65) {
+    if (this.wasOverturned && isRecoveredUpright) {
       this.wasOverturned = false;
+      this.uprightHoldSteps = 0;
       this.overturnConfirmSteps = 0;
       this.rightingPauseStepsRemaining = 0;
       this.brain.rightingSuccesses += 1;
@@ -2061,7 +2188,9 @@ export class NESTrainer {
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       if (c0.footNodes.some(f => f.inContact)) this.rightingContactSteps += 1;
-      if (this.rightingStepCursor >= this.rightingHorizon) {
+      const isDuck0 = c0.morphologyKey === 'duck';
+      const horizon = isDuck0 ? 24 : this.rightingHorizon;
+      if (this.rightingStepCursor >= horizon) {
         this.metaState.rightingSkillPct = this.brain.updateRightingReflex({
           startUpY: this.rightingStartUpY,
           maxUpY: this.rightingMaxUpY,
@@ -2075,7 +2204,7 @@ export class NESTrainer {
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
         this.rightingContactSteps = 0;
-        if (upY0 < 0.35) {
+        if (!isDuck0 && upY0 < 0.35) {
           this.rightingPauseStepsRemaining = 14;
         }
       }
