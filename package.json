@@ -1,7 +1,7 @@
 {
   "name": "steps",
-  "version": "1.0.0",
-  "description": "Steps: 3D Rigid-Body Physics & Reinforcement Learning Laboratory (PPO Actor-Critic + GAE + Adam & NES)",
+  "version": "2.0.0",
+  "description": "Steps: 3D Rigid-Body Physics & Reinforcement Learning Laboratory (Revolute PD Servos & Bio-Muscles, PPO Actor-Critic + GAE + Adam & NES)",
   "type": "module",
   "scripts": {
     "start": "node server.js",

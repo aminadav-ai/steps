@@ -955,81 +955,63 @@ export class PPOTrainer {
       }
     }
 
-    const isOverturned0 =
-      !c0.isGrabbed &&
-      !(c0.postThrowTimer > 0) &&
-      ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= (this.overturnConfirmDelay || 20)) ||
-        (this.wasOverturned && upY0 < 0.65));
+      const isRecoveredUpright = upY0 >= 0.65 && !c0.hasInvertedLeg();
+      const isOverturned0 =
+        !c0.isGrabbed &&
+        !(c0.postThrowTimer > 0) &&
+        ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= (this.overturnConfirmDelay || 20)) ||
+          (this.wasOverturned && !isRecoveredUpright));
 
-    // 1. Check if main walker is confirmed overturned on its back/side -> engage Self-Righting Reflex!
-    if (isOverturned0) {
-      if (!this.wasOverturned) {
-        this.wasOverturned = true;
-        this.rightingPauseStepsRemaining = 0;
-        this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
-        // Note: We do NOT wipe this._resetBuffers() here because the terminal crash step (dones[0] = 1)
-        // is already recorded at the end of bufDone, so GAE cleanly separates pre-fall steps from post-recovery steps
-        // and teaches the walking policy to avoid self-inflicted falls!
-        this.rightingStepCursor = 0;
-        this.rightingStartUpY = upY0;
-        this.rightingMaxUpY = upY0;
-        this.rightingContactSteps = 0;
-      }
+      // 1. Check if main walker is confirmed overturned on its back/side -> engage Self-Righting Reflex!
+      if (isOverturned0) {
+        if (!this.wasOverturned) {
+          this.wasOverturned = true;
+          this.rightingPauseStepsRemaining = 0;
+          this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
+          // Note: We do NOT wipe this._resetBuffers() here because the terminal crash step (dones[0] = 1)
+          // is already recorded at the end of bufDone, so GAE cleanly separates pre-fall steps from post-recovery steps
+          // and teaches the walking policy to avoid self-inflicted falls!
+          this.rightingStepCursor = 0;
+          this.rightingStartUpY = upY0;
+          this.rightingMaxUpY = upY0;
+          this.rightingContactSteps = 0;
+        }
 
-      this.metaState.mode = 'LEARNING_RIGHTING';
-      this.metaState.isLearningActive = true;
-      this.metaState.needToLearnPct = 100;
-      this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
-      this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
-      this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
+        this.metaState.mode = 'LEARNING_RIGHTING';
+        this.metaState.isLearningActive = true;
+        this.metaState.needToLearnPct = 100;
+        this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
+        this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
+        this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
 
-      const obs = c0.getObservation();
-      // Natural beetle rest pause between righting attempts so chassis settles before the next heave
-      if (this.rightingPauseStepsRemaining > 0) {
-        const calmAct = new Float64Array(this.brain.actDim);
+        const obs = c0.getObservation();
+        // Natural beetle rest pause between righting attempts so chassis settles before the next heave
+        if (this.rightingPauseStepsRemaining > 0) {
+          const calmAct = new Float64Array(this.brain.actDim);
+          c0.lastState = obs;
+          c0.lastAction = calmAct;
+          c0.applyActionVector(calmAct, false);
+          this.metaState.reasonText = `Передышка на спине перед попыткой #${this.metaState.rightingAttempts} (гашение колебаний, навык ${this.metaState.rightingSkillPct}%)`;
+          this._pendingStep = { isRightingStep: true, isRestPause: true, obs, act: calmAct, upY: upY0 };
+          return;
+        }
+
+        this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+
+        const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
         c0.lastState = obs;
-        c0.lastAction = calmAct;
-        c0.applyActionVector(calmAct, false);
-        this.metaState.reasonText = `Передышка на спине перед попыткой #${this.metaState.rightingAttempts} (гашение колебаний, навык ${this.metaState.rightingSkillPct}%)`;
-        this._pendingStep = { isRightingStep: true, isRestPause: true, obs, act: calmAct, upY: upY0 };
+        c0.lastAction = muRight;
+        // Unlock dorsal beetle stroke while upside down (upY0 < 0.42); once torso rolls past 0.42, re-engage ventral stops to catch the floor!
+        c0.applyActionVector(muRight, upY0 < 0.42);
+
+        this._pendingStep = { isRightingStep: true, isRestPause: false, obs, act: muRight, upY: upY0 };
         return;
       }
 
-      this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
-
-      const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
-      c0.lastState = obs;
-      c0.lastAction = muRight;
-      c0.applyActionVector(muRight, true); // true = unlock dorsal beetle joint stroke!
-
-      this._pendingStep = { isRightingStep: true, isRestPause: false, obs, act: muRight, upY: upY0 };
-      return;
-    }
-
-    // 2. If walker just recovered from overturned back onto its feet!
-    if (this.wasOverturned && upY0 >= 0.65) {
-      this.wasOverturned = false;
-      this.overturnConfirmSteps = 0;
-      this.rightingPauseStepsRemaining = 0;
-      this.brain.rightingSuccesses += 1;
-      this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
-      // Lock in the successful righting reflex!
-      this.brain.rightingGain = Math.min(1.0, Math.max(0.88, this.brain.rightingGain));
-      this.brain.rightingAsym = Math.min(1.0, Math.max(0.85, this.brain.rightingAsym));
-      this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
-
-      // Restore previous walking mode (CONSOLIDATED or LEARNING_WALK)
-      this.metaState.mode = this.modeBeforeOverturn || 'LEARNING_WALK';
-      this.metaState.isLearningActive = this.metaState.mode === 'LEARNING_WALK';
-      if (this.metaState.mode === 'CONSOLIDATED') {
-        this.metaState.needToLearnPct = 0;
-        this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
-        this.metaState.reasonText = `Успешно встал на ноги (переворотов: ${this.metaState.rightingSuccesses})! Продолжает ходьбу с защищёнными весами`;
-      } else {
-        this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ';
-        this.metaState.reasonText = `Успешно встал на ноги (переворотов: ${this.metaState.rightingSuccesses})! Продолжает обучение ходьбе к цели`;
+      // 2. If walker just recovered from overturned back onto its feet!
+      if (this.wasOverturned && isRecoveredUpright) {
+        this._completeRightingRecovery();
       }
-    }
 
     const isTrainingWalk = this.metaState.mode === 'LEARNING_WALK';
 
@@ -1071,6 +1053,30 @@ export class PPOTrainer {
     this._pendingStep = { isRightingStep: false, stepObs, stepAct, stepLogProb, stepVal };
   }
 
+  _completeRightingRecovery() {
+    this.wasOverturned = false;
+    this.overturnConfirmSteps = 0;
+    this.rightingPauseStepsRemaining = 0;
+    this.brain.rightingSuccesses += 1;
+    this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
+    // Lock in the successful righting reflex!
+    this.brain.rightingGain = Math.min(1.0, Math.max(0.88, this.brain.rightingGain));
+    this.brain.rightingAsym = Math.min(1.0, Math.max(0.85, this.brain.rightingAsym));
+    this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
+
+    // Restore previous walking mode (CONSOLIDATED or LEARNING_WALK)
+    this.metaState.mode = this.modeBeforeOverturn || 'LEARNING_WALK';
+    this.metaState.isLearningActive = this.metaState.mode === 'LEARNING_WALK';
+    if (this.metaState.mode === 'CONSOLIDATED') {
+      this.metaState.needToLearnPct = 0;
+      this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
+      this.metaState.reasonText = `Успешно встал на ноги (переворотов: ${this.metaState.rightingSuccesses})! Продолжает ходьбу с защищёнными весами`;
+    } else {
+      this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ';
+      this.metaState.reasonText = `Успешно встал на ноги (переворотов: ${this.metaState.rightingSuccesses})! Продолжает обучение ходьбе к цели`;
+    }
+  }
+
   recordStepOutcome(creatures, rewards, dones) {
     if (!this._pendingStep) return null;
 
@@ -1097,6 +1103,11 @@ export class PPOTrainer {
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       const anyContact = c0.footNodes.some(f => f.inContact);
       if (anyContact) this.rightingContactSteps += 1;
+
+      if (this.wasOverturned && upY0 >= 0.65 && !c0.hasInvertedLeg()) {
+        this._completeRightingRecovery();
+        return null;
+      }
 
       if (this.rightingStepCursor >= this.rightingHorizon) {
         const skillPct = this.brain.updateRightingReflex({
