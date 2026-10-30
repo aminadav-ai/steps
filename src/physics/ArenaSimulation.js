@@ -393,8 +393,12 @@ export class ArenaSimulation {
       this.world.resetContactTelemetry((body, idx) => {
         const c = this.creatures[idx];
         if (c && c.lastAction) {
-          const isOverturned = c.getTorsoFrame().up.y < 0.35 || Boolean(this.trainer && this.trainer.wasOverturned);
-          c.applyActionVector(c.lastAction, isOverturned);
+          const isActivelyRighting = Boolean(
+            this.trainer &&
+            this.trainer.wasOverturned &&
+            !(this.trainer.rightingPauseStepsRemaining > 0)
+          );
+          c.applyActionVector(c.lastAction, isActivelyRighting);
         }
       });
     }
@@ -493,7 +497,7 @@ export class ArenaSimulation {
 
       // Velocity toward food (m/s)
       const isInThrowFlight = (c.postThrowTimer || 0) > 0;
-      const isOverturnedNow = !c.isGrabbed && !isInThrowFlight && (up.y < 0.18 || Boolean(this.trainer && this.trainer.wasOverturned));
+      const isOverturnedNow = !c.isGrabbed && !isInThrowFlight && Boolean(this.trainer && this.trainer.wasOverturned);
       const isWaitingForFood = c.foodState === 'DISSOLVING' || c.foodState === 'WAITING';
       const isDroppingFood = c.foodState === 'DROPPING';
 

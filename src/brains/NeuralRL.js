@@ -932,15 +932,40 @@ export class PPOTrainer {
 
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
+    const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < 0.22;
+
+    if (!this.wasOverturned) {
+      if (isPhysicallyTiltedOnBack) {
+        this.overturnConfirmSteps = (this.overturnConfirmSteps || 0) + 1;
+        // During the 1.2s initial confirmation pause: if flat on its back (up.y < 0.05) for >0.3s,
+        // lie still and let momentum settle; otherwise let dynamic somersaults/rolls carry through!
+        if (this.overturnConfirmSteps < (this.overturnConfirmDelay || 24)) {
+          if (upY0 < 0.05 && this.overturnConfirmSteps >= 6) {
+            const obs = c0.getObservation();
+            const calmAct = new Float64Array(this.brain.actDim);
+            c0.lastState = obs;
+            c0.lastAction = calmAct;
+            c0.applyActionVector(calmAct, false);
+            this._pendingStep = { isRightingStep: false, isOverturnPause: true };
+            return;
+          }
+        }
+      } else {
+        this.overturnConfirmSteps = 0;
+      }
+    }
+
     const isOverturned0 =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      (upY0 < 0.18 || (this.wasOverturned && upY0 < 0.65));
+      ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= (this.overturnConfirmDelay || 24)) ||
+        (this.wasOverturned && upY0 < 0.65));
 
-    // 1. Check if main walker is overturned on its back/side -> engage Self-Righting Reflex!
+    // 1. Check if main walker is confirmed overturned on its back/side -> engage Self-Righting Reflex!
     if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
+        this.rightingPauseStepsRemaining = 0;
         this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
         // Clear any partial walking rollout so falling/overturned steps NEVER corrupt walking weights!
         this._resetBuffers();
@@ -956,21 +981,35 @@ export class PPOTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
-      this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
 
       const obs = c0.getObservation();
+      // Natural beetle rest pause between righting attempts so chassis settles before the next heave
+      if (this.rightingPauseStepsRemaining > 0) {
+        const calmAct = new Float64Array(this.brain.actDim);
+        c0.lastState = obs;
+        c0.lastAction = calmAct;
+        c0.applyActionVector(calmAct, false);
+        this.metaState.reasonText = `Передышка на спине перед попыткой #${this.metaState.rightingAttempts} (гашение колебаний, навык ${this.metaState.rightingSkillPct}%)`;
+        this._pendingStep = { isRightingStep: true, isRestPause: true, obs, act: calmAct, upY: upY0 };
+        return;
+      }
+
+      this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
       c0.lastState = obs;
       c0.lastAction = muRight;
       c0.applyActionVector(muRight, true); // true = unlock dorsal beetle joint stroke!
 
-      this._pendingStep = { isRightingStep: true, obs, act: muRight, upY: upY0 };
+      this._pendingStep = { isRightingStep: true, isRestPause: false, obs, act: muRight, upY: upY0 };
       return;
     }
 
     // 2. If walker just recovered from overturned back onto its feet!
     if (this.wasOverturned && upY0 >= 0.65) {
       this.wasOverturned = false;
+      this.overturnConfirmSteps = 0;
+      this.rightingPauseStepsRemaining = 0;
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
       // Lock in the successful righting reflex!
@@ -1037,8 +1076,22 @@ export class PPOTrainer {
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
 
+    if (this._pendingStep.isOverturnPause) {
+      return null;
+    }
+
     // Handle Beetle Self-Righting Learning step when overturned on back:
     if (this._pendingStep.isRightingStep) {
+      if (this._pendingStep.isRestPause) {
+        this.rightingPauseStepsRemaining = Math.max(0, (this.rightingPauseStepsRemaining || 0) - 1);
+        if (this.rightingPauseStepsRemaining === 0) {
+          this.rightingStartUpY = upY0;
+          this.rightingMaxUpY = upY0;
+          this.rightingContactSteps = 0;
+        }
+        return null;
+      }
+
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       const anyContact = c0.footNodes.some(f => f.inContact);
@@ -1059,6 +1112,10 @@ export class PPOTrainer {
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
         this.rightingContactSteps = 0;
+        // If still overturned on its back/side after this attempt, pause for 0.7s like a real beetle!
+        if (upY0 < 0.35) {
+          this.rightingPauseStepsRemaining = this.rightingPauseDuration || 14;
+        }
       }
       return null;
     }
@@ -1704,13 +1761,33 @@ export class NESTrainer {
   selectActions(creatures) {
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
+    const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < 0.22;
+
+    if (!this.wasOverturned) {
+      if (isPhysicallyTiltedOnBack) {
+        this.overturnConfirmSteps = (this.overturnConfirmSteps || 0) + 1;
+        if (this.overturnConfirmSteps < 24 && upY0 < 0.05 && this.overturnConfirmSteps >= 6) {
+          const obs = c0.getObservation();
+          const calmAct = new Float64Array(this.brain.actDim);
+          c0.lastState = obs;
+          c0.lastAction = calmAct;
+          c0.applyActionVector(calmAct, false);
+          this._lastRightingStep = { isOverturnPause: true };
+          return;
+        }
+      } else {
+        this.overturnConfirmSteps = 0;
+      }
+    }
+
     const isOverturned0 =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      (upY0 < 0.18 || (this.wasOverturned && upY0 < 0.65));
+      ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= 24) || (this.wasOverturned && upY0 < 0.65));
     if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
+        this.rightingPauseStepsRemaining = 0;
         this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
         this.stepCursor = 0;
         this.workerReturns.fill(0);
@@ -1725,9 +1802,20 @@ export class NESTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
-      this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`;
 
       const obs = c0.getObservation();
+      if (this.rightingPauseStepsRemaining > 0) {
+        const calmAct = new Float64Array(this.brain.actDim);
+        c0.lastState = obs;
+        c0.lastAction = calmAct;
+        c0.applyActionVector(calmAct, false);
+        this.metaState.reasonText = `Передышка на спине перед попыткой #${this.metaState.rightingAttempts}`;
+        this._lastRightingStep = { isRestPause: true, obs, act: calmAct };
+        return;
+      }
+
+      this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`;
+
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
       c0.lastState = obs;
       c0.lastAction = muRight;
@@ -1738,6 +1826,8 @@ export class NESTrainer {
 
     if (this.wasOverturned && upY0 >= 0.65) {
       this.wasOverturned = false;
+      this.overturnConfirmSteps = 0;
+      this.rightingPauseStepsRemaining = 0;
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
@@ -1768,6 +1858,18 @@ export class NESTrainer {
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
     if (this._lastRightingStep) {
+      if (this._lastRightingStep.isOverturnPause) {
+        return null;
+      }
+      if (this._lastRightingStep.isRestPause) {
+        this.rightingPauseStepsRemaining = Math.max(0, (this.rightingPauseStepsRemaining || 0) - 1);
+        if (this.rightingPauseStepsRemaining === 0) {
+          this.rightingStartUpY = upY0;
+          this.rightingMaxUpY = upY0;
+          this.rightingContactSteps = 0;
+        }
+        return null;
+      }
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       if (c0.footNodes.some(f => f.inContact)) this.rightingContactSteps += 1;
@@ -1785,6 +1887,9 @@ export class NESTrainer {
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
         this.rightingContactSteps = 0;
+        if (upY0 < 0.35) {
+          this.rightingPauseStepsRemaining = 14;
+        }
       }
       return null;
     }

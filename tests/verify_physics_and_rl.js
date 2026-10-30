@@ -132,15 +132,15 @@ for (const n of walker.body.nodes) {
 }
 
 let recoveredFromBack = false;
-for (let step = 1; step <= 70; step++) {
+for (let step = 1; step <= 130; step++) {
   trainSim.stepControl();
   const upY = walker.getTorsoFrame().up.y;
   const invLegs = walker.hasInvertedLeg();
   const m = trainSim.trainer.metaState;
-  if (step === 1 || step % 14 === 0 || (upY >= 0.68 && !invLegs)) {
+  if (step === 1 || step === 20 || step === 25 || step % 18 === 0 || (upY >= 0.68 && !invLegs)) {
     console.log(`Шаг на спине #${step} | up.y=${upY.toFixed(3)} | invLegs=${invLegs} | режим=${m.mode} | попытка=${m.rightingAttempts} | навык=${m.rightingSkillPct}%`);
-    if (upY >= 0.68 && !invLegs && step > 5) {
-      console.log('ОК: Шагоход самостоятельно перевернулся со спины и расправил все лапы под корпус!');
+    if (upY >= 0.68 && !invLegs && step > 24) {
+      console.log('ОК: Шагоход выждал начальную паузу на спине (1.2 с), затем с паузами между попытками самостоятельно перевернулся на ноги!');
       recoveredFromBack = true;
       break;
     }
