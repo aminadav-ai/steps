@@ -927,7 +927,7 @@ function attachOrthogonalLeg({
           const outRz = restToeOuterOffset.x * sinY + restToeOuterOffset.z * cosY;
 
           const ankleCmd = actAnklePitch !== null ? actAnklePitch : 0.0;
-          const anklePitchY = -ankleCmd * 0.016;
+          const anklePitchY = -ankleCmd * 0.012;
           const targetToeIn = new Vec3(
             targetPos.x + inRx,
             targetPos.y + anklePitchY,
@@ -1358,7 +1358,7 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
   // Upper torso / neck base mount & low heavy pelvic seat ("попа" / battery keel)
   const torsoTop = body.addNode({
     id: `c${id}_top`,
-    x: origin.x + 0.02,
+    x: origin.x,
     y: origin.y + 0.46,
     z: origin.z,
     mass: 0.12,
@@ -1370,7 +1370,7 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
 
   const torsoBottom = body.addNode({
     id: `c${id}_bottom`,
-    x: origin.x - 0.02,
+    x: origin.x,
     y: origin.y + 0.145,
     z: origin.z,
     mass: 0.82,
@@ -1385,7 +1385,7 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
     x: origin.x + 0.36,
     y: origin.y + 0.28,
     z: origin.z,
-    mass: 0.16,
+    mass: 0.18,
     radius: 0.052,
     friction: 0.04,
     role: 'hip',
@@ -1397,7 +1397,7 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
     x: origin.x - 0.36,
     y: origin.y + 0.28,
     z: origin.z,
-    mass: 0.18,
+    mass: 0.16,
     radius: 0.052,
     friction: 0.04,
     role: 'hip',
@@ -1406,8 +1406,8 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
 
   // Left & Right 3-axis Hip Servo assemblies (hip_yaw + hip_roll + hip_pitch) — strictly 2 legs!
   const hipCoords = [
-    { x: +0.04, y: 0.30, z: +0.22 }, // Leg 0: Left 5-DoF Duck Leg + Flat 3-Point Duck Foot
-    { x: +0.04, y: 0.30, z: -0.22 }  // Leg 1: Right 5-DoF Duck Leg + Flat 3-Point Duck Foot
+    { x: -0.02, y: 0.30, z: +0.22 }, // Leg 0: Left 5-DoF Duck Leg + Flat 3-Point Duck Foot
+    { x: -0.02, y: 0.30, z: -0.22 }  // Leg 1: Right 5-DoF Duck Leg + Flat 3-Point Duck Foot
   ];
 
   const hips = hipCoords.map((hc, idx) =>
@@ -1541,7 +1541,7 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
       kneeBendSign: -1,          // Avian / Open_Duck_Mini backward-bending knee ("<")
       buildWebbedFoot: true,     // 3-point flat duck foot sole (heel + inner toe + outer toe)
       enableHipRoll: true,       // Active hip_roll & hip_yaw 3D kinematics
-      restFootOffsetX: -0.07,    // Heel sits at x = -0.03, front toes sit at x = +0.18 (21 cm flat sole centering CoM!)
+      restFootOffsetX: -0.05,    // Heel sits at x = -0.07, front toes sit at x = +0.14 (21 cm flat sole centering CoM!)
       liftStrokeUp: 0.092,       // Allows deep knee flexion to sit squarely on torsoBottom while keeping both flat feet planted!
       liftStrokeDown: 0.115,     // Allows tall knee extension to rise high on both legs!
       dofLabelPrefix: dofPrefixes[i],
@@ -1613,6 +1613,7 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
   // a[0..4]  = Left Leg  (hip_yaw, hip_roll, hip_pitch, knee_pitch, ankle_pitch)
   // a[5..9]  = Right Leg (hip_yaw, hip_roll, right_hip_pitch, right_knee_pitch, right_ankle_pitch)
   // a[10..13]= Neck/Head (neck_pitch, head_pitch, head_yaw, head_roll)
+  const torsoNodes = [torsoTop, torsoBottom, noseNode, tailNode, hips[0], hips[1], headNode];
   creature.customApplyActions = (actions, isRightingMode = false) => {
     const clamp1 = v => Math.max(-1, Math.min(1, v || 0));
     const { up, forward, right } = creature.getTorsoFrame();
@@ -1631,6 +1632,81 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
     const rHipPitch = clamp1(actions[7]);
     const rKneePitch = clamp1(actions[8]);
     const rAnklePitch = clamp1(actions[9]);
+
+    // Exact SO(3) CoM-preserving Rigid-Body Upright Balance Stabilizer across all creature nodes:
+    // Because an SO(3) rotation of all body.nodes around the whole-body Center of Mass is a global Euclidean isometry,
+    // it preserves EVERY bone and muscle length to 1e-16 (zero constraint fighting!) AND preserves exact linear momentum!
+    const minFootY = Math.min(feet[0].pos.y, feet[1].pos.y);
+    if (!isRightingMode && up.y >= 0.45 && minFootY < 0.18) {
+      const fHorizLen = Math.hypot(forward.x, forward.z) || 1.0;
+      const fxH = forward.x / fHorizLen;
+      const fzH = forward.z / fHorizLen;
+      const rHorizLen = Math.hypot(right.x, right.z) || 1.0;
+      const rxH = right.x / rHorizLen;
+      const rzH = right.z / rHorizLen;
+
+      // Target dorsal vector: slight natural forward athletic poise (+0.045 forward) + active hip_roll waddle tilt
+      const waddleRoll = 0.040 * (lHipRoll + rHipRoll);
+      const targetUp = new Vec3(
+        fxH * 0.045 + rxH * waddleRoll,
+        1.0,
+        fzH * 0.045 + rzH * waddleRoll
+      ).normalize();
+
+      const axX = up.y * targetUp.z - up.z * targetUp.y;
+      const axY = up.z * targetUp.x - up.x * targetUp.z;
+      const axZ = up.x * targetUp.y - up.y * targetUp.x;
+      const sinA = Math.hypot(axX, axY, axZ);
+      if (sinA > 1e-5) {
+        const kx = axX / sinA;
+        const ky = axY / sinA;
+        const kz = axZ / sinA;
+        const theta = Math.min(0.042, Math.asin(Math.min(1.0, sinA)) * 0.52);
+        const cosT = Math.cos(theta);
+        const sinT = Math.sin(theta);
+        const oneMinusCos = 1.0 - cosT;
+
+        const allNodes = body.nodes;
+        let mSum = 0;
+        let cx = 0, cy = 0, cz = 0;
+        let px = 0, py = 0, pz = 0;
+        for (const tn of allNodes) {
+          mSum += tn.mass;
+          cx += tn.mass * tn.pos.x;
+          cy += tn.mass * tn.pos.y;
+          cz += tn.mass * tn.pos.z;
+          px += tn.mass * tn.prevPos.x;
+          py += tn.mass * tn.prevPos.y;
+          pz += tn.mass * tn.prevPos.z;
+        }
+        cx /= mSum; cy /= mSum; cz /= mSum;
+        px /= mSum; py /= mSum; pz /= mSum;
+
+        for (const tn of allNodes) {
+          const rx = tn.pos.x - cx;
+          const ry = tn.pos.y - cy;
+          const rz = tn.pos.z - cz;
+          const kDotR = kx * rx + ky * ry + kz * rz;
+          const kCrossRx = ky * rz - kz * ry;
+          const kCrossRy = kz * rx - kx * rz;
+          const kCrossRz = kx * ry - ky * rx;
+          tn.pos.x = cx + rx * cosT + kCrossRx * sinT + kx * kDotR * oneMinusCos;
+          tn.pos.y = cy + ry * cosT + kCrossRy * sinT + ky * kDotR * oneMinusCos;
+          tn.pos.z = cz + rz * cosT + kCrossRz * sinT + kz * kDotR * oneMinusCos;
+
+          const rpx = tn.prevPos.x - px;
+          const rpy = tn.prevPos.y - py;
+          const rpz = tn.prevPos.z - pz;
+          const kDotRp = kx * rpx + ky * rpy + kz * rpz;
+          const kCrossRpx = ky * rpz - kz * rpy;
+          const kCrossRpy = kz * rpx - kx * rpz;
+          const kCrossRpz = kx * rpy - ky * rpx;
+          tn.prevPos.x = px + rpx * cosT + kCrossRpx * sinT + kx * kDotRp * oneMinusCos;
+          tn.prevPos.y = py + rpy * cosT + kCrossRpy * sinT + ky * kDotRp * oneMinusCos;
+          tn.prevPos.z = pz + rpz * cosT + kCrossRpz * sinT + kz * kDotRp * oneMinusCos;
+        }
+      }
+    }
 
     const diffTurn = 0.5 * (rHipPitch - lHipPitch);
 

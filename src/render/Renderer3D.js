@@ -900,15 +900,15 @@ export class Renderer3D {
       const nFront = creature.isDuck
         ? new Vec3(
             0.55 * nTop.x + 0.45 * rawFront.x,
-            0.45 * nTop.y + 0.55 * rawFront.y,
+            0.50 * nTop.y + 0.50 * rawFront.y,
             0.55 * nTop.z + 0.45 * rawFront.z
           )
         : rawFront;
       const nTail = creature.isDuck
         ? new Vec3(
-            0.50 * nTop.x + 0.50 * rawTail.x,
-            0.55 * nTop.y + 0.45 * rawTail.y,
-            0.50 * nTop.z + 0.50 * rawTail.z
+            0.55 * nTop.x + 0.45 * rawTail.x,
+            0.50 * nTop.y + 0.50 * rawTail.y,
+            0.55 * nTop.z + 0.45 * rawTail.z
           )
         : rawTail;
       const spineCenter = new Vec3(
