@@ -423,12 +423,14 @@ for (let s = 0; s < 120; s++) {
   if (cY > maxDuckSideComY) maxDuckSideComY = cY;
   if (pW > maxDuckSidePowerW) maxDuckSidePowerW = pW;
 }
-console.log(`Утка на боку (LEARNING_RIGHTING, 120 шагов): maxComY=${maxDuckSideComY.toFixed(3)} м, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт, попыток=${duckSideSim.trainer.metaState.rightingAttempts}`);
-if (maxDuckSideComY > 0.42 || maxDuckSidePowerW > 180.0) {
-  console.error('ОШИБКА: Утка на боку не должна взлетать в воздух или давать скачки мощности > 180 Вт!');
+const finalSideComY = ds.body.getCenterOfMass().y;
+const finalSideUpY = ds.getTorsoFrame().up.y;
+console.log(`Утка после падения на бок (120 шагов): finalComY=${finalSideComY.toFixed(3)} м, up.y=${finalSideUpY.toFixed(3)}, mode=${duckSideSim.trainer.metaState.mode}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`);
+if (maxDuckSideComY > 0.42 || maxDuckSidePowerW > 180.0 || finalSideComY < 0.255 || duckSideSim.trainer.metaState.mode !== 'CONSOLIDATED') {
+  console.error('ОШИБКА: Утка должна самостоятельно вставать на лапы из лежачего положения (comY >= 0.255 м, CONSOLIDATED) без взрывов мощности (> 180 Вт)!');
   process.exit(1);
 }
-console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и вставать на лапах, честно барахтается на боку без взрывов физики и уверенно шагает к цели.');
+console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и самостоятельно вставать из лежачего положения с помощью сгибания коленей, независимой работы лап и рывка.');
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);

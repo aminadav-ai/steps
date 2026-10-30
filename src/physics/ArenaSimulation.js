@@ -401,7 +401,7 @@ export class ArenaSimulation {
       this.trainer.selectActions(this.creatures);
       this.world.resetContactTelemetry((body, idx) => {
         const c = this.creatures[idx];
-        if (c && c.lastAction) {
+        if (c && !c.isDuck && c.lastAction) {
           const isActivelyRighting = Boolean(
             this.trainer &&
             this.trainer.wasOverturned &&
@@ -413,10 +413,10 @@ export class ArenaSimulation {
     }
 
     this.world.stepSingleSubstep(subDt);
-    // Enforce mechanical servo joint hard-stops at 200 Hz after each XPBD substep (conserving exact CoM momentum)
+    // Enforce mechanical servo joint hard-stops at 200 Hz after each XPBD substep for radial walkers
     for (let i = 0; i < this.populationSize; i++) {
       const c = this.creatures[i];
-      if (c && c.lastAction && !c.isGrabbed) {
+      if (c && !c.isDuck && c.lastAction && !c.isGrabbed) {
         const isActivelyRighting = Boolean(
           this.trainer &&
           this.trainer.wasOverturned &&

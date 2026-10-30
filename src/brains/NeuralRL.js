@@ -287,7 +287,7 @@ export class ActorCriticBrain {
         const ankleRow = (base + 4) * this.obsDim;
 
         // Active knee extension bias to maximize Center of Mass height + feedback on CoM height (obs[9])
-        this.actorSkip.b[base + 3] = 0.48;
+        this.actorSkip.b[base + 3] = 0.78;
         this.actorSkip.W[kneeRow + 9] = -0.35; // When CoM height (obs[9]) is below target, push legs harder!
         this.actorSkip.W[kneeRow + 5] = -0.18; // Damp vertical oscillation (obs[5] = velUp)
 
@@ -454,28 +454,39 @@ export class ActorCriticBrain {
     if (!this._duckRightingPerturbW || !this._duckRightingPerturbB) return;
     this._ensureDuckRightingLayers();
     this._duckRightingPerturbReady = true;
-    // Sample a dynamic wave hypothesis over body velocities (3..5), posture & CoM height (6..9), CPG wave (10..11),
-    // and proprioception (16..obsDim-1), keeping static bias modest so tanh never freezes into a static pose!
+
+    // Sample independent left/right leg coordination phase & jerk gains:
+    // Allows the two legs to work independently (one knee deeply tucking while the other kicks out, or alternating/pulsed jerks)!
+    const phaseModes = [Math.PI, Math.PI * 0.5, -Math.PI * 0.5, 0.0, Math.PI * 0.75];
+    this._duckLegPhaseDiff = phaseModes[this.rightingAttempts % phaseModes.length] + (Math.random() - 0.5) * 0.45;
+    this._duckJerkGainL = (0.55 + Math.random() * 0.40) * scale;
+    this._duckJerkGainR = (0.55 + Math.random() * 0.40) * scale;
+    this._duckKneeTuckBiasL = (Math.random() * 0.9 - 0.45) * scale;
+    this._duckKneeTuckBiasR = (Math.random() * 0.9 - 0.45) * scale;
+
     for (let a = 0; a < this.actDim; a++) {
-      this._duckRightingPerturbB[a] = randn() * 0.12 * scale;
+      const isKnee = a === 3 || a === 8;
+      this._duckRightingPerturbB[a] = isKnee
+        ? (a === 3 ? this._duckKneeTuckBiasL : this._duckKneeTuckBiasR)
+        : randn() * 0.22 * scale;
       const row = a * this.obsDim;
       for (let c = 0; c < this.obsDim; c++) {
         if (c < 3) {
           this._duckRightingPerturbW[row + c] = 0.0; // Ignore food position
         } else if (c <= 9) {
-          this._duckRightingPerturbW[row + c] = randn() * 0.22 * scale; // Body 3D velocity & CoM height feedback
+          this._duckRightingPerturbW[row + c] = randn() * 0.36 * scale; // Strong 3D body velocity & posture/CoM feedback
         } else if (c <= 11) {
-          this._duckRightingPerturbW[row + c] = randn() * 0.34 * scale; // Strong CPG wave rhythm (sin/cos) for rocking
+          this._duckRightingPerturbW[row + c] = randn() * 0.58 * scale; // High-amplitude CPG wave drive for full-stroke knee tuck & kick
         } else if (c <= 15) {
           this._duckRightingPerturbW[row + c] = 0.0; // Food gates are 0
         } else {
-          this._duckRightingPerturbW[row + c] = randn() * 0.09 * scale; // Joint proprioception & foot contacts
+          this._duckRightingPerturbW[row + c] = randn() * 0.16 * scale; // Joint proprioception & foot contacts
         }
       }
       if (this._duckRightingPerturbOutW) {
         const outRow = a * this.rightingHiddenDim;
         for (let h = 0; h < this.rightingHiddenDim; h++) {
-          this._duckRightingPerturbOutW[outRow + h] = randn() * 0.18 * scale;
+          this._duckRightingPerturbOutW[outRow + h] = randn() * 0.28 * scale;
         }
       }
     }
@@ -484,10 +495,11 @@ export class ActorCriticBrain {
   /**
    * Forward pass of the Self-Righting Sub-Network.
    * For the 14-DoF Duck, optimizes purely Center of Mass height (comY):
-   * uses non-linear wave exploration when comY is low, and smoothly blends into the standing CoM policy as comY rises!
+   * uses full-range non-linear wave + sharp impulse ("рывок") + independent left/right leg knee-tuck & kick when comY is low,
+   * and smoothly blends into the standing CoM policy only once comY rises above 0.220 m!
    */
   forwardRightingReflex(obs, dt = 0.05, recordVis = true, currentComY = 0.15) {
-    this.rightingPhase = (this.rightingPhase + dt * 6.8) % (Math.PI * 2);
+    this.rightingPhase = (this.rightingPhase + dt * 8.4) % (Math.PI * 2);
     const zRight = new Float64Array(this.actDim);
     this.rightingLayer.forward(obs, zRight);
 
@@ -512,9 +524,52 @@ export class ActorCriticBrain {
       const zOut = new Float64Array(this.actDim);
       this.rightingOut.forward(hR, zOut);
 
-      // Smoothly blend wave-rocking exploration with the tall-standing actor policy as CoM height rises above 0.185 m
-      const waveWeight = Math.max(0.15, Math.min(1.0, (0.222 - currentComY) / 0.042));
+      // Keep 100% independent leg & jerk freedom while overturned or low-CoM;
+      // only blend in symmetrical standing posture once rolled upright (upY >= 0.58) and comY >= 0.285 m!
+      const upY = obs[6];
+      const pitchTilt = obs[7];
+      const rollTilt = obs[8];
+      const isUprightEnough = upY >= 0.58 && currentComY >= 0.285;
+      const waveWeight = !isUprightEnough
+        ? 1.0
+        : Math.max(0.0, Math.min(1.0, (0.300 - currentComY) / 0.015));
       const { mu: standMu } = this.forwardActor(obs, false, null);
+
+      const rightDown = rollTilt >= -0.05;
+      const rollDir = rightDown ? 1.0 : -1.0;
+
+      // Hysteresis for inverted sagittal headstand (165°..180°):
+      // enter when steeply inverted in the sagittal plane (upY < -0.50 && |rollTilt| < 0.35),
+      // and hold until the bottom drops to the floor (upY >= -0.25 or |rollTilt| >= 0.72),
+      // anchoring rightingPhase = 3.78 so upon exit it immediately executes a full forward neck-whip & knee-rock!
+      if (!this._duckInHighHeadstand && upY < -0.50 && Math.abs(rollTilt) < 0.35) {
+        this._duckInHighHeadstand = true;
+      } else if (this._duckInHighHeadstand && (upY >= -0.25 || Math.abs(rollTilt) >= 0.72)) {
+        this._duckInHighHeadstand = false;
+      }
+      const isHighHeadstand = Boolean(this._duckInHighHeadstand);
+      if (isHighHeadstand) {
+        this.rightingPhase = 3.78;
+      }
+
+      // Sharp non-sinusoidal impulse/jerk waves ("рывок") with independent left/right leg operation
+      const phi = this.rightingPhase;
+      const wave = Math.sin(phi);
+      const cosW = Math.cos(phi);
+      const upperPulse = Math.tanh(2.4 * (wave + 0.25));
+
+      const knee0 = isHighHeadstand ? -0.95 : (rightDown ? upperPulse : -0.95);
+      const knee1 = isHighHeadstand ? -0.95 : (rightDown ? -0.95 : upperPulse);
+      const roll0 = -0.85;
+      const roll1 = +0.85;
+      const stride0 = isHighHeadstand ? +0.90 : (pitchTilt > 0.15 ? -0.80 : (+0.45 + 0.35 * cosW));
+      const stride1 = isHighHeadstand ? +0.90 : (pitchTilt > 0.15 ? -0.80 : (+0.45 - 0.35 * cosW));
+      const neckWhip = isHighHeadstand ? +0.95 : Math.tanh(2.2 * wave);
+      const headRoll = -0.90 * rollDir;
+
+      const coordTargets = upY < 0.58
+        ? [0.0, roll0, stride0, knee0, 0.5 * wave,   0.0, roll1, stride1, knee1, -0.5 * wave,   neckWhip, neckWhip, 0.0, headRoll]
+        : [0.0, 0.0, 0.0, +0.85, 0.0,                0.0, 0.0, 0.0, +0.85, 0.0,                 0.10, 0.0, 0.0, 0.0];
 
       for (let a = 0; a < this.actDim; a++) {
         const row = a * this.obsDim;
@@ -530,7 +585,9 @@ export class ActorCriticBrain {
             pSum += this._duckRightingPerturbOutW[outRow + h] * hR[h];
           }
         }
-        const waveAct = Math.tanh(zRight[a] + zOut[a] + pSum);
+
+        const learnedTerm = (isHighHeadstand || upY >= 0.58) ? 0.0 : 0.02 * Math.tanh(zRight[a] + zOut[a] + pSum);
+        const waveAct = Math.max(-1.0, Math.min(1.0, coordTargets[a] + learnedTerm));
         mu[a] = waveWeight * waveAct + (1.0 - waveWeight) * standMu[a];
       }
     } else {
@@ -1084,9 +1141,9 @@ export class PPOTrainer {
       reasonText: isDuckBrain
         ? 'Единая задача: максимизация высоты центра масс (ЦМ)'
         : 'Формирование стабильного базового навыка ходьбы и наведения на цель',
-      competenceEMA: isDuckBrain ? 0.22 : 0.04,
-      targetCompetence: isDuckBrain ? 0.215 : 0.18,
-      relearnThreshold: isDuckBrain ? 0.190 : 0.125,
+      competenceEMA: isDuckBrain ? 0.265 : 0.04,
+      targetCompetence: isDuckBrain ? 0.255 : 0.18,
+      relearnThreshold: isDuckBrain ? 0.238 : 0.125,
       surpriseEMA: 0.25,
       needToLearnPct: isDuckBrain ? 35 : 88,
       stableEpochsCount: 0,
@@ -1158,30 +1215,30 @@ export class PPOTrainer {
       this.minFoodsToConsolidate = 0;
       if (presetOrTarget === 'min') {
         this.metaState.ambitionPreset = 'min';
-        this.metaState.targetCompetence = 0.215;
-        this.metaState.relearnThreshold = 0.190;
+        this.metaState.targetCompetence = 0.255;
+        this.metaState.relearnThreshold = 0.238;
         this.alwaysLearn = false;
       } else if (presetOrTarget === 'bound') {
         this.metaState.ambitionPreset = 'bound';
-        this.metaState.targetCompetence = 0.230;
-        this.metaState.relearnThreshold = 0.195;
+        this.metaState.targetCompetence = 0.268;
+        this.metaState.relearnThreshold = 0.245;
         this.alwaysLearn = false;
       } else if (presetOrTarget === 'turbo') {
         this.metaState.ambitionPreset = 'turbo';
-        this.metaState.targetCompetence = 0.245;
-        this.metaState.relearnThreshold = 0.205;
+        this.metaState.targetCompetence = 0.280;
+        this.metaState.relearnThreshold = 0.252;
         this.alwaysLearn = false;
       } else if (presetOrTarget === 'infinite') {
         this.metaState.ambitionPreset = 'infinite';
-        this.metaState.targetCompetence = 0.280;
-        this.metaState.relearnThreshold = 0.220;
+        this.metaState.targetCompetence = 0.360;
+        this.metaState.relearnThreshold = 0.280;
         this.alwaysLearn = true;
       } else if (typeof presetOrTarget === 'number') {
-        const t = Math.max(0.19, Math.min(0.28, presetOrTarget));
+        const t = Math.max(0.22, Math.min(0.36, presetOrTarget));
         this.metaState.ambitionPreset = 'custom';
         this.metaState.targetCompetence = Number(t.toFixed(3));
-        this.metaState.relearnThreshold = Number((t - 0.025).toFixed(3));
-        this.alwaysLearn = t >= 0.275;
+        this.metaState.relearnThreshold = Number((t - 0.030).toFixed(3));
+        this.alwaysLearn = t >= 0.355;
       }
       if (this.metaState.mode !== 'LEARNING_RIGHTING') {
         if (this.alwaysLearn || this.metaState.competenceEMA < this.metaState.targetCompetence) {
@@ -1395,8 +1452,8 @@ export class PPOTrainer {
     const isPhysicallyTiltedOnBack =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      (isDuck0 ? (comY0 < (this.metaState.relearnThreshold || 0.190) && !this.manualFreeze) : (upY0 < 0.22));
-    const confirmDelay = isDuck0 ? 3 : (this.overturnConfirmDelay || 20);
+      (isDuck0 ? ((comY0 < (this.metaState.relearnThreshold || 0.238) || upY0 < 0.45) && !this.manualFreeze) : (upY0 < 0.22));
+    const confirmDelay = isDuck0 ? 1 : (this.overturnConfirmDelay || 20);
 
     if (!this.wasOverturned) {
       if (isPhysicallyTiltedOnBack) {
@@ -1420,9 +1477,13 @@ export class PPOTrainer {
     }
 
     this.uprightHoldSteps = 0;
-    const targetCom0 = this.metaState.targetCompetence || 0.215;
+    const targetCom0 = this.metaState.targetCompetence || 0.255;
+    if (isDuck0) {
+      const isTrueHighCom = comY0 >= targetCom0 && (!c0.torsoTop || !c0.torsoBottom || c0.torsoTop.pos.y > c0.torsoBottom.pos.y + 0.15);
+      this.duckComHoldSteps = isTrueHighCom ? (this.duckComHoldSteps || 0) + 1 : 0;
+    }
     const isRecoveredUpright = isDuck0
-      ? (comY0 >= targetCom0)
+      ? (this.duckComHoldSteps >= 8)
       : (upY0 >= 0.65 && !c0.hasInvertedLeg());
 
     const isOverturned0 =
@@ -1449,6 +1510,8 @@ export class PPOTrainer {
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
         this.rightingMinFootClearanceY = Infinity;
+        this.brain.rightingPhase = 0;
+        this.brain._duckInHighHeadstand = false;
         this.brain.resetRightingWaveState(isDuck0 ? comY0 : upY0, topY0);
       }
 
@@ -1480,7 +1543,7 @@ export class PPOTrainer {
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true, comY0);
       c0.lastState = obs;
       c0.lastAction = muRight;
-      c0.applyActionVector(muRight, isDuck0 ? (comY0 < 0.205) : (upY0 < 0.42));
+      c0.applyActionVector(muRight, isDuck0 ? (comY0 < 0.245 || upY0 < 0.58) : (upY0 < 0.42));
 
       this._pendingStep = { isRightingStep: true, isRestPause: false, obs, act: muRight, upY: upY0, comY: comY0 };
       return;
@@ -1591,9 +1654,9 @@ export class PPOTrainer {
 
     // Handle Self-Righting / Low-CoM Learning step:
     if (this._pendingStep.isRightingStep) {
-      const targetCom0 = this.metaState.targetCompetence || 0.215;
+      const targetCom0 = this.metaState.targetCompetence || 0.255;
       const canCompleteNow = isDuck0
-        ? (comY0 >= targetCom0)
+        ? ((this.duckComHoldSteps || 0) >= 8 && comY0 >= targetCom0)
         : (upY0 >= 0.65 && !c0.hasInvertedLeg());
       if (this.wasOverturned && canCompleteNow) {
         this._completeRightingRecovery(comY0);
@@ -2288,9 +2351,9 @@ export class NESTrainer {
       reasonText: isDuckBrain
         ? 'Единая задача: максимизация высоты центра масс (ЦМ)'
         : 'Эволюционный поиск моторного навыка шага и руления',
-      competenceEMA: isDuckBrain ? 0.22 : 0.03,
-      targetCompetence: isDuckBrain ? 0.215 : 0.18,
-      relearnThreshold: isDuckBrain ? 0.190 : 0.125,
+      competenceEMA: isDuckBrain ? 0.265 : 0.03,
+      targetCompetence: isDuckBrain ? 0.255 : 0.18,
+      relearnThreshold: isDuckBrain ? 0.238 : 0.125,
       ambitionPreset: 'min',
       surpriseEMA: 0.20,
       needToLearnPct: isDuckBrain ? 35 : 85,
@@ -2316,29 +2379,29 @@ export class NESTrainer {
       if (presetOrTarget === 'min') {
         this.alwaysLearn = false;
         this.metaState.ambitionPreset = 'min';
-        this.metaState.targetCompetence = 0.215;
-        this.metaState.relearnThreshold = 0.190;
+        this.metaState.targetCompetence = 0.255;
+        this.metaState.relearnThreshold = 0.238;
       } else if (presetOrTarget === 'bound') {
         this.alwaysLearn = false;
         this.metaState.ambitionPreset = 'bound';
-        this.metaState.targetCompetence = 0.230;
-        this.metaState.relearnThreshold = 0.195;
+        this.metaState.targetCompetence = 0.268;
+        this.metaState.relearnThreshold = 0.245;
       } else if (presetOrTarget === 'turbo') {
         this.alwaysLearn = false;
         this.metaState.ambitionPreset = 'turbo';
-        this.metaState.targetCompetence = 0.245;
-        this.metaState.relearnThreshold = 0.205;
+        this.metaState.targetCompetence = 0.280;
+        this.metaState.relearnThreshold = 0.252;
       } else if (presetOrTarget === 'infinite') {
         this.alwaysLearn = true;
         this.metaState.ambitionPreset = 'infinite';
-        this.metaState.targetCompetence = 0.280;
-        this.metaState.relearnThreshold = 0.220;
+        this.metaState.targetCompetence = 0.360;
+        this.metaState.relearnThreshold = 0.280;
       } else if (typeof presetOrTarget === 'number') {
-        const t = Math.max(0.19, Math.min(0.28, presetOrTarget));
-        this.alwaysLearn = t >= 0.275;
+        const t = Math.max(0.22, Math.min(0.36, presetOrTarget));
+        this.alwaysLearn = t >= 0.355;
         this.metaState.ambitionPreset = 'custom';
         this.metaState.targetCompetence = Number(t.toFixed(3));
-        this.metaState.relearnThreshold = Number((t - 0.025).toFixed(3));
+        this.metaState.relearnThreshold = Number((t - 0.030).toFixed(3));
       }
       if (this.metaState.mode !== 'LEARNING_RIGHTING') {
         if (this.alwaysLearn || this.metaState.competenceEMA < this.metaState.targetCompetence) {
@@ -2471,8 +2534,8 @@ export class NESTrainer {
     const isPhysicallyTiltedOnBack =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      (isDuck0 ? (comY0 < (this.metaState.relearnThreshold || 0.190) && !this.manualFreeze) : (upY0 < 0.22));
-    const confirmDelay = isDuck0 ? 3 : 24;
+      (isDuck0 ? ((comY0 < (this.metaState.relearnThreshold || 0.238) || upY0 < 0.45) && !this.manualFreeze) : (upY0 < 0.22));
+    const confirmDelay = isDuck0 ? 1 : 24;
 
     if (!this.wasOverturned) {
       if (isPhysicallyTiltedOnBack) {
@@ -2492,9 +2555,13 @@ export class NESTrainer {
     }
 
     this.uprightHoldSteps = 0;
-    const targetCom0 = this.metaState.targetCompetence || 0.215;
+    const targetCom0 = this.metaState.targetCompetence || 0.255;
+    if (isDuck0) {
+      const isTrueHighCom = comY0 >= targetCom0 && (!c0.torsoTop || !c0.torsoBottom || c0.torsoTop.pos.y > c0.torsoBottom.pos.y + 0.15);
+      this.duckComHoldSteps = isTrueHighCom ? (this.duckComHoldSteps || 0) + 1 : 0;
+    }
     const isRecoveredUpright = isDuck0
-      ? (comY0 >= targetCom0)
+      ? (this.duckComHoldSteps >= 8)
       : (upY0 >= 0.65 && !c0.hasInvertedLeg());
 
     const isOverturned0 =
@@ -2517,6 +2584,8 @@ export class NESTrainer {
         this.rightingStartComY = comY0;
         this.rightingMaxComY = comY0;
         this.rightingContactSteps = 0;
+        this.brain.rightingPhase = 0;
+        this.brain._duckInHighHeadstand = false;
         this.brain.resetRightingWaveState(isDuck0 ? comY0 : upY0, topY0);
       }
       this.metaState.mode = 'LEARNING_RIGHTING';
@@ -2546,7 +2615,7 @@ export class NESTrainer {
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true, comY0);
       c0.lastState = obs;
       c0.lastAction = muRight;
-      c0.applyActionVector(muRight, isDuck0 ? (comY0 < 0.205) : true);
+      c0.applyActionVector(muRight, isDuck0 ? (comY0 < 0.245 || upY0 < 0.58) : true);
       this._lastRightingStep = { obs, act: muRight, comY: comY0 };
       return;
     }
