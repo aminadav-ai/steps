@@ -255,7 +255,7 @@ if (trainSim.trainer.metaState.mode !== 'LEARNING_WALK' || !trainSim.trainer.met
 }
 console.log('ОК: Строгая фиксация после освоения работает: шагоход действует сам без авто-дообучения, пока пользователь не нажмёт кнопку или не изменит ползунок.');
 
-console.log('\n=== 6. Проверка переключателя режима приводов: servo (по умолчанию) <-> muscle (v1) ===');
+console.log('\n=== 6. Проверка работы всех роботов исключительно на жёстких сервоприводах (servo) ===');
 const leg0 = walker.legControllers[0];
 const { right: tRight } = walker.getTorsoFrame();
 const maxBearingDeflection = Math.max(
@@ -279,19 +279,19 @@ if (defaultSim.morphologyKey !== 'quadruped' || defaultSim.actuatorMode !== 'ser
 }
 console.log(`Шагоход по умолчанию для новых пользователей: ${defaultSim.morphologyKey} + ${defaultSim.actuatorMode} (${def0.logicalDoFs.length} DoF, узлов коленей: ${def0.kneeNodes.length})`);
 
-const muscleSim = new ArenaSimulation({
+const tripodServoSim = new ArenaSimulation({
   morphologyKey: 'tripod',
-  actuatorMode: 'muscle',
+  actuatorMode: 'muscle', // Должен принудительно работать на сервоприводах ('servo')
   algorithm: 'ppo',
   populationSize: 1,
   floorFriction: 0.0
 });
-const m0 = muscleSim.creatures[0];
-if (m0.actuatorMode !== 'muscle' || m0.kneeNodes.length !== 0 || m0.legControllers[0].isServo !== false) {
-  console.error('ОШИБКА: При выборе режима muscle должна создаваться классическая био-мышечная конструкция v1!');
+const m0 = tripodServoSim.creatures[0];
+if (tripodServoSim.actuatorMode !== 'servo' || m0.actuatorMode !== 'servo' || m0.kneeNodes.length !== 3 || m0.legControllers[0].isServo !== true) {
+  console.error('ОШИБКА: Все шагоходы в проекте должны работать исключительно на сервоприводах (servo)!');
   process.exit(1);
 }
-console.log(`Классический режим приводов: ${m0.actuatorMode} (узлов коленей: ${m0.kneeNodes.length}, всего физических узлов: ${m0.body.nodes.length})`);
+console.log(`Трипод также работает исключительно на сервоприводах: ${m0.actuatorMode} (узлов коленей: ${m0.kneeNodes.length}, всего физических узлов: ${m0.body.nodes.length})`);
 
 console.log('\n=== 7. Проверка Конструкции №3: Двуногий серво-робот «Микро-Утка» (Open_Duck_Mini, Biped, 14 DoF) ===');
 const duckIceSim = new ArenaSimulation({

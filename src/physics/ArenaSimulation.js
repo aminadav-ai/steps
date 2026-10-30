@@ -31,7 +31,7 @@ export class ArenaSimulation {
     floorFriction = 1.0
   } = {}) {
     this.morphologyKey = morphologyKey;
-    this.actuatorMode = actuatorMode; // 'servo' (default in v2) | 'muscle' (v1 bio-muscles)
+    this.actuatorMode = 'servo'; // All robot morphologies operate exclusively on Rigid Revolute PD Servos
     this.algorithm = algorithm;
     this.populationSize = populationSize;
     this.arenaHalfSize = arenaHalfSize;

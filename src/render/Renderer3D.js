@@ -889,7 +889,7 @@ export class Renderer3D {
     // In 'servo' mode (default in v2): renders a clean Central Robotic Spine Box (Z=0) + Cantilever Shoulder Axles
     // so that outboard 2-DoF legs have 100% unobstructed 360-degree sagittal rotation without intersecting frame tubes!
     // In 'muscle' mode (v1): renders all-to-all tensegrity/truss bones.
-    const isServoMode = creature.actuatorMode !== 'muscle';
+    const isServoMode = true;
     ctx.strokeStyle = isLeader ? '#fde047' : creature.color;
     ctx.lineWidth = isLeader ? 2.6 : 1.6;
     if (isServoMode && creature.frameRefs) {

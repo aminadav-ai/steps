@@ -59,7 +59,6 @@ let simSpeed = 1;
 
 // DOM Elements
 const selectMorphology = document.getElementById('selectMorphology');
-const selectActuator = document.getElementById('selectActuator');
 const selectAlgorithm = document.getElementById('selectAlgorithm');
 const morphDescription = document.getElementById('morphDescription');
 const nnDimLabel = document.getElementById('nnDimLabel');
@@ -143,17 +142,6 @@ function getMorphDescriptionText(morphKey) {
   const t = getT();
   if (morphKey === 'duck') return t.morphDescDuck || t.morphDescTripod;
   return morphKey === 'quadruped' ? t.morphDescQuadruped : t.morphDescTripod;
-}
-
-function syncActuatorLockForMorphology(morphKey) {
-  if (!selectActuator) return;
-  const muscleOpt = selectActuator.querySelector('option[value="muscle"]');
-  if (morphKey === 'duck') {
-    selectActuator.value = 'servo';
-    if (muscleOpt) muscleOpt.disabled = true;
-  } else {
-    if (muscleOpt) muscleOpt.disabled = false;
-  }
 }
 
 function renderLogsList(logs) {
@@ -320,9 +308,6 @@ function applyRestoredUIState(ckpt) {
   if (ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
     selectMorphology.value = ckpt.morphologyKey;
   }
-  if (selectActuator && (ckpt.actuatorMode === 'servo' || ckpt.actuatorMode === 'muscle')) {
-    selectActuator.value = ckpt.actuatorMode;
-  }
   if (ckpt.algorithm) {
     selectAlgorithm.value = ckpt.algorithm;
   }
@@ -377,8 +362,7 @@ async function startNewExperiment({ clearSaved = false, resetDefaults = clearSav
     }
   }
   const morphologyKey = selectMorphology.value;
-  syncActuatorLockForMorphology(morphologyKey);
-  const actuatorMode = morphologyKey === 'duck' ? 'servo' : (selectActuator ? selectActuator.value : 'servo');
+  const actuatorMode = 'servo';
   const algorithm = selectAlgorithm.value;
   const floorFriction = parseFloat(rangeFriction.value);
 
@@ -428,14 +412,13 @@ async function restoreOrStartExperiment() {
 
   if (ckpt && ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
     applyRestoredUIState(ckpt);
-    syncActuatorLockForMorphology(ckpt.morphologyKey);
     const spec = MORPHOLOGY_REGISTRY[ckpt.morphologyKey];
     morphDescription.textContent = getMorphDescriptionText(ckpt.morphologyKey);
     nnDimLabel.textContent = `${spec.obsDim} → 32 → 24 → ${spec.actDim}`;
 
     sim = new ArenaSimulation({
       morphologyKey: ckpt.morphologyKey,
-      actuatorMode: ckpt.actuatorMode || (selectActuator ? selectActuator.value : 'servo'),
+      actuatorMode: 'servo',
       algorithm: ckpt.algorithm || 'ppo',
       populationSize: 1,
       arenaHalfSize: 11.0,
@@ -466,7 +449,7 @@ function getUIState() {
     floorFriction: parseFloat(rangeFriction.value),
     followLeader: chkFollowLeader.checked,
     morphology: selectMorphology.value,
-    actuatorMode: selectActuator ? selectActuator.value : 'servo',
+    actuatorMode: 'servo',
     algorithm: selectAlgorithm.value
   };
 }
@@ -560,12 +543,6 @@ if (welcomeMorphDialog) {
         setPausedState(false, 'welcome_morph_dismiss');
       }
     }
-  });
-}
-if (selectActuator) {
-  selectActuator.addEventListener('change', () => {
-    logger.recordUserEvent('select_actuator', { actuatorMode: selectActuator.value }, sim, renderer3D, getUIState());
-    startNewExperiment({ clearSaved: true });
   });
 }
 selectAlgorithm.addEventListener('change', () => {

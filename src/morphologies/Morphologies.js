@@ -20,7 +20,7 @@ export class CreatureInstance {
   }) {
     this.id = id;
     this.morphologyKey = morphologyKey;
-    this.actuatorMode = actuatorMode; // 'servo' (Rigid Revolute PD Servos) | 'muscle' (Soft XPBD Bio-Muscles)
+    this.actuatorMode = 'servo';
     this.body = body;
     this.frameRefs = frameRefs; // { top, bottom, front, tail, backLeft, backRight }
     this.torsoTop = frameRefs ? frameRefs.top : null;
@@ -261,7 +261,7 @@ function attachOrthogonalLeg({
   liftStrokeDown = 0.125,
   color
 }) {
-  const isServoMode = actuatorMode !== 'muscle';
+  const isServoMode = true;
   const L_femur = 0.195;
   const L_tibia = 0.195;
 
@@ -1126,7 +1126,7 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8', 
     color
   });
 
-  const isServo = actuatorMode !== 'muscle';
+  const isServo = true;
   const noseNode = body.addNode({
     id: `c${id}_nose`,
     x: origin.x + (isServo ? 0.42 : 0.34),
