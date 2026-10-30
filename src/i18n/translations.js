@@ -131,7 +131,7 @@ export const TRANSLATIONS = {
     metaReasonInfinite: (comp, food) =>
       `Непрерывное обучение включено (эффективность ~${comp} м/с, целей: ${food})`,
     metaReasonRighting: (upY, att, skill) =>
-      `Корпус на спине (up.y=${upY}): память ходьбы защищена — попытка переворота #${att} (навык ${skill}%)`,
+      `Корпус перевёрнут/наклонён (up.y=${upY}): память ходьбы защищена — попытка подняться #${att} (навык ${skill}%)`,
 
     nnInLabels: ['cos(α) Еда', 'sin(α) Еда', 'Дист. Еда', 'Скор. V_fwd', 'Осанка Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', 'Тяга×sin', 'Тяга×cos', 'Руль×sin', 'Руль×cos'],
     nnOutLift: leg => `Л${leg}: Колено`,

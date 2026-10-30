@@ -1273,8 +1273,8 @@ export class PPOTrainer {
       }
 
       this.metaState.reasonText = isDuck0 && (this.uprightHoldSteps || 0) > 0
-        ? `Удерживает вертикальный баланс стоя (${this.uprightHoldSteps}/8, up.y=${upY0.toFixed(2)}) — попытка #${this.metaState.rightingAttempts}`
-        : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка переворота #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+        ? `Удерживает вертикальный баланс стоя (${this.uprightHoldSteps}/8, up.y=${upY0.toFixed(2)}) — попытка подняться #${this.metaState.rightingAttempts}`
+        : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка подняться #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
 
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
       c0.lastState = obs;
@@ -2173,8 +2173,8 @@ export class NESTrainer {
       }
 
       this.metaState.reasonText = isDuck0 && (this.uprightHoldSteps || 0) > 0
-        ? `Удерживает вертикальный баланс стоя (${this.uprightHoldSteps}/8, up.y=${upY0.toFixed(2)}) — попытка #${this.metaState.rightingAttempts}`
-        : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка переворота #${this.metaState.rightingAttempts}`;
+        ? `Удерживает вертикальный баланс стоя (${this.uprightHoldSteps}/8, up.y=${upY0.toFixed(2)}) — попытка подняться #${this.metaState.rightingAttempts}`
+        : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка подняться #${this.metaState.rightingAttempts}`;
 
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
       c0.lastState = obs;
