@@ -493,7 +493,7 @@ export class ArenaSimulation {
 
       // Velocity toward food (m/s)
       const isInThrowFlight = (c.postThrowTimer || 0) > 0;
-      const isOverturnedNow = !c.isGrabbed && !isInThrowFlight && up.y < 0.45;
+      const isOverturnedNow = !c.isGrabbed && !isInThrowFlight && (up.y < 0.18 || Boolean(this.trainer && this.trainer.wasOverturned));
       const isWaitingForFood = c.foodState === 'DISSOLVING' || c.foodState === 'WAITING';
       const isDroppingFood = c.foodState === 'DROPPING';
 
@@ -612,7 +612,7 @@ export class ArenaSimulation {
             upY: Number(up.y.toFixed(3)),
             rightingSkillPct: this.trainer.metaState ? this.trainer.metaState.rightingSkillPct : 20
           });
-        } else if (!isOverturnedNow && up.y >= 0.45 && this.c0CurrentlyOverturned) {
+        } else if (!isOverturnedNow && up.y >= 0.65 && this.c0CurrentlyOverturned) {
           this.c0CurrentlyOverturned = false;
           this.c0OverturnEvents.push({
             event: 'recovered_by_beetle_reflex',

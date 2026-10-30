@@ -506,16 +506,16 @@ function attachOrthogonalLeg({
           (foot.pos.z - hipNode.pos.z) * upVec.z
         : (foot.pos.y - hipNode.pos.y);
 
-      const needDorsalReach = isRightingMode && actLift < 0 && (!upVec || upVec.y < 0.45);
-      const isUprightOrStanding = !isRightingMode || (upVec && upVec.y >= 0.45);
+      const needDorsalReach = isRightingMode && actLift < 0 && (!upVec || upVec.y < 0.42);
+      const isUprightOrStanding = !isRightingMode || (upVec && upVec.y >= 0.42);
 
       // Physical Mechanical Joint Hard-Stops in 'servo' mode (conserving exact center-of-mass momentum sum m_i dx_i === 0):
       // 1. Hip Ventral Stop: when the chassis is upright, the leg cannot passively fold/invert above the hip plane.
       // 2. Knee Anti-Hyperextension Stop ("Ʌ" stop): prevents the knee from ever snapping into a backward "V" bend,
       //    while allowing 100% free sagittal stride when the knee is in its normal "Ʌ" working range!
       if (isServoMode && knee && upVec && forwardVec && rightVec) {
-        if (isUprightOrStanding && footLocalUp > -0.045) {
-          const corrUp = -0.052 - footLocalUp;
+        if (isUprightOrStanding && footLocalUp > -0.055) {
+          const corrUp = -0.068 - footLocalUp;
           const mF = foot.mass;
           const mH = hipNode.mass;
           const wF = mH / (mF + mH);
@@ -539,7 +539,7 @@ function attachOrthogonalLeg({
           hipNode.prevPos.z -= dyStop * 0;
           hipNode.prevPos.z -= dzStop * wH;
 
-          footLocalUp = -0.052;
+          footLocalUp = -0.068;
         }
 
         // Check current knee position relative to the hip->foot chord in the torso sagittal plane
@@ -626,7 +626,7 @@ function attachOrthogonalLeg({
         dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
         dz = 0;
       } else {
-        // Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.45, actLift < 0):
+        // Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.42, actLift < 0):
         // In 'servo' mode, the 2-DoF revolute leg stays strictly in its sagittal bearing plane (dz === 0)
         // and rotates on its cantilevered hip shaft outside the chassis frame!
         dx = actStride * 0.26;
@@ -914,7 +914,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
     x: origin.x,
     y: origin.y + 0.46,
     z: origin.z,
-    mass: 0.12,
+    mass: 0.10,
     radius: 0.068,
     friction: 0.04,
     role: 'torso',
@@ -924,9 +924,9 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
   const torsoBottom = body.addNode({
     id: `c${id}_bottom`,
     x: origin.x,
-    y: origin.y + 0.16,
+    y: origin.y + 0.14,
     z: origin.z,
-    mass: 0.68,
+    mass: 0.88,
     radius: 0.065,
     friction: 0.04,
     role: 'torso',
@@ -935,8 +935,8 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
 
   const noseNode = body.addNode({
     id: `c${id}_nose`,
-    x: origin.x + 0.42,
-    y: origin.y + 0.22,
+    x: origin.x + 0.44,
+    y: origin.y + 0.24,
     z: origin.z,
     mass: 0.20,
     radius: 0.065,
@@ -947,8 +947,8 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
 
   const tailNode = body.addNode({
     id: `c${id}_tail`,
-    x: origin.x - 0.42,
-    y: origin.y + 0.22,
+    x: origin.x - 0.44,
+    y: origin.y + 0.24,
     z: origin.z,
     mass: 0.20,
     radius: 0.065,
@@ -958,10 +958,10 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
   });
 
   const hipCoords = [
-    { x: +0.18, y: 0.32, z: +0.24 }, // Front-Left
-    { x: +0.18, y: 0.32, z: -0.24 }, // Front-Right
-    { x: -0.18, y: 0.32, z: +0.24 }, // Rear-Left
-    { x: -0.18, y: 0.32, z: -0.24 }  // Rear-Right
+    { x: +0.23, y: 0.28, z: +0.28 }, // Front-Left
+    { x: +0.23, y: 0.28, z: -0.28 }, // Front-Right
+    { x: -0.23, y: 0.28, z: +0.28 }, // Rear-Left
+    { x: -0.23, y: 0.28, z: -0.28 }  // Rear-Right
   ];
 
   const hips = hipCoords.map((hc, idx) =>
