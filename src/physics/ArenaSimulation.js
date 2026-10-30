@@ -261,7 +261,8 @@ export class ArenaSimulation {
     for (let i = 0; i < c.body.nodes.length; i++) {
       const n = c.body.nodes[i];
       const off = c.grabSavedOffsets[i];
-      n.pos.set(c.grabTargetPos.x + off.x, Math.max(0.06, c.grabTargetPos.y + off.y), c.grabTargetPos.z + off.z);
+      const minY = n.noGroundCollision ? -10 : 0.06;
+      n.pos.set(c.grabTargetPos.x + off.x, Math.max(minY, c.grabTargetPos.y + off.y), c.grabTargetPos.z + off.z);
       n.prevPos.copy(n.pos);
       n.vel.set(0, 0, 0);
       n.inContact = false;
@@ -294,7 +295,8 @@ export class ArenaSimulation {
         const rx = off.x - off.y * tiltX;
         const rz = off.z - off.y * tiltZ;
         const ry = off.y + (off.x * tiltX + off.z * tiltZ) * 0.5;
-        n.pos.set(cx + rx, Math.max(0.06, cy + ry), cz + rz);
+        const minY = n.noGroundCollision ? -10 : 0.06;
+        n.pos.set(cx + rx, Math.max(minY, cy + ry), cz + rz);
         n.prevPos.copy(n.pos);
         n.vel.set(0, 0, 0);
         n.inContact = false;
@@ -963,8 +965,8 @@ export class ArenaSimulation {
           if (Array.isArray(sn.pos)) n.pos.set(sn.pos[0], sn.pos[1], sn.pos[2]);
           if (Array.isArray(sn.prevPos)) n.prevPos.set(sn.prevPos[0], sn.prevPos[1], sn.prevPos[2]);
           if (Array.isArray(sn.vel)) n.vel.set(sn.vel[0], sn.vel[1], sn.vel[2]);
-          n.inContact = Boolean(sn.inContact);
-          n.normalForce = Number(sn.normalForce || 0);
+          n.inContact = !n.noGroundCollision && Boolean(sn.inContact);
+          n.normalForce = n.noGroundCollision ? 0 : Number(sn.normalForce || 0);
         }
       }
       if (Array.isArray(sc.muscles) && sc.muscles.length === c0.body.muscles.length) {

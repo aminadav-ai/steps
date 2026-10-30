@@ -1423,7 +1423,8 @@ function buildDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) 
     radius: 0.052,
     friction: 0.04,
     role: 'hip',
-    color
+    color,
+    noGroundCollision: true
   });
 
   const tailNode = body.addNode({
@@ -1435,7 +1436,8 @@ function buildDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) 
     radius: 0.052,
     friction: 0.04,
     role: 'hip',
-    color
+    color,
+    noGroundCollision: true
   });
 
   // Left & Right 3-axis Hip Servo assemblies (hip_yaw + hip_roll + hip_pitch) — strictly 2 legs!

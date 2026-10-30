@@ -104,7 +104,8 @@ export class PhysicsNode {
     friction = 0.9,
     restitution = 0.05,
     role = 'body', // 'torso', 'head', 'hip', 'foot'
-    color = '#4ea8de'
+    color = '#4ea8de',
+    noGroundCollision = false
   }) {
     this.id = id;
     this.pos = new Vec3(x, y, z);
@@ -118,6 +119,7 @@ export class PhysicsNode {
     this.restitution = restitution;
     this.role = role;
     this.color = color;
+    this.noGroundCollision = Boolean(noGroundCollision);
 
     // Contact telemetry for sensors & visualization
     this.inContact = false;
@@ -428,7 +430,7 @@ export class PhysicsWorld3D {
           const node = body.nodes[i];
           if (node.invMass === 0) continue;
 
-          const penetration = node.radius - node.pos.y;
+          const penetration = node.noGroundCollision ? 0 : (node.radius - node.pos.y);
           if (penetration > 0) {
             node.pos.y = node.radius;
             if (node.prevPos.y < node.radius) {
