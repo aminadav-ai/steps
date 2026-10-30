@@ -677,11 +677,27 @@ export class ArenaSimulation {
       const c0 = this.creatures[0];
       const com = c0.body.getCenterOfMass();
       const vel = c0.body.getCenterOfMassVelocity();
-      const { up, forward } = c0.getTorsoFrame();
+      const { up, forward, right } = c0.getTorsoFrame();
       const dx = c0.foodPos.x - com.x;
       const dz = c0.foodPos.z - com.z;
       const dist = Math.hypot(dx, dz);
       const alignCos = (dx * forward.x + dz * forward.z) / Math.max(1e-5, dist);
+      let minFootClearanceY = Infinity;
+      for (const f of c0.footNodes) {
+        minFootClearanceY = Math.min(minFootClearanceY, Math.max(0, f.pos.y - f.radius));
+      }
+      if (c0.webbedFeet) {
+        for (const wf of c0.webbedFeet) {
+          minFootClearanceY = Math.min(
+            minFootClearanceY,
+            Math.max(0, wf.toeInner.pos.y - wf.toeInner.radius),
+            Math.max(0, wf.toeOuter.pos.y - wf.toeOuter.radius)
+          );
+        }
+      }
+      const touchingParts = c0.body.nodes
+        .filter(n => n.inContact)
+        .map(n => n.id.replace(/^c\d+_/, ''));
       this.c0Trajectory.push({
         t: Number(this.simTime.toFixed(1)),
         upd: this.trainer.updateCount,
@@ -694,6 +710,10 @@ export class ArenaSimulation {
         alignCos: Number(alignCos.toFixed(2)),
         yawDeg: Number(((Math.atan2(forward.z, forward.x) * 180) / Math.PI).toFixed(1)),
         upY: Number(up.y.toFixed(3)),
+        pitchY: Number(forward.y.toFixed(3)),
+        rollY: Number(right.y.toFixed(3)),
+        minFootClearanceY: Number((Number.isFinite(minFootClearanceY) ? minFootClearanceY : 0).toFixed(3)),
+        touchingParts,
         contacts: c0.footNodes.map(f => (f.inContact ? 1 : 0)),
         normalForces: c0.footNodes.map(f => Number(f.normalForce.toFixed(1))),
         powerW: Number(c0.lastMechanicalPower.toFixed(1))
@@ -759,10 +779,26 @@ export class ArenaSimulation {
     const c0 = this.creatures[0];
     const com = c0.body.getCenterOfMass();
     const vel = c0.body.getCenterOfMassVelocity();
-    const { up, forward } = c0.getTorsoFrame();
+    const { up, forward, right } = c0.getTorsoFrame();
     const dx = c0.foodPos.x - com.x;
     const dz = c0.foodPos.z - com.z;
     const dist = Math.hypot(dx, dz);
+    let minFootClearanceY = Infinity;
+    for (const f of c0.footNodes) {
+      minFootClearanceY = Math.min(minFootClearanceY, Math.max(0, f.pos.y - f.radius));
+    }
+    if (c0.webbedFeet) {
+      for (const wf of c0.webbedFeet) {
+        minFootClearanceY = Math.min(
+          minFootClearanceY,
+          Math.max(0, wf.toeInner.pos.y - wf.toeInner.radius),
+          Math.max(0, wf.toeOuter.pos.y - wf.toeOuter.radius)
+        );
+      }
+    }
+    const touchingParts = c0.body.nodes
+      .filter(n => n.inContact)
+      .map(n => n.id.replace(/^c\d+_/, ''));
 
     // Compute CPG & sensory-gated weight norms in actorSkip.W to diagnose neural learning progress
     const skipW = this.brain.actorSkip.W;
@@ -792,6 +828,10 @@ export class ArenaSimulation {
         headingAlignCos: Number(((dx * forward.x + dz * forward.z) / Math.max(1e-5, dist)).toFixed(3)),
         yawDeg: Number(((Math.atan2(forward.z, forward.x) * 180) / Math.PI).toFixed(1)),
         upY: Number(up.y.toFixed(3)),
+        pitchY: Number(forward.y.toFixed(3)),
+        rollY: Number(right.y.toFixed(3)),
+        minFootClearanceY: Number((Number.isFinite(minFootClearanceY) ? minFootClearanceY : 0).toFixed(3)),
+        touchingParts,
         isOverturned: up.y < 0.35,
         footContacts: c0.footNodes.map(f => f.inContact),
         footNormalForcesN: c0.footNodes.map(f => Number(f.normalForce.toFixed(1)))
@@ -805,6 +845,7 @@ export class ArenaSimulation {
       },
       c0FoodEvents: this.c0FoodEvents,
       c0OverturnEvents: this.c0OverturnEvents,
+      rightingHistory: this.trainer.rightingHistory ? this.trainer.rightingHistory.slice(-60) : [],
       recentTrajectory: this.c0Trajectory.slice(-120)
     };
   }

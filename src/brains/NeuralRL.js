@@ -1248,6 +1248,9 @@ export class PPOTrainer {
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
         this.rightingContactSteps = 0;
+        this.rightingBottomContactSteps = 0;
+        this.rightingHeadContactSteps = 0;
+        this.rightingMinFootClearanceY = Infinity;
       }
 
       this.metaState.mode = 'LEARNING_RIGHTING';
@@ -1385,8 +1388,31 @@ export class PPOTrainer {
 
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
-      const anyContact = c0.footNodes.some(f => f.inContact);
+      const anyContact = c0.footNodes.some(f => f.inContact) ||
+        (c0.webbedFeet ? c0.webbedFeet.some(wf => wf.toeInner.inContact || wf.toeOuter.inContact) : false);
       if (anyContact) this.rightingContactSteps += 1;
+      if (c0.frameRefs && c0.frameRefs.bottom && c0.frameRefs.bottom.inContact) {
+        this.rightingBottomContactSteps = (this.rightingBottomContactSteps || 0) + 1;
+      }
+      if (c0.headNode && c0.headNode.inContact) {
+        this.rightingHeadContactSteps = (this.rightingHeadContactSteps || 0) + 1;
+      }
+      let stepMinFootClearance = Infinity;
+      for (const f of c0.footNodes) {
+        stepMinFootClearance = Math.min(stepMinFootClearance, Math.max(0, f.pos.y - f.radius));
+      }
+      if (c0.webbedFeet) {
+        for (const wf of c0.webbedFeet) {
+          stepMinFootClearance = Math.min(
+            stepMinFootClearance,
+            Math.max(0, wf.toeInner.pos.y - wf.toeInner.radius),
+            Math.max(0, wf.toeOuter.pos.y - wf.toeOuter.radius)
+          );
+        }
+      }
+      if (stepMinFootClearance < (this.rightingMinFootClearanceY ?? Infinity)) {
+        this.rightingMinFootClearanceY = stepMinFootClearance;
+      }
 
       const horizon = isDuck0 ? 24 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
@@ -1398,12 +1424,32 @@ export class PPOTrainer {
           lastObs: this._pendingStep.obs,
           lastAct: this._pendingStep.act
         });
+        if (!this.rightingHistory) this.rightingHistory = [];
+        this.rightingHistory.push({
+          attempt: this.brain.rightingAttempts,
+          startUpY: Number(this.rightingStartUpY.toFixed(3)),
+          maxUpY: Number(this.rightingMaxUpY.toFixed(3)),
+          endUpY: Number(upY0.toFixed(3)),
+          deltaUpY: Number((upY0 - this.rightingStartUpY).toFixed(3)),
+          footContactSteps: this.rightingContactSteps,
+          bottomContactSteps: this.rightingBottomContactSteps || 0,
+          headContactSteps: this.rightingHeadContactSteps || 0,
+          minFootClearanceY: Number(
+            (Number.isFinite(this.rightingMinFootClearanceY) ? this.rightingMinFootClearanceY : 0).toFixed(3)
+          ),
+          skillPct
+        });
+        if (this.rightingHistory.length > 80) this.rightingHistory.shift();
+
         this.metaState.rightingAttempts = this.brain.rightingAttempts;
         this.metaState.rightingSkillPct = skillPct;
         this.rightingStepCursor = 0;
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
         this.rightingContactSteps = 0;
+        this.rightingBottomContactSteps = 0;
+        this.rightingHeadContactSteps = 0;
+        this.rightingMinFootClearanceY = Infinity;
         // Only radial beetles pause; the Duck's neural network runs continuously without interruption!
         if (!isDuck0 && upY0 < 0.35) {
           this.rightingPauseStepsRemaining = this.rightingPauseDuration || 8;
@@ -2187,11 +2233,35 @@ export class NESTrainer {
       }
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
-      if (c0.footNodes.some(f => f.inContact)) this.rightingContactSteps += 1;
+      const anyContact = c0.footNodes.some(f => f.inContact) ||
+        (c0.webbedFeet ? c0.webbedFeet.some(wf => wf.toeInner.inContact || wf.toeOuter.inContact) : false);
+      if (anyContact) this.rightingContactSteps += 1;
+      if (c0.frameRefs && c0.frameRefs.bottom && c0.frameRefs.bottom.inContact) {
+        this.rightingBottomContactSteps = (this.rightingBottomContactSteps || 0) + 1;
+      }
+      if (c0.headNode && c0.headNode.inContact) {
+        this.rightingHeadContactSteps = (this.rightingHeadContactSteps || 0) + 1;
+      }
+      let stepMinFootClearance = Infinity;
+      for (const f of c0.footNodes) {
+        stepMinFootClearance = Math.min(stepMinFootClearance, Math.max(0, f.pos.y - f.radius));
+      }
+      if (c0.webbedFeet) {
+        for (const wf of c0.webbedFeet) {
+          stepMinFootClearance = Math.min(
+            stepMinFootClearance,
+            Math.max(0, wf.toeInner.pos.y - wf.toeInner.radius),
+            Math.max(0, wf.toeOuter.pos.y - wf.toeOuter.radius)
+          );
+        }
+      }
+      if (stepMinFootClearance < (this.rightingMinFootClearanceY ?? Infinity)) {
+        this.rightingMinFootClearanceY = stepMinFootClearance;
+      }
       const isDuck0 = c0.morphologyKey === 'duck';
       const horizon = isDuck0 ? 24 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
-        this.metaState.rightingSkillPct = this.brain.updateRightingReflex({
+        const skillPct = this.brain.updateRightingReflex({
           startUpY: this.rightingStartUpY,
           maxUpY: this.rightingMaxUpY,
           endUpY: upY0,
@@ -2199,11 +2269,32 @@ export class NESTrainer {
           lastObs: this._lastRightingStep.obs,
           lastAct: this._lastRightingStep.act
         });
+        this.metaState.rightingSkillPct = skillPct;
+        if (!this.rightingHistory) this.rightingHistory = [];
+        this.rightingHistory.push({
+          attempt: this.brain.rightingAttempts,
+          startUpY: Number(this.rightingStartUpY.toFixed(3)),
+          maxUpY: Number(this.rightingMaxUpY.toFixed(3)),
+          endUpY: Number(upY0.toFixed(3)),
+          deltaUpY: Number((upY0 - this.rightingStartUpY).toFixed(3)),
+          footContactSteps: this.rightingContactSteps,
+          bottomContactSteps: this.rightingBottomContactSteps || 0,
+          headContactSteps: this.rightingHeadContactSteps || 0,
+          minFootClearanceY: Number(
+            (Number.isFinite(this.rightingMinFootClearanceY) ? this.rightingMinFootClearanceY : 0).toFixed(3)
+          ),
+          skillPct
+        });
+        if (this.rightingHistory.length > 80) this.rightingHistory.shift();
+
         this.metaState.rightingAttempts = this.brain.rightingAttempts;
         this.rightingStepCursor = 0;
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
         this.rightingContactSteps = 0;
+        this.rightingBottomContactSteps = 0;
+        this.rightingHeadContactSteps = 0;
+        this.rightingMinFootClearanceY = Infinity;
         if (!isDuck0 && upY0 < 0.35) {
           this.rightingPauseStepsRemaining = 14;
         }
