@@ -882,3 +882,30 @@ dialog::backdrop {
 .morph-card:focus-visible .morph-card-cta {
   color: #fde047;
 }
+
+.update-confirm-dialog {
+  inline-size: min(500px, calc(100vw - 28px));
+  border-color: rgba(250, 204, 21, 0.55);
+}
+
+@media (min-width: 961px) {
+  .update-confirm-dialog {
+    inset-inline-start: 0;
+    inset-inline-end: 420px;
+    inline-size: min(500px, calc(100vw - 456px));
+  }
+}
+
+.update-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-block-start: 4px;
+}
+
+.update-dialog-actions .btn {
+  padding-block: 9px;
+  padding-inline: 14px;
+  font-size: 13px;
+}

@@ -150,7 +150,11 @@ export const TRANSLATIONS = {
     welcomeCard3Title: 'Утка (Двуногий)',
     welcomeCard3Desc: 'Двуногий робот: по 5 сервоприводов в каждой лапе-ласте + 4 в шее и массивной голове-балансире.',
     welcomeChooseBtn: 'Запустить на арене →',
-    hudSwitchRobotBtn: '🤖 Сменить робота'
+    hudSwitchRobotBtn: '🤖 Сменить робота',
+    updateDialogTitle: 'Было обновление. Удалить сохранённое?',
+    updateDialogDesc: 'Код симуляции обновился с момента последнего сохранения. Удалить сохранённый прогресс и начать заново с чистой нейросетью?',
+    updateBtnKeep: 'Оставить сохранённое',
+    updateBtnReset: '🗑️ Да, удалить сохранённое (Сброс ИИ)'
   },
 
   en: {
@@ -287,7 +291,11 @@ export const TRANSLATIONS = {
     welcomeCard3Title: 'Duck (Bipedal Robot)',
     welcomeCard3Desc: 'Bipedal robot: 5 servos per webbed foot + 4 servos in the neck and massive counterbalance head.',
     welcomeChooseBtn: 'Launch in Arena →',
-    hudSwitchRobotBtn: '🤖 Switch Robot'
+    hudSwitchRobotBtn: '🤖 Switch Robot',
+    updateDialogTitle: 'Code Updated. Delete Saved Progress?',
+    updateDialogDesc: 'Simulation code has been updated since your last checkpoint. Delete saved progress and start fresh with a clean neural network?',
+    updateBtnKeep: 'Keep Saved Progress',
+    updateBtnReset: '🗑️ Yes, Delete Saved (Reset AI)'
   },
 
   he: {

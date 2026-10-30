@@ -89,8 +89,53 @@ let isResumingTransition = false;
 const welcomeMorphDialog = document.getElementById('welcomeMorphDialog');
 const btnOpenMorphDialog = document.getElementById('btnOpenMorphDialog');
 const btnCloseMorphDialog = document.getElementById('btnCloseMorphDialog');
+const updateConfirmDialog = document.getElementById('updateConfirmDialog');
+const btnCloseUpdateDialog = document.getElementById('btnCloseUpdateDialog');
 const FIRST_VISIT_MORPH_KEY = 'steps_first_morph_selected_v1';
+const CODE_FINGERPRINT_KEY = 'steps_code_fingerprint_v1';
+const SOURCE_FILES_TO_FINGERPRINT = [
+  './index.html',
+  './styles.css',
+  './src/main.js',
+  './src/physics/Physics3D.js',
+  './src/physics/ArenaSimulation.js',
+  './src/morphologies/Morphologies.js',
+  './src/brains/NeuralRL.js',
+  './src/render/Renderer3D.js',
+  './src/render/TelemetryRenderers.js',
+  './src/i18n/translations.js'
+];
+let currentCodeFingerprint = null;
+let pendingUpdateDecision = false;
 let wasPausedForWelcome = false;
+let wasPausedForUpdate = false;
+
+async function computeCodebaseFingerprint() {
+  try {
+    const texts = await Promise.all(
+      SOURCE_FILES_TO_FINGERPRINT.map(url =>
+        fetch(url, { cache: 'no-store' })
+          .then(r => (r.ok ? r.text() : ''))
+          .catch(() => '')
+      )
+    );
+    let h1 = 0x811c9dc5;
+    let h2 = 0x01000193;
+    for (let f = 0; f < texts.length; f++) {
+      const s = texts[f];
+      for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        h1 ^= c;
+        h1 = Math.imul(h1, 0x01000193);
+        h2 ^= c + f;
+        h2 = Math.imul(h2, 0x85ebca6b);
+      }
+    }
+    return `fp_${(h1 >>> 0).toString(16)}_${(h2 >>> 0).toString(16)}`;
+  } catch {
+    return 'fp_fallback_v3_0_4';
+  }
+}
 
 function syncMorphDialogSelection(morphKey) {
   if (!welcomeMorphDialog) return;
@@ -243,6 +288,9 @@ function applyLanguage(lang, { persist = false } = {}) {
   if (welcomeMorphDialog) {
     welcomeMorphDialog.dir = lang === 'he' ? 'rtl' : 'ltr';
   }
+  if (updateConfirmDialog) {
+    updateConfirmDialog.dir = lang === 'he' ? 'rtl' : 'ltr';
+  }
   if (selectLanguage && selectLanguage.value !== lang) {
     selectLanguage.value = lang;
   }
@@ -293,9 +341,13 @@ if (selectLanguage) {
 const CREATURE_STORAGE_KEY = 'steps_saved_creature_v2';
 
 function saveCreatureCheckpoint() {
-  if (!sim || typeof sim.exportCheckpoint !== 'function') return null;
+  if (!sim || typeof sim.exportCheckpoint !== 'function' || pendingUpdateDecision) return null;
   try {
     const ckpt = sim.exportCheckpoint(getUIState(), renderer3D ? renderer3D.getCameraTelemetry() : null);
+    if (currentCodeFingerprint) {
+      ckpt.codeFingerprint = currentCodeFingerprint;
+      localStorage.setItem(CODE_FINGERPRINT_KEY, currentCodeFingerprint);
+    }
     localStorage.setItem(CREATURE_STORAGE_KEY, JSON.stringify(ckpt));
     return ckpt;
   } catch {
@@ -402,15 +454,22 @@ async function startNewExperiment({ clearSaved = false, resetDefaults = clearSav
 }
 
 async function restoreOrStartExperiment() {
+  currentCodeFingerprint = await computeCodebaseFingerprint();
+
   let ckpt = null;
+  let storedFp = null;
   try {
     const raw = localStorage.getItem(CREATURE_STORAGE_KEY);
     if (raw) ckpt = JSON.parse(raw);
+    storedFp = localStorage.getItem(CODE_FINGERPRINT_KEY);
   } catch {
     ckpt = null;
   }
 
   if (ckpt && ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
+    const prevFp = ckpt.codeFingerprint || storedFp;
+    const hasUpdateOccurred = Boolean(currentCodeFingerprint && prevFp !== currentCodeFingerprint);
+
     applyRestoredUIState(ckpt);
     const spec = MORPHOLOGY_REGISTRY[ckpt.morphologyKey];
     morphDescription.textContent = getMorphDescriptionText(ckpt.morphologyKey);
@@ -435,6 +494,20 @@ async function restoreOrStartExperiment() {
     await logger.refreshLogsList();
     renderLogsList(logger.savedLogsList);
     updateHUD(true);
+
+    if (hasUpdateOccurred && updateConfirmDialog && typeof updateConfirmDialog.showModal === 'function') {
+      pendingUpdateDecision = true;
+      if (!paused) {
+        wasPausedForUpdate = true;
+        paused = true;
+      }
+      if (!updateConfirmDialog.open) {
+        updateConfirmDialog.returnValue = '';
+        updateConfirmDialog.showModal();
+      }
+      return;
+    }
+
     saveCreatureCheckpoint();
     return;
   }
@@ -541,6 +614,58 @@ if (welcomeMorphDialog) {
         simTimeAccum = 0;
         lastFrameTime = performance.now();
         setPausedState(false, 'welcome_morph_dismiss');
+      }
+    }
+  });
+}
+
+if (btnCloseUpdateDialog && updateConfirmDialog) {
+  btnCloseUpdateDialog.addEventListener('click', () => {
+    if (updateConfirmDialog.open) {
+      updateConfirmDialog.returnValue = 'keep';
+      updateConfirmDialog.close('keep');
+    }
+  });
+}
+
+if (updateConfirmDialog) {
+  updateConfirmDialog.addEventListener('click', e => {
+    if (e.target === updateConfirmDialog) {
+      updateConfirmDialog.returnValue = 'keep';
+      updateConfirmDialog.close('keep');
+    }
+  });
+
+  updateConfirmDialog.addEventListener('close', async () => {
+    const decision = updateConfirmDialog.returnValue;
+    updateConfirmDialog.returnValue = '';
+    pendingUpdateDecision = false;
+
+    try {
+      if (currentCodeFingerprint) {
+        localStorage.setItem(CODE_FINGERPRINT_KEY, currentCodeFingerprint);
+      }
+    } catch {
+      // ignore
+    }
+
+    if (decision === 'reset') {
+      logger.recordUserEvent('update_confirm_reset', { morphology: selectMorphology.value }, sim, renderer3D, getUIState());
+      await startNewExperiment({ clearSaved: true, resetDefaults: true });
+      if (wasPausedForUpdate || paused) {
+        wasPausedForUpdate = false;
+        simTimeAccum = 0;
+        lastFrameTime = performance.now();
+        setPausedState(false, 'update_confirm_reset');
+      }
+    } else {
+      logger.recordUserEvent('update_confirm_keep', { morphology: selectMorphology.value }, sim, renderer3D, getUIState());
+      saveCreatureCheckpoint();
+      if (wasPausedForUpdate) {
+        wasPausedForUpdate = false;
+        simTimeAccum = 0;
+        lastFrameTime = performance.now();
+        setPausedState(false, 'update_confirm_keep');
       }
     }
   });
@@ -994,7 +1119,7 @@ restoreOrStartExperiment().then(() => {
   } catch {
     hasChosenBefore = false;
   }
-  if (!hasChosenBefore) {
+  if (!hasChosenBefore && !pendingUpdateDecision) {
     openMorphPickerModal({ isFirstVisit: true });
   }
   requestAnimationFrame(animate);

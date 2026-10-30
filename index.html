@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://aminadav-ai.github.io/steps/assets/01_arena_preview.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://aminadav-ai.github.io/steps/assets/01_arena_preview.png">
-  <link rel="stylesheet" href="./styles.css?v=3.0.3">
+  <link rel="stylesheet" href="./styles.css?v=3.0.4">
 </head>
 <body>
   <main class="lab-layout">
@@ -179,6 +179,28 @@
               </span>
               <span class="morph-card-cta" data-i18n="welcomeChooseBtn">Запустить на арене →</span>
             </div>
+          </button>
+        </form>
+      </dialog>
+
+      <!-- Code Update Detected Confirmation Dialog -->
+      <dialog id="updateConfirmDialog" class="morph-picker-dialog update-confirm-dialog" aria-labelledby="updateConfirmTitle" closedby="any">
+        <div class="morph-picker-header">
+          <div>
+            <h2 id="updateConfirmTitle" data-i18n="updateDialogTitle">Было обновление. Удалить сохранённое?</h2>
+            <p class="morph-picker-subtitle" data-i18n="updateDialogDesc">
+              Код симуляции обновился с момента последнего сохранения. Удалить сохранённый прогресс и начать заново с чистой нейросетью?
+            </p>
+          </div>
+          <button type="button" id="btnCloseUpdateDialog" class="morph-dialog-close" command="close" commandfor="updateConfirmDialog" aria-label="Close">✕</button>
+        </div>
+
+        <form method="dialog" class="update-dialog-actions">
+          <button type="submit" value="keep" class="btn" data-i18n="updateBtnKeep" autofocus>
+            Оставить сохранённое
+          </button>
+          <button type="submit" value="reset" class="btn primary" data-i18n="updateBtnReset">
+            🗑️ Да, удалить сохранённое (Сброс ИИ)
           </button>
         </form>
       </dialog>
@@ -420,6 +442,6 @@
     </aside>
   </main>
 
-  <script type="module" src="./src/main.js?v=3.0.3"></script>
+  <script type="module" src="./src/main.js?v=3.0.4"></script>
 </body>
 </html>
