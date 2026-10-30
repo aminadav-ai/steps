@@ -1454,6 +1454,15 @@ export class PPOTrainer {
         if (!isDuck0 && upY0 < 0.35) {
           this.rightingPauseStepsRemaining = this.rightingPauseDuration || 8;
         }
+        this.updateCount += 1;
+        return {
+          updateCount: this.updateCount,
+          didUpdateWeights: true,
+          isRightingUpdate: true,
+          policyLoss: this.lastPolicyLoss || 0,
+          valueLoss: this.lastValueLoss || 0,
+          entropy: this.lastEntropy || 0
+        };
       }
       return null;
     }
@@ -2298,6 +2307,15 @@ export class NESTrainer {
         if (!isDuck0 && upY0 < 0.35) {
           this.rightingPauseStepsRemaining = 14;
         }
+        this.updateCount += 1;
+        return {
+          updateCount: this.updateCount,
+          didUpdateWeights: true,
+          isRightingUpdate: true,
+          policyLoss: 0,
+          valueLoss: 0,
+          entropy: 0
+        };
       }
       return null;
     }

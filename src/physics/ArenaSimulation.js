@@ -768,8 +768,8 @@ export class ArenaSimulation {
         valueLoss: Number((updateInfo.valueLoss || 0).toFixed(4)),
         entropy: Number((updateInfo.entropy || 0).toFixed(4))
       };
-      // Only append to learning curve history when an actual learning epoch updated weights!
-      if (entry.didUpdateWeights) {
+      // Only append to learning curve history when an actual walking learning epoch updated weights!
+      if (entry.didUpdateWeights && !updateInfo.isRightingUpdate) {
         this.history.push(entry);
       }
       return entry;
