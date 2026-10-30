@@ -416,8 +416,8 @@ function attachOrthogonalLeg({
     pivotNode: hipNode,
     minFactor: 0.35,
     maxFactor: 2.15,
-    maxForce: 135.0,
-    compliance: 0.00010
+    maxForce: isServoMode ? 175.0 : 135.0,
+    compliance: isServoMode ? 0.00006 : 0.00010
   });
 
   const strideFwd = body.addMuscle({
@@ -427,8 +427,8 @@ function attachOrthogonalLeg({
     pivotNode: hipNode,
     minFactor: 0.35,
     maxFactor: 1.95,
-    maxForce: 120.0,
-    compliance: 0.00014
+    maxForce: isServoMode ? 155.0 : 120.0,
+    compliance: isServoMode ? 0.00008 : 0.00014
   });
 
   const strideBwd = body.addMuscle({
@@ -438,8 +438,8 @@ function attachOrthogonalLeg({
     pivotNode: hipNode,
     minFactor: 0.35,
     maxFactor: 1.95,
-    maxForce: 120.0,
-    compliance: 0.00014
+    maxForce: isServoMode ? 155.0 : 120.0,
+    compliance: isServoMode ? 0.00008 : 0.00014
   });
 
   const latMuscle = body.addMuscle({
@@ -511,10 +511,11 @@ function attachOrthogonalLeg({
 
       // Physical Mechanical Joint Hard-Stops in 'servo' mode (conserving exact center-of-mass momentum sum m_i dx_i === 0):
       // 1. Hip Ventral Stop: when the chassis is upright, the leg cannot passively fold/invert above the hip plane.
-      // 2. Knee Anti-Hyperextension Stop ("Ʌ" stop): prevents the knee from ever snapping into a backward "V" bend!
+      // 2. Knee Anti-Hyperextension Stop ("Ʌ" stop): prevents the knee from ever snapping into a backward "V" bend,
+      //    while allowing 100% free sagittal stride when the knee is in its normal "Ʌ" working range!
       if (isServoMode && knee && upVec && forwardVec && rightVec) {
-        if (isUprightOrStanding && footLocalUp > -0.075) {
-          const corrUp = -0.085 - footLocalUp;
+        if (isUprightOrStanding && footLocalUp > -0.045) {
+          const corrUp = -0.052 - footLocalUp;
           const mF = foot.mass;
           const mH = hipNode.mass;
           const wF = mH / (mF + mH);
@@ -535,12 +536,13 @@ function attachOrthogonalLeg({
           hipNode.pos.z -= dzStop * wH;
           hipNode.prevPos.x -= dxStop * wH;
           hipNode.prevPos.y -= dyStop * wH;
+          hipNode.prevPos.z -= dyStop * 0;
           hipNode.prevPos.z -= dzStop * wH;
 
-          footLocalUp = -0.085;
+          footLocalUp = -0.052;
         }
 
-        // Compute valid 3D sagittal "Ʌ" knee position from current hipNode.pos and foot.pos
+        // Check current knee position relative to the hip->foot chord in the torso sagittal plane
         const uxW = foot.pos.x - hipNode.pos.x;
         const uyW = foot.pos.y - hipNode.pos.y;
         const uzW = foot.pos.z - hipNode.pos.z;
@@ -549,16 +551,13 @@ function attachOrthogonalLeg({
         const rawDW = Math.hypot(uf, uu);
         const maxReachW = (L_femur + L_tibia) * 0.992;
         const dW = Math.max(0.05, Math.min(maxReachW, rawDW));
-        const scaleW = rawDW > 1e-6 ? dW / rawDW : 1.0;
-        const cf = uf * scaleW;
-        const cu = uu * scaleW;
 
         const isFrontLeg = restHipPos.x >= restComX;
         const bf0 = isFrontLeg ? 0.92 : -0.92;
         const bu0 = 0.25;
-        const dotBW = (bf0 * cf + bu0 * cu) / Math.max(1e-6, dW * dW);
-        let pf = bf0 - dotBW * cf;
-        let pu = bu0 - dotBW * cu;
+        const dotBW = (bf0 * uf + bu0 * uu) / Math.max(1e-6, rawDW * rawDW);
+        let pf = bf0 - dotBW * uf;
+        let pu = bu0 - dotBW * uu;
         const pLenW = Math.hypot(pf, pu);
         if (pLenW > 1e-6) {
           pf /= pLenW;
@@ -567,15 +566,31 @@ function attachOrthogonalLeg({
           pf = isFrontLeg ? 1.0 : -1.0;
           pu = 0.0;
         }
-        const hKneeW = Math.sqrt(Math.max(1e-5, L_femur * L_femur - 0.25 * dW * dW));
-        const validKneeX = hipNode.pos.x + (0.5 * cf + pf * hKneeW) * forwardVec.x + (0.5 * cu + pu * hKneeW) * upVec.x;
-        const validKneeY = hipNode.pos.y + (0.5 * cf + pf * hKneeW) * forwardVec.y + (0.5 * cu + pu * hKneeW) * upVec.y;
-        const validKneeZ = hipNode.pos.z + (0.5 * cf + pf * hKneeW) * forwardVec.z + (0.5 * cu + pu * hKneeW) * upVec.z;
 
-        const errKX = (validKneeX - knee.pos.x) * 0.72;
-        const errKY = (validKneeY - knee.pos.y) * 0.72;
-        const errKZ = (validKneeZ - knee.pos.z) * 0.72;
-        if (errKX * errKX + errKY * errKY + errKZ * errKZ > 1e-6) {
+        // Current knee coordinates relative to hip->foot midpoint in (forwardVec, upVec, rightVec)
+        const midX = hipNode.pos.x + 0.5 * uxW;
+        const midY = hipNode.pos.y + 0.5 * uyW;
+        const midZ = hipNode.pos.z + 0.5 * uzW;
+        const kxRel = knee.pos.x - midX;
+        const kyRel = knee.pos.y - midY;
+        const kzRel = knee.pos.z - midZ;
+        const kF = kxRel * forwardVec.x + kyRel * forwardVec.y + kzRel * forwardVec.z;
+        const kU = kxRel * upVec.x + kyRel * upVec.y + kzRel * upVec.z;
+        const kR = (knee.pos.x - hipNode.pos.x) * rightVec.x + (knee.pos.y - hipNode.pos.y) * rightVec.y + (knee.pos.z - hipNode.pos.z) * rightVec.z;
+
+        const hActual = kF * pf + kU * pu;
+        const hTarget = Math.sqrt(Math.max(1e-5, L_femur * L_femur - 0.25 * dW * dW));
+        const minHealthyH = Math.min(0.055, hTarget * 0.65);
+
+        // Only engage sagittal knee hard-stop if knee tries to hyperextend/invert below minHealthyH,
+        // plus always enforce planar bearing alignment (-kR along rightVec)
+        const corrH = hActual < minHealthyH ? (hTarget - hActual) * 0.85 : 0.0;
+        const corrR = -kR * 0.75;
+        if (corrH > 1e-5 || Math.abs(corrR) > 1e-5) {
+          const errKX = corrH * (pf * forwardVec.x + pu * upVec.x) + corrR * rightVec.x;
+          const errKY = corrH * (pf * forwardVec.y + pu * upVec.y) + corrR * rightVec.y;
+          const errKZ = corrH * (pf * forwardVec.z + pu * upVec.z) + corrR * rightVec.z;
+
           const mK = knee.mass;
           const mHF = hipNode.mass + foot.mass;
           const wK = mHF / (mK + mHF);
@@ -651,9 +666,9 @@ function attachOrthogonalLeg({
 
       // Relax coplanar hip muscles while foot crosses the hip plane (footLocalUp ≈ 0)
       // so the coplanar snap-through barrier vanishes and dorsalMuscle smoothly pushes/pulls the foot across!
-      kneeLift.maxForce = crossingHipPlane ? 14.0 : 135.0;
-      strideFwd.maxForce = crossingHipPlane ? 18.0 : 120.0;
-      strideBwd.maxForce = crossingHipPlane ? 18.0 : 120.0;
+      kneeLift.maxForce = crossingHipPlane ? 14.0 : (isServoMode ? 175.0 : 135.0);
+      strideFwd.maxForce = crossingHipPlane ? 18.0 : (isServoMode ? 155.0 : 120.0);
+      strideBwd.maxForce = crossingHipPlane ? 18.0 : (isServoMode ? 155.0 : 120.0);
       latMuscle.maxForce = crossingHipPlane ? (isServoMode ? 45.0 : 18.0) : (isServoMode ? 185.0 : 110.0);
       if (oppLatMuscle) {
         oppLatMuscle.maxForce = crossingHipPlane ? (isServoMode ? 45.0 : 18.0) : (isServoMode ? 185.0 : 110.0);
@@ -777,10 +792,11 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8', 
     color
   });
 
+  const isServo = actuatorMode !== 'muscle';
   const noseNode = body.addNode({
     id: `c${id}_nose`,
-    x: origin.x + 0.34,
-    y: origin.y + 0.24,
+    x: origin.x + (isServo ? 0.42 : 0.34),
+    y: origin.y + (isServo ? 0.27 : 0.24),
     z: origin.z,
     mass: 0.18,
     radius: 0.060,
@@ -791,8 +807,8 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8', 
 
   const tailNode = body.addNode({
     id: `c${id}_tail`,
-    x: origin.x - 0.36,
-    y: origin.y + 0.24,
+    x: origin.x - (isServo ? 0.46 : 0.36),
+    y: origin.y + (isServo ? 0.27 : 0.24),
     z: origin.z,
     mass: 0.18,
     radius: 0.060,
@@ -801,12 +817,20 @@ function buildTripodWalker({ id, origin = new Vec3(0, 0, 0), color = '#38bdf8', 
     color
   });
 
-  // 3 Hip sockets in a wide, stable equilateral triangle so the torso never tips onto its tail
-  const hipCoords = [
-    { x: +0.24, y: 0.25, z: +0.30 }, // Leg 0: Front-Left
-    { x: +0.24, y: 0.25, z: -0.30 }, // Leg 1: Front-Right
-    { x: -0.34, y: 0.25, z: 0.0 }    // Leg 2: Rear-Center
-  ];
+  // 3 Hip sockets in a wide, stable equilateral triangle so the torso never tips onto its tail.
+  // In 'servo' mode, hip height is raised to 0.30 m (matching quadruped ground clearance) and rear hip is at x = -0.24 m
+  // so the rear knee has a full 22 cm lever arm ahead of tailNode (-0.46 m)!
+  const hipCoords = isServo
+    ? [
+        { x: +0.20, y: 0.30, z: +0.28 }, // Leg 0: Front-Left
+        { x: +0.20, y: 0.30, z: -0.28 }, // Leg 1: Front-Right
+        { x: -0.24, y: 0.30, z: 0.0 }    // Leg 2: Rear-Center
+      ]
+    : [
+        { x: +0.24, y: 0.25, z: +0.30 }, // Leg 0: Front-Left
+        { x: +0.24, y: 0.25, z: -0.30 }, // Leg 1: Front-Right
+        { x: -0.34, y: 0.25, z: 0.0 }    // Leg 2: Rear-Center
+      ];
 
   const hips = hipCoords.map((hc, idx) =>
     body.addNode({
