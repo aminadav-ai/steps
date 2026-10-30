@@ -136,7 +136,21 @@ export const TRANSLATIONS = {
     nnInLabels: ['cos(α) Еда', 'sin(α) Еда', 'Дист. Еда', 'Скор. V_fwd', 'Осанка Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', 'Тяга×sin', 'Тяга×cos', 'Руль×sin', 'Руль×cos'],
     nnOutLift: leg => `Л${leg}: Колено`,
     nnOutStride: leg => `Л${leg}: Бедро`,
-    nnCriticLabel: v => `Критик V(s) = ${v}`
+    nnCriticLabel: v => `Критик V(s) = ${v}`,
+
+    welcomeTitle: 'Выберите конструкцию тела робота',
+    welcomeSubtitle: 'Все роботы управляются честной 3D-физикой (200 Гц XPBD + сервоприводы PD) и учатся ходить в реальном времени с нуля',
+    welcomeCard1Tag: '6 DoF • 3 лапы',
+    welcomeCard1Title: 'Трипод (3-лучевой)',
+    welcomeCard1Desc: 'Две передние рулевые лапы и задняя толчковая. Быстро осваивает базовый шаг и отталкивание.',
+    welcomeCard2Tag: '8 DoF • 4 лапы',
+    welcomeCard2Title: 'Квадрупод (4-лучевой)',
+    welcomeCard2Desc: 'Симметричный 4-ногий шагоход. Устойчивая диагональная рысь (trot) и манёвренный разворот на месте.',
+    welcomeCard3Tag: '14 DoF • Biped',
+    welcomeCard3Title: 'Микро-Утка (Open Duck Mini)',
+    welcomeCard3Desc: 'Двуногий робот: по 5 сервоприводов в каждой лапе-ласте + 4 в шее и массивной голове-балансире.',
+    welcomeChooseBtn: 'Запустить на арене →',
+    hudSwitchRobotBtn: '🤖 Сменить робота'
   },
 
   en: {
@@ -259,7 +273,21 @@ export const TRANSLATIONS = {
     nnInLabels: ['cos(α) Food', 'sin(α) Food', 'Dist Food', 'Vel V_fwd', 'Posture Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', 'Drive×sin', 'Drive×cos', 'Turn×sin', 'Turn×cos'],
     nnOutLift: leg => `L${leg}: Knee Lift`,
     nnOutStride: leg => `L${leg}: Hip Stride`,
-    nnCriticLabel: v => `Critic V(s) = ${v}`
+    nnCriticLabel: v => `Critic V(s) = ${v}`,
+
+    welcomeTitle: 'Choose Your Robot Body Morphology',
+    welcomeSubtitle: 'Every robot is driven by true 200 Hz XPBD 3D physics & PD servos, learning to walk in real time from scratch',
+    welcomeCard1Tag: '6 DoF • 3 Legs',
+    welcomeCard1Title: 'Tripod (3-Legged Walker)',
+    welcomeCard1Desc: 'Two front steering legs and a rear thruster leg. Quickly learns basic stepping and propulsion.',
+    welcomeCard2Tag: '8 DoF • 4 Legs',
+    welcomeCard2Title: 'Quadruped (4-Legged Walker)',
+    welcomeCard2Desc: 'Symmetric 4-legged walker. Stable diagonal trot gait and agile in-place yaw turning.',
+    welcomeCard3Tag: '14 DoF • Biped',
+    welcomeCard3Title: 'Micro-Duck (Open Duck Mini)',
+    welcomeCard3Desc: 'Bipedal robot: 5 servos per webbed foot + 4 servos in the neck and massive counterbalance head.',
+    welcomeChooseBtn: 'Launch in Arena →',
+    hudSwitchRobotBtn: '🤖 Switch Robot'
   },
 
   he: {
@@ -382,7 +410,21 @@ export const TRANSLATIONS = {
     nnInLabels: ['cos(α) מטרה', 'sin(α) מטרה', 'מרחק מטרה', 'מהירות קדימה', 'יציבה Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', 'דחף×sin', 'דחף×cos', 'היגוי×sin', 'היגוי×cos'],
     nnOutLift: leg => `ר${leg}: ברך`,
     nnOutStride: leg => `ר${leg}: ירך`,
-    nnCriticLabel: v => `מבקר V(s) = ${v}`
+    nnCriticLabel: v => `מבקר V(s) = ${v}`,
+
+    welcomeTitle: 'בחר את מבנה הגוף של הרובוט',
+    welcomeSubtitle: 'כל רובוט פועל בפיזיקה תלת-ממדית אמיתית (200 Hz XPBD + מנועי סרוו) ולומד ללכת בזמן אמת מאפס',
+    welcomeCard1Tag: '6 DoF • 3 רגליים',
+    welcomeCard1Title: 'טריפוד (תלת-רגלי)',
+    welcomeCard1Desc: 'שתי רגלי היגוי קדמיות ורגל דחיפה אחורית. לומד במהירות צעידה ודחיפה בסיסית.',
+    welcomeCard2Tag: '8 DoF • 4 רגליים',
+    welcomeCard2Title: 'קוואדרופוד (ארבע-רגלי)',
+    welcomeCard2Desc: 'צועד סימטרי בעל 4 רגליים. ריצה אלכסונית יציבה וסיבוב זריז במקום.',
+    welcomeCard3Tag: '14 DoF • דו-רגלי',
+    welcomeCard3Title: 'מיקרו-ברווז (Open Duck Mini)',
+    welcomeCard3Desc: 'רובוט דו-רגלי: 5 מנועי סרוו בכל רגל + 4 בצוואר ובראש האיזון המאסיבי.',
+    welcomeChooseBtn: 'הפעל בזירה ←',
+    hudSwitchRobotBtn: '🤖 החלף רובוט'
   },
 
   es: {
@@ -505,7 +547,21 @@ export const TRANSLATIONS = {
     nnInLabels: ['cos(α) Obj', 'sin(α) Obj', 'Dist. Obj', 'Vel V_fwd', 'Postura Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', 'Empuje×sin', 'Empuje×cos', 'Giro×sin', 'Giro×cos'],
     nnOutLift: leg => `P${leg}: Rodilla`,
     nnOutStride: leg => `P${leg}: Cadera`,
-    nnCriticLabel: v => `Crítico V(s) = ${v}`
+    nnCriticLabel: v => `Crítico V(s) = ${v}`,
+
+    welcomeTitle: 'Elige la morfología del robot',
+    welcomeSubtitle: 'Todos los robots usan física 3D real (200 Hz XPBD + servos PD) y aprenden a caminar en tiempo real',
+    welcomeCard1Tag: '6 DoF • 3 Patas',
+    welcomeCard1Title: 'Trípode (3 patas)',
+    welcomeCard1Desc: 'Dos patas delanteras de dirección y una propulsora trasera. Rápido aprendizaje inicial.',
+    welcomeCard2Tag: '8 DoF • 4 Patas',
+    welcomeCard2Title: 'Cuadrúpedo (4 patas)',
+    welcomeCard2Desc: 'Caminante simétrico de 4 patas con trote diagonal estable y giro ágil.',
+    welcomeCard3Tag: '14 DoF • Bípedo',
+    welcomeCard3Title: 'Micro-Pato (Open Duck Mini)',
+    welcomeCard3Desc: 'Robot bípedo: 5 servos por pata + 4 en el cuello y la cabeza equilibradora.',
+    welcomeChooseBtn: 'Iniciar en la arena →',
+    hudSwitchRobotBtn: '🤖 Cambiar robot'
   },
 
   de: {
@@ -628,7 +684,21 @@ export const TRANSLATIONS = {
     nnInLabels: ['cos(α) Ziel', 'sin(α) Ziel', 'Dist. Ziel', 'Geschw. V_fwd', 'Haltung Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', 'Schub×sin', 'Schub×cos', 'Lenk×sin', 'Lenk×cos'],
     nnOutLift: leg => `B${leg}: Knie`,
     nnOutStride: leg => `B${leg}: Hüfte`,
-    nnCriticLabel: v => `Kritiker V(s) = ${v}`
+    nnCriticLabel: v => `Kritiker V(s) = ${v}`,
+
+    welcomeTitle: 'Wähle die Roboter-Konstruktion',
+    welcomeSubtitle: 'Alle Roboter nutzen echte 200 Hz XPBD 3D-Physik & PD-Servos und lernen in Echtzeit laufen',
+    welcomeCard1Tag: '6 DoF • 3 Beine',
+    welcomeCard1Title: 'Tripod (3-Beiner)',
+    welcomeCard1Desc: 'Zwei vordere Lenkbeine und ein hinteres Schubbein. Lernt schnell den Grundschritt.',
+    welcomeCard2Tag: '8 DoF • 4 Beine',
+    welcomeCard2Title: 'Quadruped (4-Beiner)',
+    welcomeCard2Desc: 'Symmetrischer 4-beiniger Läufer für stabilen diagonalen Trab und Drehung.',
+    welcomeCard3Tag: '14 DoF • Zweibeiner',
+    welcomeCard3Title: 'Micro-Duck (Open Duck Mini)',
+    welcomeCard3Desc: 'Zweibeiniger Roboter: 5 Servos pro Fuß + 4 Servos in Hals und Balancierkopf.',
+    welcomeChooseBtn: 'In der Arena starten →',
+    hudSwitchRobotBtn: '🤖 Roboter wechseln'
   },
 
   fr: {
@@ -751,7 +821,21 @@ export const TRANSLATIONS = {
     nnInLabels: ['cos(α) Cible', 'sin(α) Cible', 'Dist. Cible', 'Vit. V_fwd', 'Posture Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', 'Poussée×sin', 'Poussée×cos', 'Cap×sin', 'Cap×cos'],
     nnOutLift: leg => `P${leg}: Genou`,
     nnOutStride: leg => `P${leg}: Hanche`,
-    nnCriticLabel: v => `Critique V(s) = ${v}`
+    nnCriticLabel: v => `Critique V(s) = ${v}`,
+
+    welcomeTitle: 'Choisissez la morphologie du robot',
+    welcomeSubtitle: 'Chaque robot est régi par une physique 3D XPBD à 200 Hz et apprend à marcher en temps réel',
+    welcomeCard1Tag: '6 DoF • 3 Pattes',
+    welcomeCard1Title: 'Tripode (3 pattes)',
+    welcomeCard1Desc: 'Deux pattes avant directrices et une patte arrière propulsive.',
+    welcomeCard2Tag: '8 DoF • 4 Pattes',
+    welcomeCard2Title: 'Quadrupède (4 pattes)',
+    welcomeCard2Desc: 'Marcheur symétrique à 4 pattes au trot diagonal stable.',
+    welcomeCard3Tag: '14 DoF • Bipède',
+    welcomeCard3Title: 'Micro-Canard (Open Duck Mini)',
+    welcomeCard3Desc: 'Robot bipède : 5 servos par patte palmée + 4 dans le cou et la tête d’équilibrage.',
+    welcomeChooseBtn: 'Lancer dans l’arène →',
+    hudSwitchRobotBtn: '🤖 Changer de robot'
   },
 
   zh: {
@@ -874,7 +958,21 @@ export const TRANSLATIONS = {
     nnInLabels: ['cos(α) 目标', 'sin(α) 目标', '目标距离', '前进速度', '姿态 Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', '推进×sin', '推进×cos', '转向×sin', '转向×cos'],
     nnOutLift: leg => `腿${leg}: 抬膝`,
     nnOutStride: leg => `腿${leg}: 迈步`,
-    nnCriticLabel: v => `价值评估 V(s) = ${v}`
+    nnCriticLabel: v => `价值评估 V(s) = ${v}`,
+
+    welcomeTitle: '选择机器人机体结构',
+    welcomeSubtitle: '所有机器人均由真实 200 Hz XPBD 3D 物理与 PD 伺服电机驱动，从零实时学习行走',
+    welcomeCard1Tag: '6 DoF • 三足',
+    welcomeCard1Title: '三足步行机 (Tripod)',
+    welcomeCard1Desc: '两条前导向腿与一条后推进腿，快速掌握基础步态。',
+    welcomeCard2Tag: '8 DoF • 四足',
+    welcomeCard2Title: '四足步行机 (Quadruped)',
+    welcomeCard2Desc: '对称四足结构，支持稳定的对角小跑与灵活原地转向。',
+    welcomeCard3Tag: '14 DoF • 双足',
+    welcomeCard3Title: '微鸭机器人 (Open Duck Mini)',
+    welcomeCard3Desc: '双足机器人：每只脚掌 5 个伺服电机 + 颈部与平衡头部 4 个伺服电机。',
+    welcomeChooseBtn: '在竞技场启动 →',
+    hudSwitchRobotBtn: '🤖 切换机器人'
   },
 
   ja: {
@@ -997,6 +1095,20 @@ export const TRANSLATIONS = {
     nnInLabels: ['cos(α) 目標', 'sin(α) 目標', '目標距離', '前進速度', '姿勢 Up_y', 'CPG sin(ωt)', 'CPG cos(ωt)', '推進×sin', '推進×cos', '旋回×sin', '旋回×cos'],
     nnOutLift: leg => `脚${leg}: 膝`,
     nnOutStride: leg => `脚${leg}: 股`,
-    nnCriticLabel: v => `価値 V(s) = ${v}`
+    nnCriticLabel: v => `価値 V(s) = ${v}`,
+
+    welcomeTitle: 'ロボットのボディ構造を選択',
+    welcomeSubtitle: 'すべてのロボットは純粋な 200 Hz XPBD 3D物理とPDサーボで駆動し、ゼロからリアルタイムで歩行を学習します',
+    welcomeCard1Tag: '6 DoF • 3脚',
+    welcomeCard1Title: 'トライポッド (3脚歩行機)',
+    welcomeCard1Desc: '前方の操舵2脚と後方の推進1脚。基本ステップを素早く習得します。',
+    welcomeCard2Tag: '8 DoF • 4脚',
+    welcomeCard2Title: 'クアッドルペッド (4脚歩行機)',
+    welcomeCard2Desc: '対称4脚ウォーカー。安定した対角トロット歩行と俊敏な旋回が可能です。',
+    welcomeCard3Tag: '14 DoF • 二足歩行',
+    welcomeCard3Title: 'マイクロダック (Open Duck Mini)',
+    welcomeCard3Desc: '二足歩行ロボット：各脚5サーボ＋首と大型バランス頭部に4サーボを搭載。',
+    welcomeChooseBtn: 'アリーナで起動 →',
+    hudSwitchRobotBtn: '🤖 ロボット切替'
   }
 };

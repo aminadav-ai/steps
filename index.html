@@ -14,7 +14,7 @@
   <meta property="og:image" content="https://aminadav-ai.github.io/steps/assets/01_arena_preview.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:image" content="https://aminadav-ai.github.io/steps/assets/01_arena_preview.png">
-  <link rel="stylesheet" href="./styles.css?v=2.0.1">
+  <link rel="stylesheet" href="./styles.css?v=3.0.1">
 </head>
 <body>
   <main class="lab-layout">
@@ -39,11 +39,149 @@
         </div>
 
         <div class="hud-badge-group">
+          <button type="button" id="btnOpenMorphDialog" class="hud-pill hud-btn-morph" command="show-modal" commandfor="welcomeMorphDialog" data-i18n="hudSwitchRobotBtn">
+            🤖 Сменить робота
+          </button>
           <div class="hud-pill">
             <span data-i18n="hudFriction">Трение пола μ =</span> <strong id="hudFriction">1.00</strong>
           </div>
         </div>
       </div>
+
+      <!-- First-Visit Robot Body Morphology Selection Dialog (over the 3D visualization viewport) -->
+      <dialog id="welcomeMorphDialog" class="morph-picker-dialog" aria-labelledby="welcomeMorphTitle" closedby="any">
+        <div class="morph-picker-header">
+          <div>
+            <h2 id="welcomeMorphTitle" data-i18n="welcomeTitle">Выберите конструкцию тела робота</h2>
+            <p class="morph-picker-subtitle" data-i18n="welcomeSubtitle">
+              Все роботы управляются честной 3D-физикой (200 Гц XPBD + сервоприводы PD) и учатся ходить в реальном времени с нуля
+            </p>
+          </div>
+          <button type="button" id="btnCloseMorphDialog" class="morph-dialog-close" command="close" commandfor="welcomeMorphDialog" aria-label="Close">✕</button>
+        </div>
+
+        <form method="dialog" class="morph-cards-grid" id="morphPickerForm">
+          <!-- Option 1: Tripod (6 DoF) -->
+          <button type="submit" name="morphology" value="tripod" class="morph-card" data-morph-card="tripod">
+            <div class="morph-card-preview">
+              <span class="morph-dof-badge" data-i18n="welcomeCard1Tag">6 DoF • 3 лапы</span>
+              <svg viewBox="0 0 180 120" class="morph-svg" aria-hidden="true">
+                <!-- Floor shadow -->
+                <ellipse cx="90" cy="104" rx="64" ry="8" fill="rgba(56,189,248,0.10)" />
+                <!-- Central diamond spine truss -->
+                <polygon points="90,26 112,46 90,64 68,46" fill="rgba(56,189,248,0.14)" stroke="#38bdf8" stroke-width="2" />
+                <line x1="90" y1="26" x2="90" y2="64" stroke="#38bdf8" stroke-width="1.8" />
+                <!-- Rear thruster leg -->
+                <polyline points="68,46 38,58 28,98" fill="none" stroke="#cbd5e1" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+                <!-- Front-left leg -->
+                <polyline points="104,44 134,54 146,96" fill="none" stroke="#e2e8f0" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+                <!-- Front-right leg -->
+                <polyline points="96,48 116,64 114,102" fill="none" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+                <!-- Servo drums -->
+                <circle cx="68" cy="46" r="5.5" fill="#0f172a" stroke="#38bdf8" stroke-width="2.2" />
+                <circle cx="38" cy="58" r="5" fill="#0f172a" stroke="#fbbf24" stroke-width="2" />
+                <circle cx="104" cy="44" r="5.5" fill="#0f172a" stroke="#38bdf8" stroke-width="2.2" />
+                <circle cx="134" cy="54" r="5" fill="#0f172a" stroke="#fbbf24" stroke-width="2" />
+                <circle cx="116" cy="64" r="4.5" fill="#0f172a" stroke="#38bdf8" stroke-width="2" />
+                <!-- Foot contact pads -->
+                <circle cx="28" cy="98" r="4" fill="#4ade80" />
+                <circle cx="146" cy="96" r="4" fill="#4ade80" />
+                <circle cx="114" cy="102" r="4" fill="#4ade80" />
+              </svg>
+            </div>
+            <div class="morph-card-body">
+              <strong class="morph-card-title" data-i18n="welcomeCard1Title">Трипод (3-лучевой)</strong>
+              <span class="morph-card-desc" data-i18n="welcomeCard1Desc">
+                Две передние рулевые лапы и задняя толчковая. Быстро осваивает базовый шаг и отталкивание.
+              </span>
+              <span class="morph-card-cta" data-i18n="welcomeChooseBtn">Запустить на арене →</span>
+            </div>
+          </button>
+
+          <!-- Option 2: Quadruped (8 DoF) -->
+          <button type="submit" name="morphology" value="quadruped" class="morph-card" data-morph-card="quadruped">
+            <div class="morph-card-preview">
+              <span class="morph-dof-badge emerald" data-i18n="welcomeCard2Tag">8 DoF • 4 лапы</span>
+              <svg viewBox="0 0 180 120" class="morph-svg" aria-hidden="true">
+                <ellipse cx="90" cy="104" rx="68" ry="8" fill="rgba(52,211,153,0.10)" />
+                <!-- Back legs -->
+                <polyline points="62,48 36,62 42,98" fill="none" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+                <polyline points="116,48 136,64 128,96" fill="none" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+                <!-- Spine truss -->
+                <polygon points="90,26 126,44 90,62 54,44" fill="rgba(52,211,153,0.14)" stroke="#34d399" stroke-width="2" />
+                <line x1="54" y1="44" x2="126" y2="44" stroke="#34d399" stroke-width="1.8" />
+                <!-- Foreground legs -->
+                <polyline points="66,46 44,60 28,100" fill="none" stroke="#e2e8f0" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+                <polyline points="114,46 142,58 152,100" fill="none" stroke="#e2e8f0" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+                <!-- Servo drums -->
+                <circle cx="66" cy="46" r="5.5" fill="#0f172a" stroke="#38bdf8" stroke-width="2.2" />
+                <circle cx="44" cy="60" r="5" fill="#0f172a" stroke="#fbbf24" stroke-width="2" />
+                <circle cx="114" cy="46" r="5.5" fill="#0f172a" stroke="#38bdf8" stroke-width="2.2" />
+                <circle cx="142" cy="58" r="5" fill="#0f172a" stroke="#fbbf24" stroke-width="2" />
+                <!-- Foot contact pads -->
+                <circle cx="28" cy="100" r="4" fill="#4ade80" />
+                <circle cx="42" cy="98" r="3.5" fill="#4ade80" />
+                <circle cx="128" cy="96" r="3.5" fill="#4ade80" />
+                <circle cx="152" cy="100" r="4" fill="#4ade80" />
+              </svg>
+            </div>
+            <div class="morph-card-body">
+              <strong class="morph-card-title" data-i18n="welcomeCard2Title">Квадрупод (4-лучевой)</strong>
+              <span class="morph-card-desc" data-i18n="welcomeCard2Desc">
+                Симметричный 4-ногий шагоход. Устойчивая диагональная рысь (trot) и манёвренный разворот на месте.
+              </span>
+              <span class="morph-card-cta" data-i18n="welcomeChooseBtn">Запустить на арене →</span>
+            </div>
+          </button>
+
+          <!-- Option 3: Micro-Duck / Open Duck Mini v2 (14 DoF) -->
+          <button type="submit" name="morphology" value="duck" class="morph-card" data-morph-card="duck" autofocus>
+            <div class="morph-card-preview">
+              <span class="morph-dof-badge gold" data-i18n="welcomeCard3Tag">14 DoF • Biped</span>
+              <svg viewBox="0 0 180 120" class="morph-svg" aria-hidden="true">
+                <ellipse cx="92" cy="106" rx="56" ry="8" fill="rgba(250,204,21,0.12)" />
+                <!-- Rear antennas -->
+                <line x1="74" y1="22" x2="68" y2="6" stroke="#cbd5e1" stroke-width="1.8" />
+                <circle cx="68" cy="6" r="2.2" fill="#38bdf8" />
+                <line x1="82" y1="20" x2="78" y2="5" stroke="#cbd5e1" stroke-width="1.8" />
+                <circle cx="78" cy="5" r="2.2" fill="#38bdf8" />
+                <!-- Yellow rear counterweight cap on head -->
+                <polygon points="68,20 76,18 76,34 68,32" fill="rgba(250,204,21,0.8)" stroke="#fde047" stroke-width="1.4" />
+                <!-- Massive BDX Open-Frame Head Truss -->
+                <polygon points="76,16 118,18 122,36 76,36" fill="rgba(56,189,248,0.15)" stroke="#e2e8f0" stroke-width="2" />
+                <!-- Yellow duck bill -->
+                <polygon points="120,31 134,34 120,37" fill="#facc15" stroke="#fde047" stroke-width="1.2" />
+                <!-- Glowing round headlight-eyes -->
+                <circle cx="114" cy="26" r="5" fill="#f8fafc" stroke="#38bdf8" stroke-width="1.8" />
+                <circle cx="115" cy="26" r="2" fill="#0284c7" />
+                <!-- Neck column -->
+                <line x1="94" y1="36" x2="86" y2="52" stroke="#e2e8f0" stroke-width="4" stroke-linecap="round" />
+                <!-- Compact Open-Frame Trunk Cage -->
+                <rect x="74" y="50" width="24" height="22" rx="3" fill="rgba(15,23,42,0.7)" stroke="#facc15" stroke-width="2" />
+                <!-- Forward-bending knees (>) -->
+                <polyline points="82,68 98,80 78,98" fill="none" stroke="#94a3b8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+                <polyline points="90,70 108,82 90,102" fill="none" stroke="#f8fafc" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
+                <!-- 3D Yellow Trapezoidal Wedge Boots -->
+                <polygon points="62,100 78,93 102,100 62,102" fill="rgba(234,179,8,0.55)" stroke="#fde047" stroke-width="1.5" />
+                <polygon points="72,104 90,96 118,104 72,106" fill="rgba(250,204,21,0.75)" stroke="#fde047" stroke-width="1.8" />
+                <!-- Servo drums -->
+                <circle cx="94" cy="36" r="4" fill="#0f172a" stroke="#38bdf8" stroke-width="1.8" />
+                <circle cx="86" cy="52" r="4.5" fill="#0f172a" stroke="#38bdf8" stroke-width="1.8" />
+                <circle cx="90" cy="70" r="5" fill="#0f172a" stroke="#38bdf8" stroke-width="2" />
+                <circle cx="108" cy="82" r="4.8" fill="#0f172a" stroke="#fbbf24" stroke-width="2" />
+                <circle cx="90" cy="102" r="4.2" fill="#0f172a" stroke="#4ade80" stroke-width="1.8" />
+              </svg>
+            </div>
+            <div class="morph-card-body">
+              <strong class="morph-card-title" data-i18n="welcomeCard3Title">Микро-Утка (Open Duck Mini)</strong>
+              <span class="morph-card-desc" data-i18n="welcomeCard3Desc">
+                Двуногий робот: по 5 сервоприводов в каждой лапе-ласте + 4 в шее и массивной голове-балансире.
+              </span>
+              <span class="morph-card-cta" data-i18n="welcomeChooseBtn">Запустить на арене →</span>
+            </div>
+          </button>
+        </form>
+      </dialog>
 
       <div class="hud-bottom-bar">
         <div class="hud-legend">
@@ -290,6 +428,6 @@
     </aside>
   </main>
 
-  <script type="module" src="./src/main.js?v=3.0.0"></script>
+  <script type="module" src="./src/main.js?v=3.0.1"></script>
 </body>
 </html>

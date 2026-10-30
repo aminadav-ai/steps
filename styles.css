@@ -666,3 +666,219 @@ select {
   padding-inline: 6px;
   font-size: 11px;
 }
+
+/* HUD Robot Switcher Pill Button */
+.hud-btn-morph {
+  cursor: pointer;
+  font-weight: 600;
+  color: #f8fafc;
+  border-color: rgba(56, 189, 248, 0.52);
+  background: rgba(15, 23, 42, 0.88);
+  transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.14s ease;
+}
+
+.hud-btn-morph:hover {
+  background: rgba(14, 165, 233, 0.25);
+  border-color: #38bdf8;
+  transform: translateY(-1px);
+}
+
+/* Native <dialog> for First-Visit Robot Body Morphology Selection over the 3D Viewport */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgba(9, 13, 22, 0.56);
+  backdrop-filter: blur(5px);
+}
+
+.morph-picker-dialog {
+  inset: 0;
+  margin: auto;
+  inline-size: min(760px, calc(100vw - 28px));
+  max-block-size: calc(100dvh - 36px);
+  background: rgba(15, 23, 42, 0.94);
+  color: #f8fafc;
+  border: 1px solid rgba(56, 189, 248, 0.42);
+  border-radius: 16px;
+  padding-block: 18px;
+  padding-inline: 20px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.72), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  overflow-y: auto;
+}
+
+@media (min-width: 961px) {
+  /* Center the modal dialog directly over the left 3D visualization viewport pane */
+  .morph-picker-dialog {
+    inset-inline-start: 0;
+    inset-inline-end: 420px;
+    inline-size: min(740px, calc(100vw - 456px));
+  }
+}
+
+.morph-picker-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: ytPopIn 0.22s cubic-bezier(0.2, 0.85, 0.35, 1.12);
+}
+
+.morph-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.morph-picker-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f8fafc;
+  letter-spacing: -0.01em;
+}
+
+.morph-picker-subtitle {
+  font-size: 12.5px;
+  color: #94a3b8;
+  margin-block-start: 3px;
+}
+
+.morph-dialog-close {
+  background: rgba(30, 41, 59, 0.85);
+  color: #cbd5e1;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  inline-size: 32px;
+  block-size: 32px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.morph-dialog-close:hover {
+  background: #334155;
+  color: #ffffff;
+  border-color: #94a3b8;
+}
+
+.morph-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .morph-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.morph-card {
+  background: rgba(30, 41, 59, 0.82);
+  border: 1.5px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  padding: 12px;
+  text-align: start;
+  color: #f8fafc;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.morph-card:hover,
+.morph-card:focus-visible {
+  transform: translateY(-3px);
+  border-color: #38bdf8;
+  background: rgba(30, 41, 59, 0.98);
+  box-shadow: 0 12px 28px rgba(2, 132, 199, 0.24);
+  outline: none;
+}
+
+.morph-card.selected {
+  border-color: #facc15;
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.45), 0 10px 26px rgba(234, 179, 8, 0.18);
+}
+
+.morph-card-preview {
+  position: relative;
+  background: #090d16;
+  border: 1px solid rgba(51, 65, 85, 0.75);
+  border-radius: 9px;
+  block-size: 118px;
+  display: grid;
+  place-items: center;
+  overflow: clip;
+}
+
+.morph-svg {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+.morph-dof-badge {
+  position: absolute;
+  inset-block-start: 7px;
+  inset-inline-end: 7px;
+  font-size: 10px;
+  font-weight: 700;
+  padding-block: 2px;
+  padding-inline: 7px;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.22);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+}
+
+.morph-dof-badge.emerald {
+  background: rgba(16, 185, 129, 0.22);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.45);
+}
+
+.morph-dof-badge.gold {
+  background: rgba(245, 158, 11, 0.24);
+  color: #fde047;
+  border-color: rgba(250, 204, 21, 0.55);
+}
+
+.morph-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+
+.morph-card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.morph-card-desc {
+  font-size: 11.5px;
+  color: #cbd5e1;
+  line-height: 1.38;
+  flex: 1 1 auto;
+}
+
+.morph-card-cta {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #38bdf8;
+  margin-block-start: 4px;
+}
+
+.morph-card:hover .morph-card-cta,
+.morph-card:focus-visible .morph-card-cta {
+  color: #fde047;
+}

@@ -87,6 +87,19 @@ const ytIconPlay = document.getElementById('ytIconPlay');
 let ytOverlayTimer = null;
 let isResumingTransition = false;
 
+const welcomeMorphDialog = document.getElementById('welcomeMorphDialog');
+const btnOpenMorphDialog = document.getElementById('btnOpenMorphDialog');
+const btnCloseMorphDialog = document.getElementById('btnCloseMorphDialog');
+const FIRST_VISIT_MORPH_KEY = 'steps_first_morph_selected_v1';
+let wasPausedForWelcome = false;
+
+function syncMorphDialogSelection(morphKey) {
+  if (!welcomeMorphDialog) return;
+  for (const card of welcomeMorphDialog.querySelectorAll('.morph-card[data-morph-card]')) {
+    card.classList.toggle('selected', card.dataset.morphCard === morphKey);
+  }
+}
+
 const metaActiveBadge = document.getElementById('metaActiveBadge');
 const metaModeBanner = document.getElementById('metaModeBanner');
 const metaNeedVal = document.getElementById('metaNeedVal');
@@ -238,6 +251,9 @@ function applyLanguage(lang, { persist = false } = {}) {
   }
   if (sidebarPane) {
     sidebarPane.dir = lang === 'he' ? 'rtl' : 'ltr';
+  }
+  if (welcomeMorphDialog) {
+    welcomeMorphDialog.dir = lang === 'he' ? 'rtl' : 'ltr';
   }
   if (selectLanguage && selectLanguage.value !== lang) {
     selectLanguage.value = lang;
@@ -457,9 +473,95 @@ function getUIState() {
 
 // Event Listeners
 selectMorphology.addEventListener('change', () => {
+  try {
+    localStorage.setItem(FIRST_VISIT_MORPH_KEY, selectMorphology.value);
+  } catch {
+    // ignore
+  }
+  syncMorphDialogSelection(selectMorphology.value);
   logger.recordUserEvent('select_morphology', { morphology: selectMorphology.value }, sim, renderer3D, getUIState());
   startNewExperiment({ clearSaved: true });
 });
+
+function openMorphPickerModal({ isFirstVisit = false } = {}) {
+  if (!welcomeMorphDialog || typeof welcomeMorphDialog.showModal !== 'function') return;
+  syncMorphDialogSelection(selectMorphology ? selectMorphology.value : 'quadruped');
+  if (isFirstVisit && !paused) {
+    wasPausedForWelcome = true;
+    paused = true;
+  }
+  if (!welcomeMorphDialog.open) {
+    welcomeMorphDialog.returnValue = '';
+    welcomeMorphDialog.showModal();
+  }
+}
+
+if (btnOpenMorphDialog && welcomeMorphDialog) {
+  btnOpenMorphDialog.addEventListener('click', () => {
+    if (!welcomeMorphDialog.open) {
+      openMorphPickerModal({ isFirstVisit: false });
+    } else {
+      syncMorphDialogSelection(selectMorphology.value);
+    }
+  });
+}
+
+if (btnCloseMorphDialog && welcomeMorphDialog) {
+  btnCloseMorphDialog.addEventListener('click', () => {
+    if (welcomeMorphDialog.open) {
+      welcomeMorphDialog.returnValue = '';
+      welcomeMorphDialog.close('');
+    }
+  });
+}
+
+if (welcomeMorphDialog) {
+  // Light-dismiss fallback for browsers without native closedby="any" support
+  welcomeMorphDialog.addEventListener('click', e => {
+    if (e.target === welcomeMorphDialog) {
+      welcomeMorphDialog.returnValue = '';
+      welcomeMorphDialog.close('');
+    }
+  });
+
+  welcomeMorphDialog.addEventListener('close', () => {
+    const chosen = welcomeMorphDialog.returnValue;
+    welcomeMorphDialog.returnValue = '';
+
+    if (chosen && MORPHOLOGY_REGISTRY[chosen]) {
+      try {
+        localStorage.setItem(FIRST_VISIT_MORPH_KEY, chosen);
+      } catch {
+        // ignore
+      }
+      selectMorphology.value = chosen;
+      syncMorphDialogSelection(chosen);
+      logger.recordUserEvent('welcome_select_morphology', { morphology: chosen }, sim, renderer3D, getUIState());
+      startNewExperiment({ clearSaved: true, resetDefaults: true });
+      if (wasPausedForWelcome || paused) {
+        wasPausedForWelcome = false;
+        simTimeAccum = 0;
+        lastFrameTime = performance.now();
+        setPausedState(false, 'welcome_morph_select');
+      }
+    } else {
+      // Dismissed via Esc, backdrop click, or close button without picking a new morphology
+      try {
+        if (!localStorage.getItem(FIRST_VISIT_MORPH_KEY)) {
+          localStorage.setItem(FIRST_VISIT_MORPH_KEY, selectMorphology.value);
+        }
+      } catch {
+        // ignore
+      }
+      if (wasPausedForWelcome) {
+        wasPausedForWelcome = false;
+        simTimeAccum = 0;
+        lastFrameTime = performance.now();
+        setPausedState(false, 'welcome_morph_dismiss');
+      }
+    }
+  });
+}
 if (selectActuator) {
   selectActuator.addEventListener('change', () => {
     logger.recordUserEvent('select_actuator', { actuatorMode: selectActuator.value }, sim, renderer3D, getUIState());
@@ -908,5 +1010,15 @@ window.addEventListener('beforeunload', () => {
 applyLanguage(currentLang);
 restoreOrStartExperiment().then(() => {
   applyLanguage(currentLang);
+  syncMorphDialogSelection(selectMorphology.value);
+  let hasChosenBefore = false;
+  try {
+    hasChosenBefore = Boolean(localStorage.getItem(FIRST_VISIT_MORPH_KEY));
+  } catch {
+    hasChosenBefore = false;
+  }
+  if (!hasChosenBefore) {
+    openMorphPickerModal({ isFirstVisit: true });
+  }
   requestAnimationFrame(animate);
 });
