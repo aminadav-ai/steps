@@ -41,9 +41,9 @@ export const TRANSLATIONS = {
     metaCardTitle: 'Мета-Чутьё ИИ (Контроль дообучения)',
     metaBadgeLearning: '● ОБУЧЕНИЕ ИДЁТ',
     metaBadgeConsolidated: '⏸ ДООБУЧЕНИЕ ОТКЛЮЧЕНО',
-    metaBadgeRighting: '🪲 ОБУЧЕНИЕ ПЕРЕВОРОТУ',
+    metaBadgeRighting: '🔄 ПОПЫТКА ПОДНЯТЬСЯ',
     metaNeedLabel: 'Потребность в дообучении (Чутьё):',
-    metaRightingLabel: 'Навык «Рефлекс жука» (Переворот со спины):',
+    metaRightingLabel: 'Навык подъёма на ноги после падения:',
     metaRightingStat: (pct, count) => `${pct}% (встал сам: ${count})`,
     ambitionFieldLabel: 'Амбиция обучения (баланс минимум / скачок / максимум):',
     ambBtnMin: '🐢 Минимум',
@@ -86,7 +86,7 @@ export const TRANSLATIONS = {
     chkFollowCamera: 'Камера за шагоходом + целью',
     chkForceVectors: 'Векторы сил (N, F_тр)',
 
-    nnCardTitle: 'Нейросеть Шагохода (Actor-Critic + Рефлекс жука)',
+    nnCardTitle: 'Нейросеть Робота (Actor-Critic + Подъём на ноги)',
     chartCardTitle: 'Динамика обучения',
     chartBadgeRecording: '● ИДЁТ ЗАПИСЬ',
     chartBadgeFrozen: '⏸ ЗАФИКСИРОВАНО',
@@ -122,7 +122,7 @@ export const TRANSLATIONS = {
     metaBannerInfinite: '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: МАКСИМАЛЬНЫЙ РАЗГОН',
     metaBannerConsolidated: '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО',
     metaBannerManualFrozen: '🔒 ОБУЧЕНИЕ ЗАМОРОЖЕНО ВРУЧНУЮ',
-    metaBannerRighting: '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ',
+    metaBannerRighting: '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ',
     metaReasonLearning: (food, minF, comp, target) =>
       `Формирование навыка: собрано ${food}/${minF} целей (скор. ~${comp} / ${target} м/с)`,
     metaReasonConsolidated: (comp, target, food) =>
@@ -178,10 +178,10 @@ export const TRANSLATIONS = {
     metaCardTitle: 'AI Meta-Sense (Plasticity Control)',
     metaBadgeLearning: '● LEARNING ACTIVE',
     metaBadgeConsolidated: '⏸ LEARNING PAUSED',
-    metaBadgeRighting: '🪲 SELF-RIGHTING',
+    metaBadgeRighting: '🔄 TRYING TO STAND UP',
     metaNeedLabel: 'Need to Learn (Plasticity Drive):',
-    metaRightingLabel: 'Beetle Self-Righting Skill:',
-    metaRightingStat: (pct, count) => `${pct}% (self-righted: ${count})`,
+    metaRightingLabel: 'Stand-Up Recovery Skill:',
+    metaRightingStat: (pct, count) => `${pct}% (stood up: ${count})`,
     ambitionFieldLabel: 'Learning Ambition (Walk / Bound / Gallop / Infinite):',
     ambBtnMin: '🐢 Min Walk',
     ambBtnBound: '🐇 Bound',
@@ -223,7 +223,7 @@ export const TRANSLATIONS = {
     chkFollowCamera: 'Camera frames walker + target',
     chkForceVectors: 'Force Vectors (N, F_fr)',
 
-    nnCardTitle: 'Walker Neural Network (Actor-Critic + Beetle Reflex)',
+    nnCardTitle: 'Robot Neural Network (Actor-Critic + Stand-Up Recovery)',
     chartCardTitle: 'Learning Dynamics',
     chartBadgeRecording: '● RECORDING',
     chartBadgeFrozen: '⏸ FROZEN',
@@ -259,7 +259,7 @@ export const TRANSLATIONS = {
     metaBannerInfinite: '♾️ INFINITE LEARNING: MAXIMUM SPEED SEARCH',
     metaBannerConsolidated: '🛡️ SKILL MASTERED: LEARNING PAUSED',
     metaBannerManualFrozen: '🔒 WEIGHTS FROZEN MANUALLY',
-    metaBannerRighting: '🪲 BEETLE REFLEX: LEARNING TO SELF-RIGHT',
+    metaBannerRighting: '🔄 TRYING TO STAND UP: LEARNING RECOVERY',
     metaReasonLearning: (food, minF, comp, target) =>
       `Training gait: ${food}/${minF} targets reached (speed ~${comp} / ${target} m/s)`,
     metaReasonConsolidated: (comp, target, food) =>

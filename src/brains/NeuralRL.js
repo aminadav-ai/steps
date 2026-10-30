@@ -1258,7 +1258,7 @@ export class PPOTrainer {
       this.metaState.needToLearnPct = 100;
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
-      this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
+      this.metaState.modeTitle = '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
       // Rest pause between righting attempts (only for radial spiders; disabled for the Duck so we never interrupt its neural network!)
@@ -1348,10 +1348,10 @@ export class PPOTrainer {
     if (this.metaState.mode === 'CONSOLIDATED') {
       this.metaState.needToLearnPct = 0;
       this.metaState.modeTitle = '🛡️ НАВЫК ОСВОЕН: ОБУЧЕНИЕ ОТКЛЮЧЕНО';
-      this.metaState.reasonText = `Успешно встал на ноги (переворотов: ${this.metaState.rightingSuccesses})! Продолжает ходьбу с защищёнными весами`;
+      this.metaState.reasonText = `Успешно поднялся на ноги (встал сам: ${this.metaState.rightingSuccesses})! Продолжает ходьбу с защищёнными весами`;
     } else {
       this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ХОДЬБА К ЦЕЛИ';
-      this.metaState.reasonText = `Успешно встал на ноги (переворотов: ${this.metaState.rightingSuccesses})! Продолжает обучение ходьбе к цели`;
+      this.metaState.reasonText = `Успешно поднялся на ноги (встал сам: ${this.metaState.rightingSuccesses})! Продолжает обучение ходьбе к цели`;
     }
   }
 
@@ -2159,7 +2159,7 @@ export class NESTrainer {
       this.metaState.needToLearnPct = 100;
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
-      this.metaState.modeTitle = '🪲 РЕФЛЕКС ЖУКА: УЧИТСЯ ПЕРЕВОРАЧИВАТЬСЯ НА НОГИ';
+      this.metaState.modeTitle = '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
       if (!isDuck0 && this.rightingPauseStepsRemaining > 0) {
