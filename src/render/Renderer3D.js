@@ -81,15 +81,17 @@ export class Renderer3D {
     const { camPos, camForward, camRight, camUp, width, height, fovScale } = this._lastCam;
     const proj = pt => this.project(pt, camPos, camForward, camRight, camUp, width, height, fovScale);
 
-    // 1. Check distance to Food Orb
+    // 1. Check distance to Food Orb (disabled for Duck, which has no food foraging task)
     let foodDistPx = Infinity;
-    const foodTargetPt = c0.foodState === 'DISSOLVING' ? c0.dissolvePos : c0.foodPos;
-    const pFood = proj(foodTargetPt);
-    if (pFood && c0.foodState !== 'WAITING') {
-      const foodHitRad = Math.max(24 * dpr, 0.24 * pFood.scale);
-      const d = Math.hypot(px - pFood.sx, py - pFood.sy);
-      if (d <= foodHitRad) {
-        foodDistPx = d;
+    if (!c0.isDuck) {
+      const foodTargetPt = c0.foodState === 'DISSOLVING' ? c0.dissolvePos : c0.foodPos;
+      const pFood = proj(foodTargetPt);
+      if (pFood && c0.foodState !== 'WAITING') {
+        const foodHitRad = Math.max(24 * dpr, 0.24 * pFood.scale);
+        const d = Math.hypot(px - pFood.sx, py - pFood.sy);
+        if (d <= foodHitRad) {
+          foodDistPx = d;
+        }
       }
     }
 
@@ -447,11 +449,11 @@ export class Renderer3D {
     if (this.followLeader && leader && !this.activeDragMode) {
       const food = leader.foodPos;
       const com = leader.body.getCenterOfMass();
-      const isOverturned = leader.getTorsoFrame().up.y < 0.48;
+      const isOverturned = leader.isDuck ? (com.y < 0.195) : (leader.getTorsoFrame().up.y < 0.48);
       const inPostThrow = performance.now() < (this._postThrowTrackUntil || 0);
 
-      if (inPostThrow || isOverturned) {
-        // Keep camera angle (yaw) fixed and follow the walker directly so the user clearly sees where it landed and how it self-rights
+      if (leader.isDuck || inPostThrow || isOverturned) {
+        // Keep camera angle (yaw) fixed and follow the walker directly so the user clearly sees where it landed and how it raises its CoM
         this._wasTrackingThrowOrOverturn = true;
         this.goalCamYaw = this.camYaw;
         this.goalCamTarget.set(com.x, 0.18, com.z);
@@ -691,12 +693,14 @@ export class Renderer3D {
     const com = creature.body.getCenterOfMass();
     const { forward, right } = creature.getTorsoFrame();
 
-    // 1. Render 3-Phase Animated Food Lifecycle (DISSOLVING 1s -> WAITING 1s -> DROPPING 1s -> ACTIVE)
+    // 1. Render 3-Phase Animated Food Lifecycle (disabled for Duck, whose sole task is CoM maximization)
     const pNose = proj(posOf(creature.frameRefs.front));
     const fState = creature.foodState || 'ACTIVE';
     const fTimer = Math.max(0.0, Math.min(1.0, creature.foodStateTimer || 0.0));
 
-    if (fState === 'DISSOLVING') {
+    if (creature.isDuck) {
+      // No food orb rendered for the Duck
+    } else if (fState === 'DISSOLVING') {
       // Phase 1 (1.0s): Eaten food orb shrinks, rises slightly, and dissolves with golden-emerald absorption rings
       const dPos = new Vec3(
         creature.dissolvePos.x,

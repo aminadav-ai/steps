@@ -441,9 +441,10 @@ export class ArenaSimulation {
     this.substepCursor += 1;
 
     // Advance 3-phase animated food lifecycle (1s DISSOLVING -> 1s WAITING -> 1s SKY-DROPPING -> ACTIVE)
-    if (!this._isHeadlessFastTrain) {
+    if (!this._isHeadlessFastTrain && this.morphologyKey !== 'duck') {
       for (let i = 0; i < this.populationSize; i++) {
         const c = this.creatures[i];
+        if (c.isDuck) continue;
         if (c.foodState === 'DISSOLVING') {
           c.foodStateTimer += subDt;
           if (c.foodStateTimer >= 1.0) {
@@ -507,6 +508,71 @@ export class ArenaSimulation {
     for (let i = 0; i < this.populationSize; i++) {
       const c = this.creatures[i];
       const { center, up, forward } = c.getTorsoFrame();
+      const isInThrowFlight = (c.postThrowTimer || 0) > 0;
+
+      if (c.isDuck) {
+        // Unified single task for the Duck: maximize Center of Mass height (center.y)!
+        // No food foraging, no torso tilt (up.y) constraints, no torsoTop.y constraints.
+        const comY = center.y;
+        const prevComY = c.prevComY !== undefined ? c.prevComY : comY;
+        c.prevComY = comY;
+        const comVelY = (comY - prevComY) / dt;
+
+        c.lastComY = comY;
+        c.smoothedComY = c.smoothedComY !== undefined
+          ? (0.94 * c.smoothedComY + 0.06 * comY)
+          : comY;
+
+        // Expose CoM height (m) as the Duck's primary competence metric for HUD & Meta-Sense
+        c.lastVelocityTowardFood = comY;
+        c.smoothedVelocityTowardFood = c.smoothedComY;
+        c.isPausedOrTurningToFood = false;
+        stepVelSum += comY;
+
+        let r = 0;
+        if (c.isGrabbed || isInThrowFlight) {
+          r = 0;
+        } else {
+          // Pure Center-of-Mass elevation & upward velocity reward:
+          // Lying down comY ~ 0.13-0.16 m; standing comY ~ 0.22-0.31 m.
+          r = 6.0 * (comY - 0.15) + 3.0 * comVelY - 0.00025 * c.lastMechanicalPower;
+        }
+
+        if (i === 0) {
+          const isLowComNow = !c.isGrabbed && !isInThrowFlight && comY < 0.185;
+          if (isLowComNow && !this.c0CurrentlyOverturned) {
+            this.c0CurrentlyOverturned = true;
+            this.c0OverturnEvents.push({
+              event: 'low_com',
+              simTime: Number(this.simTime.toFixed(2)),
+              update: this.trainer.updateCount,
+              pos: [Number(center.x.toFixed(2)), Number(center.z.toFixed(2))],
+              comY: Number(comY.toFixed(3)),
+              upY: Number(up.y.toFixed(3)),
+              rightingSkillPct: this.trainer.metaState ? this.trainer.metaState.rightingSkillPct : 20
+            });
+          } else if (!isLowComNow && comY >= 0.215 && this.c0CurrentlyOverturned) {
+            this.c0CurrentlyOverturned = false;
+            this.c0OverturnEvents.push({
+              event: 'recovered_high_com',
+              simTime: Number(this.simTime.toFixed(2)),
+              update: this.trainer.updateCount,
+              pos: [Number(center.x.toFixed(2)), Number(center.z.toFixed(2))],
+              comY: Number(comY.toFixed(3)),
+              upY: Number(up.y.toFixed(3)),
+              attemptsUsed: this.trainer.metaState ? this.trainer.metaState.rightingAttempts : 1,
+              rightingSkillPct: this.trainer.metaState ? this.trainer.metaState.rightingSkillPct : 100
+            });
+          }
+        }
+
+        c.lastStepReward = r;
+        c.episodeReward += r;
+        c.cumulativeReward += r;
+        rewards[i] = r;
+        stepRewSum += r;
+        continue;
+      }
 
       const dx = c.foodPos.x - center.x;
       const dz = c.foodPos.z - center.z;
@@ -518,7 +584,6 @@ export class ArenaSimulation {
       c.alignToFood = alignCos;
 
       // Velocity toward food (m/s)
-      const isInThrowFlight = (c.postThrowTimer || 0) > 0;
       const isOverturnedNow = !c.isGrabbed && !isInThrowFlight && Boolean(this.trainer && this.trainer.wasOverturned);
       const isWaitingForFood = c.foodState === 'DISSOLVING' || c.foodState === 'WAITING';
       const isDroppingFood = c.foodState === 'DROPPING';
@@ -573,17 +638,10 @@ export class ArenaSimulation {
         r = 0;
       } else if (isOverturnedNow) {
         // When overturned on its back: ZERO thoughts about food or walking!
+        // Beetle Self-Righting task: increasing up.y toward +1 and leveraging feet against the floor.
         const upVel = (up.y - prevUpY) / dt;
-        if (c.isDuck) {
-          // For the Duck, evaluate purely the body's own posture and upper-torso elevation:
-          // legs are free to push, step, or tap-dance however needed to lift and level the body.
-          const topY = c.torsoTop ? c.torsoTop.pos.y : center.y;
-          r = 3.5 * upVel + 0.35 * up.y + 0.45 * Math.max(0, topY - 0.18);
-        } else {
-          // Beetle Self-Righting task: increasing up.y toward +1 and leveraging feet against the floor.
-          const contactBonus = c.footNodes.some(f => f.inContact) ? 0.18 : 0.0;
-          r = 3.5 * upVel + 0.35 * up.y + contactBonus;
-        }
+        const contactBonus = c.footNodes.some(f => f.inContact) ? 0.18 : 0.0;
+        r = 3.5 * upVel + 0.35 * up.y + contactBonus;
         c.lastVelocityTowardFood = 0;
         dones[i] = 1;
       } else if (isWaitingForFood) {
@@ -765,6 +823,7 @@ export class ArenaSimulation {
         c0FoodPos: [Number(c0.foodPos.x.toFixed(2)), Number(c0.foodPos.z.toFixed(2))],
         c0DistToFood: Number(dist0.toFixed(2)),
         c0AlignCos: Number(((dx0 * fwd0.x + dz0 * fwd0.z) / Math.max(1e-5, dist0)).toFixed(2)),
+        c0ComY: Number(com0.y.toFixed(3)),
         c0UpY: Number(up0.y.toFixed(3)),
         c0VelToFood: Number(c0.lastVelocityTowardFood.toFixed(3)),
         metaMode: this.trainer.metaState ? this.trainer.metaState.mode : 'LEARNING_WALK',
@@ -774,8 +833,8 @@ export class ArenaSimulation {
         valueLoss: Number((updateInfo.valueLoss || 0).toFixed(4)),
         entropy: Number((updateInfo.entropy || 0).toFixed(4))
       };
-      // Only append to learning curve history when an actual walking learning epoch updated weights!
-      if (entry.didUpdateWeights && !updateInfo.isRightingUpdate) {
+      // Append to learning curve history when an epoch updated weights
+      if (entry.didUpdateWeights && (!updateInfo.isRightingUpdate || c0.isDuck)) {
         this.history.push(entry);
       }
       return entry;

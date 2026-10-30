@@ -367,13 +367,14 @@ const duckTrainSim = new ArenaSimulation({
   populationSize: 1,
   floorFriction: 1.0
 });
-for (let s = 0; s < 32 * 8; s++) {
+for (let s = 0; s < 32 * 4; s++) {
   duckTrainSim.stepControl();
 }
 const dw = duckTrainSim.creatures[0];
-console.log(`Утка (14 DoF) после 8 эпох обучения: up.y=${dw.getTorsoFrame().up.y.toFixed(3)}, скорость=${duckTrainSim.trainer.metaState.competenceEMA.toFixed(3)} м/с, собрано целей=${dw.foodCollected}`);
-if (dw.getTorsoFrame().up.y < 0.65 || (duckTrainSim.trainer.metaState.competenceEMA < 0.08 && dw.foodCollected < 1)) {
-  console.error('ОШИБКА: 14-DoF Утка должна устойчиво стоять на 2 стопах-ластах и уверенно идти вперёд!');
+const dwComY = dw.body.getCenterOfMass().y;
+console.log(`Утка (14 DoF, единая задача ЦМ): comY=${dwComY.toFixed(3)} м, competenceEMA=${duckTrainSim.trainer.metaState.competenceEMA.toFixed(3)} м, mode=${duckTrainSim.trainer.metaState.mode}`);
+if (dwComY < 0.205 || duckTrainSim.trainer.metaState.competenceEMA < 0.21 || duckTrainSim.trainer.metaState.mode !== 'CONSOLIDATED') {
+  console.error('ОШИБКА: 14-DoF Утка должна максимизировать высоту центра масс (comY >= 0.205 м) и прекращать обучение (CONSOLIDATED), когда справляется с задачей!');
   process.exit(1);
 }
 

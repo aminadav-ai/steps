@@ -134,10 +134,11 @@ export class CreatureInstance {
     const dirX = toFood.x * invDist;
     const dirZ = toFood.z * invDist;
 
-    // When overturned on its back/side (up.y < 0.52) OR during the 2s pause between eaten food and new sky-drop,
+    // When overturned on its back/side (up.y < 0.52), during the 2s pause between eaten food and new sky-drop,
+    // or for the Duck (whose sole task is maximizing Center of Mass height without foraging for food),
     // the creature ignores food and walking gates!
     const isOverturned = up.y < 0.52;
-    const noActiveFood = isOverturned || this.foodState === 'DISSOLVING' || this.foodState === 'WAITING';
+    const noActiveFood = Boolean(this.isDuck || this.morphologyKey === 'duck' || isOverturned || this.foodState === 'DISSOLVING' || this.foodState === 'WAITING');
     const foodForward = noActiveFood ? 0.0 : (dirX * forward.x + dirZ * forward.z);
     const foodRight = noActiveFood ? 0.0 : (dirX * right.x + dirZ * right.z);
     const normDist = noActiveFood ? 0.0 : Math.tanh(distToFood / 5.0);

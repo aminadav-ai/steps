@@ -275,77 +275,39 @@ export class ActorCriticBrain {
     const psi = (210 * Math.PI) / 180;
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
-      // 14-DoF Open_Duck_Mini CPG Prior:
+      // 14-DoF Open_Duck_Mini Center-of-Mass Height Maximization Prior:
       // Leg 0 (Left):  [0]=hip_yaw, [1]=hip_roll, [2]=hip_pitch, [3]=knee_pitch, [4]=ankle_pitch
       // Leg 1 (Right): [5]=hip_yaw, [6]=hip_roll, [7]=hip_pitch, [8]=knee_pitch, [9]=ankle_pitch
       // Neck & Head:   [10]=neck_pitch, [11]=head_pitch, [12]=head_yaw, [13]=head_roll
       for (let leg = 0; leg < 2; leg++) {
         const base = leg * 5;
-        // True 180-degree (pi rad) alternating bipedal waddle gait: Left & Right legs step in anti-phase!
-        const delta = leg === 0 ? 0.0 : Math.PI;
-        const cosLift = Math.cos(delta);
-        const sinLift = Math.sin(delta);
-
-        const thetaStride = delta + psi;
-        const cosStride = Math.cos(thetaStride);
-        const sinStride = Math.sin(thetaStride);
-
-        const yawRow = (base + 0) * this.obsDim;
         const rollRow = (base + 1) * this.obsDim;
         const pitchRow = (base + 2) * this.obsDim;
         const kneeRow = (base + 3) * this.obsDim;
         const ankleRow = (base + 4) * this.obsDim;
 
-        // 1. knee_pitch (vertical step lift/extension in anti-phase)
-        this.actorSkip.W[kneeRow + 11] = 0.28 * cosLift;
-        this.actorSkip.W[kneeRow + 10] = -0.28 * sinLift;
+        // Active knee extension bias to maximize Center of Mass height + feedback on CoM height (obs[9])
+        this.actorSkip.b[base + 3] = 0.48;
+        this.actorSkip.W[kneeRow + 9] = -0.35; // When CoM height (obs[9]) is below target, push legs harder!
+        this.actorSkip.W[kneeRow + 5] = -0.18; // Damp vertical oscillation (obs[5] = velUp)
 
-        // 2. hip_roll (lateral pelvic waddle weight shift synchronized with stance/swing)
-        this.actorSkip.W[rollRow + 11] = 0.14 * cosLift;
-        this.actorSkip.W[rollRow + 10] = -0.14 * sinLift;
-
-        // 3. hip_pitch (forward-gated sagittal thigh swing + differential yaw steering)
-        this.actorSkip.W[pitchRow + 13] = 0.30 * cosStride;
-        this.actorSkip.W[pitchRow + 12] = -0.30 * sinStride;
-        const turnSign = leg === 0 ? -1.0 : +1.0;
-        this.actorSkip.W[pitchRow + 15] = turnSign * 0.26 * cosStride;
-        this.actorSkip.W[pitchRow + 14] = -turnSign * 0.26 * sinStride;
-
-        // 4. hip_yaw (active foot twist yaw steering when turning toward target)
-        this.actorSkip.W[yawRow + 15] = 0.18 * cosStride;
-        this.actorSkip.W[yawRow + 14] = -0.18 * sinStride;
-
-        // 5. ankle_pitch (synchronized toe clearance in swing & plantar push-off in stance + BNO055 IMU pitch stabilization)
-        this.actorSkip.W[ankleRow + 11] = 0.16 * cosLift;
-        this.actorSkip.W[ankleRow + 10] = -0.16 * sinLift;
-        this.actorSkip.W[ankleRow + 13] = 0.12 * cosStride;
-        this.actorSkip.W[ankleRow + 12] = -0.12 * sinStride;
-        this.actorSkip.W[ankleRow + 7] = 0.22;  // IMU pitchTilt -> ankle plantar/dorsi reflex
-        this.actorSkip.W[pitchRow + 7] = -0.18; // IMU pitchTilt -> hip step-under-CoM reflex
-        this.actorSkip.W[rollRow + 8] = -0.22;  // IMU rollTilt  -> hip_roll lateral balance reflex
+        // Sagittal & lateral balance feedback to keep CoM supported high above the feet
+        this.actorSkip.W[ankleRow + 7] = 0.24;  // pitchTilt -> ankle stabilization
+        this.actorSkip.W[pitchRow + 7] = -0.22; // pitchTilt -> hip balance
+        this.actorSkip.W[pitchRow + 3] = -0.18; // velForward damping
+        this.actorSkip.W[rollRow + 8] = -0.25;  // rollTilt -> hip_roll lateral stabilization
+        this.actorSkip.W[rollRow + 4] = -0.16;  // velRight damping
       }
 
       // Neck & Head Counterbalance (DoFs 10..13):
       const neckPitchRow = 10 * this.obsDim;
       const headPitchRow = 11 * this.obsDim;
-      const headYawRow = 12 * this.obsDim;
       const headRollRow = 13 * this.obsDim;
 
-      // Forward-gated pitch counterbalance + BNO055 IMU pitch/roll counterweight reflex
-      this.actorSkip.W[neckPitchRow + 13] = 0.16;
-      this.actorSkip.W[neckPitchRow + 12] = 0.10;
+      this.actorSkip.b[10] = 0.15;
+      this.actorSkip.b[11] = 0.10;
       this.actorSkip.W[neckPitchRow + 7] = 0.32;
-      this.actorSkip.W[headPitchRow + 13] = 0.12;
-      this.actorSkip.W[headPitchRow + 12] = -0.08;
       this.actorSkip.W[headPitchRow + 7] = 0.25;
-
-      // Head yaw pans toward food target during turning
-      this.actorSkip.W[headYawRow + 15] = 0.18;
-      this.actorSkip.W[headYawRow + 14] = 0.12;
-
-      // Head roll counter-balances pelvic waddle & IMU roll tilt
-      this.actorSkip.W[headRollRow + 11] = -0.14;
-      this.actorSkip.W[headRollRow + 10] = 0.14;
       this.actorSkip.W[headRollRow + 8] = -0.28;
 
       this.cpgTemplate = Float64Array.from(this.actorSkip.W);
@@ -442,37 +404,28 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Accumulates wave-envelope statistics (min/max/mean of up.y and torsoTop.y)
+   * Accumulates wave-envelope statistics (for Duck: Center of Mass height comY; for radial walkers: up.y)
    * and a causal decaying trajectory eligibility trace across all steps of the oscillation window.
    */
-  recordRightingStepTrace(obs, act, upY, topY = 0.18) {
+  recordRightingStepTrace(obs, act, metricY) {
     if (this._waveBaseCrestUpY === null) {
-      this.resetRightingWaveState(upY, topY);
+      this.resetRightingWaveState(metricY, 0);
     }
     this._winSteps += 1;
-    const isNewCrestUp = upY > this._winMaxUpY;
-    const isNewCrestTop = topY > this._winMaxTopY;
-    if (upY < this._winMinUpY) this._winMinUpY = upY;
-    if (upY > this._winMaxUpY) this._winMaxUpY = upY;
-    this._winSumUpY += upY;
+    const isNewCrest = metricY > this._winMaxUpY;
+    if (metricY < this._winMinUpY) this._winMinUpY = metricY;
+    if (metricY > this._winMaxUpY) this._winMaxUpY = metricY;
+    this._winSumUpY += metricY;
 
-    if (topY < this._winMinTopY) this._winMinTopY = topY;
-    if (topY > this._winMaxTopY) this._winMaxTopY = topY;
-    this._winSumTopY += topY;
-
-    const dUp = upY - this._winPrevUpY;
-    const dTop = (topY - this._winPrevTopY) * 2.5;
-    this._winPrevUpY = upY;
-    this._winPrevTopY = topY;
+    const dMetric = metricY - this._winPrevUpY;
+    this._winPrevUpY = metricY;
 
     if (this.morphologyKey === 'duck' && this.actDim === 14 && obs && act) {
       const lam = 0.82;
       const oneMinusLam = 1.0 - lam;
-      // Weight steps by upward body velocity + wave-crest breakthrough + uniform wave baseline
-      // Because _eligW holds a ~6-step decaying memory of (act_t * obs_t), actions taken during the
-      // wind-up trough (замах) are automatically credited when the body surges upward (dUp + dTop > 0)!
-      const vWave = dUp + dTop;
-      const wStep = 0.035 + 1.85 * Math.max(0, vWave) + ((isNewCrestUp || isNewCrestTop) ? 0.18 : 0.0);
+      // Weight steps purely by upward Center-of-Mass velocity (dComY * 5.0) + wave-crest breakthrough
+      const vCom = dMetric * 5.0;
+      const wStep = 0.035 + 2.2 * Math.max(0, vCom) + (isNewCrest ? 0.20 : 0.0);
       const hR = this._duckRightingLastH;
 
       for (let a = 0; a < this.actDim; a++) {
@@ -501,20 +454,20 @@ export class ActorCriticBrain {
     if (!this._duckRightingPerturbW || !this._duckRightingPerturbB) return;
     this._ensureDuckRightingLayers();
     this._duckRightingPerturbReady = true;
-    // Sample a dynamic wave hypothesis over body velocities (3..5), posture (6..9), CPG wave (10..11),
+    // Sample a dynamic wave hypothesis over body velocities (3..5), posture & CoM height (6..9), CPG wave (10..11),
     // and proprioception (16..obsDim-1), keeping static bias modest so tanh never freezes into a static pose!
     for (let a = 0; a < this.actDim; a++) {
       this._duckRightingPerturbB[a] = randn() * 0.12 * scale;
       const row = a * this.obsDim;
       for (let c = 0; c < this.obsDim; c++) {
         if (c < 3) {
-          this._duckRightingPerturbW[row + c] = 0.0; // Ignore food position while trying to stand up
+          this._duckRightingPerturbW[row + c] = 0.0; // Ignore food position
         } else if (c <= 9) {
-          this._duckRightingPerturbW[row + c] = randn() * 0.22 * scale; // Body 3D velocity & posture feedback
+          this._duckRightingPerturbW[row + c] = randn() * 0.22 * scale; // Body 3D velocity & CoM height feedback
         } else if (c <= 11) {
           this._duckRightingPerturbW[row + c] = randn() * 0.34 * scale; // Strong CPG wave rhythm (sin/cos) for rocking
         } else if (c <= 15) {
-          this._duckRightingPerturbW[row + c] = 0.0; // Zero when overturned (food gates are 0)
+          this._duckRightingPerturbW[row + c] = 0.0; // Food gates are 0
         } else {
           this._duckRightingPerturbW[row + c] = randn() * 0.09 * scale; // Joint proprioception & foot contacts
         }
@@ -529,12 +482,11 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Forward pass of the Self-Righting Sub-Network when the walker is overturned (up.y < 0.35).
-   * For the 14-DoF Duck, zero hardcoded formulas or scripted hints are used:
-   * a 2-layer non-linear neural network (rightingH1 -> tanh -> rightingOut + rightingLayer skip)
-   * with per-attempt parameter exploration must discover how to roll onto its feet and hold upright balance.
+   * Forward pass of the Self-Righting Sub-Network.
+   * For the 14-DoF Duck, optimizes purely Center of Mass height (comY):
+   * uses non-linear wave exploration when comY is low, and smoothly blends into the standing CoM policy as comY rises!
    */
-  forwardRightingReflex(obs, dt = 0.05, recordVis = true) {
+  forwardRightingReflex(obs, dt = 0.05, recordVis = true, currentComY = 0.15) {
     this.rightingPhase = (this.rightingPhase + dt * 6.8) % (Math.PI * 2);
     const zRight = new Float64Array(this.actDim);
     this.rightingLayer.forward(obs, zRight);
@@ -560,6 +512,10 @@ export class ActorCriticBrain {
       const zOut = new Float64Array(this.actDim);
       this.rightingOut.forward(hR, zOut);
 
+      // Smoothly blend wave-rocking exploration with the tall-standing actor policy as CoM height rises above 0.185 m
+      const waveWeight = Math.max(0.15, Math.min(1.0, (0.222 - currentComY) / 0.042));
+      const { mu: standMu } = this.forwardActor(obs, false, null);
+
       for (let a = 0; a < this.actDim; a++) {
         const row = a * this.obsDim;
         let pSum = this._duckRightingPerturbB ? this._duckRightingPerturbB[a] : 0.0;
@@ -574,7 +530,8 @@ export class ActorCriticBrain {
             pSum += this._duckRightingPerturbOutW[outRow + h] * hR[h];
           }
         }
-        mu[a] = Math.tanh(zRight[a] + zOut[a] + pSum);
+        const waveAct = Math.tanh(zRight[a] + zOut[a] + pSum);
+        mu[a] = waveWeight * waveAct + (1.0 - waveWeight) * standMu[a];
       }
     } else {
       // Keep roll direction consistent throughout the attempt for radial Tripod/Quadruped walkers
@@ -641,18 +598,17 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Updates the Self-Righting Sub-Network parameters at the end of an attempt on the back/side.
-   * For the Duck, evaluates the WAVE ENVELOPE (growth of wave crests maxUpY/maxTopY, wave mean, and rocking span)
-   * and updates weights via the full-window trajectory eligibility trace (_traceW, _traceOutW)
-   * so oscillatory / wave-like rocking is rewarded without being penalized by downward wind-ups (замахи).
+   * Updates the Self-Righting Sub-Network parameters at the end of a 24-step window.
+   * For the Duck, evaluates ONLY the Center of Mass height (comY) wave envelope
+   * (crestGainCom, meanGainCom, waveSpanCom) — torso tilt (up.y) and torsoTop.y are completely ignored!
    */
   updateRightingReflex({
     startUpY,
     maxUpY,
     endUpY,
-    startTopY = 0.18,
-    maxTopY = 0.18,
-    endTopY = 0.18,
+    startComY = 0.15,
+    maxComY = 0.15,
+    endComY = 0.15,
     contactSteps,
     lastObs,
     lastAct
@@ -664,74 +620,52 @@ export class ActorCriticBrain {
       this._ensureDuckRightingLayers();
 
       const steps = Math.max(1, this._winSteps || 1);
-      const minUpY = Number.isFinite(this._winMinUpY) ? Math.min(this._winMinUpY, startUpY, endUpY) : Math.min(startUpY, endUpY);
-      const meanUpY = this._winSteps > 0 ? (this._winSumUpY / steps) : 0.5 * (startUpY + endUpY);
-      const minTopY = Number.isFinite(this._winMinTopY) ? Math.min(this._winMinTopY, startTopY, endTopY) : Math.min(startTopY, endTopY);
-      const meanTopY = this._winSteps > 0 ? (this._winSumTopY / steps) : 0.5 * (startTopY + endTopY);
+      const minComY = Number.isFinite(this._winMinUpY) ? Math.min(this._winMinUpY, startComY, endComY) : Math.min(startComY, endComY);
+      const meanComY = this._winSteps > 0 ? (this._winSumUpY / steps) : 0.5 * (startComY + endComY);
 
-      const waveSpanUp = Math.max(0, maxUpY - minUpY);
-      const waveSpanTop = Math.max(0, maxTopY - minTopY) * 2.5;
+      const waveSpanCom = Math.max(0, maxComY - minComY) * 5.0;
+      const baseCrestCom = this._waveBaseCrestUpY !== null ? this._waveBaseCrestUpY : startComY;
+      const baseMeanCom = this._waveBaseMeanUpY !== null ? this._waveBaseMeanUpY : startComY;
+      const baseSpanCom = this._waveBaseSpanUpY || 0;
 
-      const baseCrestUp = this._waveBaseCrestUpY !== null ? this._waveBaseCrestUpY : startUpY;
-      const baseMeanUp = this._waveBaseMeanUpY !== null ? this._waveBaseMeanUpY : startUpY;
-      const baseSpanUp = this._waveBaseSpanUpY || 0;
-      const baseCrestTop = this._waveBaseCrestTopY !== null ? this._waveBaseCrestTopY : startTopY;
-      const baseMeanTop = this._waveBaseMeanTopY !== null ? this._waveBaseMeanTopY : startTopY;
-      const baseSpanTop = this._waveBaseSpanTopY || 0;
+      // 1. Wave-Envelope Gains purely on Center of Mass height (comY):
+      const crestGainCom = (maxComY - baseCrestCom) * 5.0;
+      const meanGainCom = (meanComY - baseMeanCom) * 5.0;
+      const spanGainCom = waveSpanCom - baseSpanCom;
 
-      // 1. Wave-Envelope Gains (independent of whether the window ended on a downward wind-up / замах!):
-      const crestGainUp = maxUpY - baseCrestUp;
-      const meanGainUp = meanUpY - baseMeanUp;
-      const crestGainTop = (maxTopY - baseCrestTop) * 2.5;
-      const meanGainTop = (meanTopY - baseMeanTop) * 2.5;
-      const spanGain = (waveSpanUp - baseSpanUp) + 0.5 * (waveSpanTop - baseSpanTop);
-
-      // Reward expanding wave amplitude (active rocking) when still low on the ground,
-      // but ONLY when the wave is expanding or advancing its crest (never for a stagnant standing wave!)
-      const rockingBonus = maxUpY < 0.55
-        ? 0.45 * Math.max(0, spanGain) + (crestGainUp > 0.01 || crestGainTop > 0.01 ? 0.20 * Math.min(0.45, waveSpanUp) : 0.0)
+      // Reward expanding CoM wave amplitude when still low on the floor (maxComY < 0.20 m)
+      const rockingBonus = maxComY < 0.20
+        ? 0.45 * Math.max(0, spanGainCom) + (crestGainCom > 0.01 ? 0.25 * Math.min(0.45, waveSpanCom) : 0.0)
         : 0.0;
 
-      const uprightBonus = (maxUpY > 0.48 && maxTopY > 0.28)
-        ? (maxUpY - 0.48) * 0.85 + (maxTopY - 0.28) * 1.8
+      const highComBonus = maxComY > 0.195
+        ? (maxComY - 0.195) * 4.5
         : 0.0;
 
       const attemptScore =
-        1.20 * crestGainUp +
-        0.85 * crestGainTop +
-        0.65 * meanGainUp +
-        0.55 * meanGainTop +
+        1.35 * crestGainCom +
+        0.85 * meanGainCom +
         rockingBonus +
-        uprightBonus;
+        highComBonus;
 
-      // Update wave-envelope baselines:
-      // Ratchet up quickly when the wave breaks a new crest so a standing wave cannot farm reward twice,
-      // and relax gently when a new exploratory hypothesis starts from a lower level.
-      const alphaCrestUp = maxUpY >= baseCrestUp ? 0.65 : 0.22;
-      const alphaCrestTop = maxTopY >= baseCrestTop ? 0.65 : 0.22;
-      this._waveBaseCrestUpY = (1 - alphaCrestUp) * baseCrestUp + alphaCrestUp * maxUpY;
-      this._waveBaseMeanUpY = 0.60 * baseMeanUp + 0.40 * meanUpY;
-      this._waveBaseSpanUpY = 0.55 * baseSpanUp + 0.45 * waveSpanUp;
-      this._waveBaseCrestTopY = (1 - alphaCrestTop) * baseCrestTop + alphaCrestTop * maxTopY;
-      this._waveBaseMeanTopY = 0.60 * baseMeanTop + 0.40 * meanTopY;
-      this._waveBaseSpanTopY = 0.55 * baseSpanTop + 0.45 * waveSpanTop;
+      // Update CoM wave-envelope baselines
+      const alphaCrestCom = maxComY >= baseCrestCom ? 0.65 : 0.22;
+      this._waveBaseCrestUpY = (1 - alphaCrestCom) * baseCrestCom + alphaCrestCom * maxComY;
+      this._waveBaseMeanUpY = 0.60 * baseMeanCom + 0.40 * meanComY;
+      this._waveBaseSpanUpY = 0.55 * baseSpanCom + 0.45 * waveSpanCom;
 
-      const combinedPeak = Math.max(
-        Math.max(0, crestGainUp) + 0.35 * waveSpanUp,
-        0.5 * (Math.max(0, crestGainUp) + Math.max(0, crestGainTop) + 0.35 * waveSpanUp)
-      );
+      const combinedPeak = Math.max(0, (maxComY - 0.145) * 8.0) + Math.max(0, crestGainCom);
       if (combinedPeak > this.duckRightingBestProgress) {
         this.duckRightingBestProgress = combinedPeak;
       }
 
-      // 2. Reinforce neural perturbation & trajectory eligibility trace when the wave envelope grew
-      const stepScale = attemptScore > 0.018
+      // 2. Reinforce neural perturbation & trajectory eligibility trace when the CoM wave envelope grew
+      const stepScale = attemptScore > 0.015
         ? Math.min(0.45, 0.28 * attemptScore)
-        : (attemptScore < -0.06 ? Math.max(-0.12, 0.14 * attemptScore) : 0.0);
+        : (attemptScore < -0.05 ? Math.max(-0.12, 0.14 * attemptScore) : 0.0);
 
       if (stepScale !== 0.0 && this._duckRightingPerturbW && this._duckRightingPerturbB) {
         for (let a = 0; a < this.actDim; a++) {
-          // Clamp static bias tightly to [-0.35, 0.35] so static offset never overwhelms CPG/posture oscillations
           this.rightingLayer.b[a] = Math.max(
             -0.35,
             Math.min(0.35, this.rightingLayer.b[a] * 0.96 + stepScale * this._duckRightingPerturbB[a])
@@ -755,10 +689,9 @@ export class ActorCriticBrain {
         }
       }
 
-      // 3. Apply Trajectory Eligibility Trace (_traceW, _traceOutW) accumulated over the ENTIRE wave (wind-up + push),
-      // rather than reinforcing only the static 24th frame!
+      // 3. Apply Trajectory Eligibility Trace (_traceW, _traceOutW) accumulated over the CoM wave
       const waveProgress = Math.max(0, attemptScore);
-      if (waveProgress > 0.015 && this._traceW) {
+      if (waveProgress > 0.012 && this._traceW) {
         const lrTrace = 0.028 * Math.min(1.5, waveProgress);
         for (let a = 0; a < this.actDim; a++) {
           const row = a * this.obsDim;
@@ -782,23 +715,21 @@ export class ActorCriticBrain {
         }
       }
 
-      // Save last wave diagnostics for logging in rightingHistory
       this.lastRightingWaveMetrics = {
-        minUpY: Number(minUpY.toFixed(3)),
-        meanUpY: Number(meanUpY.toFixed(3)),
-        waveSpanUp: Number(waveSpanUp.toFixed(3)),
-        crestGainUp: Number(crestGainUp.toFixed(3)),
+        startComY: Number(startComY.toFixed(3)),
+        minComY: Number(minComY.toFixed(3)),
+        maxComY: Number(maxComY.toFixed(3)),
+        meanComY: Number(meanComY.toFixed(3)),
+        endComY: Number(endComY.toFixed(3)),
+        waveSpanCom: Number(waveSpanCom.toFixed(3)),
+        crestGainCom: Number(crestGainCom.toFixed(3)),
         attemptScore: Number(attemptScore.toFixed(3))
       };
 
-      // 4. Keep working wave hypothesis if the wave envelope is growing (crestGainUp > 0.025, crestGainTop > 0.025,
-      // or spanGain > 0.04 while rocking), even if endUpY dipped on a wind-up!
-      // If the wave stagnates for 2 windows in a row, sample a fresh wave hypothesis.
       const isWaveGrowing =
-        crestGainUp > 0.025 ||
-        crestGainTop > 0.025 ||
-        (spanGain > 0.045 && waveSpanUp > 0.08) ||
-        (maxUpY >= 0.48 && maxTopY >= 0.28);
+        crestGainCom > 0.02 ||
+        (spanGainCom > 0.04 && waveSpanCom > 0.06) ||
+        maxComY >= 0.205;
 
       if (isWaveGrowing) {
         this._waveStagnantCount = 0;
@@ -813,7 +744,7 @@ export class ActorCriticBrain {
         }
       }
 
-      this._resetRightingWindow(endUpY, endTopY);
+      this._resetRightingWindow(endComY, 0);
       return this.getRightingSkillPct();
     }
 
@@ -1137,9 +1068,9 @@ export class PPOTrainer {
     this.modeBeforeOverturn = 'LEARNING_WALK';
 
     // Homeostatic Meta-Plasticity Sense ("Чутьё нейросети: нужно ли дообучаться или нет")
-    // Default ambition = 'bound' ("Бодрый скачок": trains energetic bounding gallop up to ~0.34+ m/s)
+    const isDuckBrain = brain.morphologyKey === 'duck';
     this.maxCpgGain = 1.95;
-    this.minFoodsToConsolidate = 2;
+    this.minFoodsToConsolidate = isDuckBrain ? 0 : 2;
     this.alwaysLearn = false;
     this.manualFreeze = false;
 
@@ -1147,13 +1078,17 @@ export class PPOTrainer {
       mode: 'LEARNING_WALK', // 'LEARNING_WALK' | 'CONSOLIDATED' | 'LEARNING_RIGHTING'
       ambitionPreset: 'min',
       isLearningActive: true,
-      modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ: БАЗОВЫЙ ШАГ К ЦЕЛИ',
-      reasonText: 'Формирование стабильного базового навыка ходьбы и наведения на цель',
-      competenceEMA: 0.04,
-      targetCompetence: 0.18,
-      relearnThreshold: 0.125,
+      modeTitle: isDuckBrain
+        ? '🟢 АКТИВНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ'
+        : '🟢 АКТИВНОЕ ОБУЧЕНИЕ: БАЗОВЫЙ ШАГ К ЦЕЛИ',
+      reasonText: isDuckBrain
+        ? 'Единая задача: максимизация высоты центра масс (ЦМ)'
+        : 'Формирование стабильного базового навыка ходьбы и наведения на цель',
+      competenceEMA: isDuckBrain ? 0.22 : 0.04,
+      targetCompetence: isDuckBrain ? 0.215 : 0.18,
+      relearnThreshold: isDuckBrain ? 0.190 : 0.125,
       surpriseEMA: 0.25,
-      needToLearnPct: 88,
+      needToLearnPct: isDuckBrain ? 35 : 88,
       stableEpochsCount: 0,
       lowVelEpochsCount: 0,
       stallStepsCount: 0,
@@ -1215,8 +1150,59 @@ export class PPOTrainer {
    */
   setLearningAmbition(presetOrTarget) {
     this.manualFreeze = false;
-    const prevTarget = this.metaState.targetCompetence || 0.18;
+    const isDuckBrain = this.brain.morphologyKey === 'duck';
+    const prevTarget = this.metaState.targetCompetence || (isDuckBrain ? 0.215 : 0.18);
     const prevPreset = this.metaState.ambitionPreset || 'min';
+
+    if (isDuckBrain) {
+      this.minFoodsToConsolidate = 0;
+      if (presetOrTarget === 'min') {
+        this.metaState.ambitionPreset = 'min';
+        this.metaState.targetCompetence = 0.215;
+        this.metaState.relearnThreshold = 0.190;
+        this.alwaysLearn = false;
+      } else if (presetOrTarget === 'bound') {
+        this.metaState.ambitionPreset = 'bound';
+        this.metaState.targetCompetence = 0.230;
+        this.metaState.relearnThreshold = 0.195;
+        this.alwaysLearn = false;
+      } else if (presetOrTarget === 'turbo') {
+        this.metaState.ambitionPreset = 'turbo';
+        this.metaState.targetCompetence = 0.245;
+        this.metaState.relearnThreshold = 0.205;
+        this.alwaysLearn = false;
+      } else if (presetOrTarget === 'infinite') {
+        this.metaState.ambitionPreset = 'infinite';
+        this.metaState.targetCompetence = 0.280;
+        this.metaState.relearnThreshold = 0.220;
+        this.alwaysLearn = true;
+      } else if (typeof presetOrTarget === 'number') {
+        const t = Math.max(0.19, Math.min(0.28, presetOrTarget));
+        this.metaState.ambitionPreset = 'custom';
+        this.metaState.targetCompetence = Number(t.toFixed(3));
+        this.metaState.relearnThreshold = Number((t - 0.025).toFixed(3));
+        this.alwaysLearn = t >= 0.275;
+      }
+      if (this.metaState.mode !== 'LEARNING_RIGHTING') {
+        if (this.alwaysLearn || this.metaState.competenceEMA < this.metaState.targetCompetence) {
+          this.metaState.mode = 'LEARNING_WALK';
+          this.metaState.isLearningActive = true;
+          this.metaState.stableEpochsCount = 0;
+          this.metaState.needToLearnPct = this.alwaysLearn ? 100 : 65;
+          this.metaState.modeTitle = this.alwaysLearn
+            ? '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ'
+            : '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ПОДЪЁМ ЦЕНТРА МАСС';
+          this.metaState.reasonText = `Утка стремится поднять и удерживать ЦМ ≥ ${this.metaState.targetCompetence.toFixed(2)} м`;
+        } else {
+          this.metaState.mode = 'CONSOLIDATED';
+          this.metaState.isLearningActive = false;
+          this.metaState.needToLearnPct = 0;
+          this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
+          this.metaState.reasonText = `Высота ЦМ (${this.metaState.competenceEMA.toFixed(2)} м) ≥ порога ${this.metaState.targetCompetence.toFixed(2)} м — обучение остановлено`;
+        }
+      }
+      return;
+    }
 
     if (presetOrTarget === 'min') {
       this.metaState.ambitionPreset = 'min';
@@ -1319,7 +1305,9 @@ export class PPOTrainer {
       this.paramSigma = Math.max(this.paramSigma, 0.085);
       this._sampleWorkerParamNoise();
       this.metaState.modeTitle = '🟢 АКТИВНОЕ ДООБУЧЕНИЕ (ВКЛЮЧЕНО ВРУЧНУЮ)';
-      this.metaState.reasonText = 'Пользователь вручную запустил процесс дообучения походки';
+      this.metaState.reasonText = this.brain.morphologyKey === 'duck'
+        ? 'Пользователь вручную запустил дообучение максимизации высоты центра масс'
+        : 'Пользователь вручную запустил процесс дообучения походки';
     } else {
       this.manualFreeze = true;
       this.alwaysLearn = false;
@@ -1327,7 +1315,7 @@ export class PPOTrainer {
       this.metaState.isLearningActive = false;
       this.metaState.needToLearnPct = 0;
       this.metaState.modeTitle = '🔒 ОБУЧЕНИЕ ЗАМОРОЖЕНО ВРУЧНУЮ';
-      this.metaState.reasonText = 'Веса нейросети зафиксированы пользователем — шагоход идёт на текущем навыке';
+      this.metaState.reasonText = 'Веса нейросети зафиксированы пользователем — шагоход действует на текущем навыке';
     }
   }
 
@@ -1335,6 +1323,7 @@ export class PPOTrainer {
     const dim = this.brain.actorSkip.W.length;
     this.workerSkipPerturbs = [];
     const tpl = this.brain.cpgTemplate;
+    const isDuckBrain = this.brain.morphologyKey === 'duck';
 
     for (let w = 0; w < this.numWorkers; w++) {
       // If more than 1 worker, worker 0 is clean leader; if single walker (numWorkers === 1),
@@ -1344,6 +1333,18 @@ export class PPOTrainer {
         continue;
       }
       const p = new Float64Array(dim);
+      if (isDuckBrain) {
+        // For the Duck, only perturb postural balance & leg extension channels (no forward-walking CPG drive)
+        for (let a = 0; a < this.brain.actDim; a++) {
+          const row = a * this.brain.obsDim;
+          for (let c = 3; c < this.brain.obsDim; c++) {
+            if (c >= 10 && c <= 15) continue;
+            p[row + c] = randn() * this.paramSigma * 0.25;
+          }
+        }
+        this.workerSkipPerturbs.push(p);
+        continue;
+      }
       // Coherent low-dimensional CPG resonance gain exploration + synaptic fine-tuning:
       // Biases exploration toward constructive stride/lift/turn amplification so a single walker learns rapidly
       const dGainLift = (Math.random() * 1.15 - 0.35) * this.paramSigma;
@@ -1386,7 +1387,15 @@ export class PPOTrainer {
     const c0 = creatures[0];
     const isDuck0 = c0.morphologyKey === 'duck';
     const upY0 = c0.getTorsoFrame().up.y;
-    const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < (isDuck0 ? 0.25 : 0.22);
+    const comY0 = c0.body.getCenterOfMass().y;
+    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : comY0;
+
+    // For the Duck, only Center of Mass height (comY0) determines whether it has fallen (< 0.195 m)
+    // or is coping with the task (>= targetCompetence ~0.215 m). Torso tilt and upper-torso height are ignored!
+    const isPhysicallyTiltedOnBack =
+      !c0.isGrabbed &&
+      !(c0.postThrowTimer > 0) &&
+      (isDuck0 ? (comY0 < (this.metaState.relearnThreshold || 0.190) && !this.manualFreeze) : (upY0 < 0.22));
     const confirmDelay = isDuck0 ? 3 : (this.overturnConfirmDelay || 20);
 
     if (!this.wasOverturned) {
@@ -1410,19 +1419,10 @@ export class PPOTrainer {
       }
     }
 
-    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : c0.body.getCenterOfMass().y;
-    if (this.wasOverturned && isDuck0) {
-      if (upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg()) {
-        this.uprightHoldSteps = (this.uprightHoldSteps || 0) + 1;
-      } else if (upY0 < 0.78 || topY0 < 0.28) {
-        this.uprightHoldSteps = 0;
-      }
-    } else {
-      this.uprightHoldSteps = 0;
-    }
-
+    this.uprightHoldSteps = 0;
+    const targetCom0 = this.metaState.targetCompetence || 0.215;
     const isRecoveredUpright = isDuck0
-      ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg())
+      ? (comY0 >= targetCom0)
       : (upY0 >= 0.65 && !c0.hasInvertedLeg());
 
     const isOverturned0 =
@@ -1431,7 +1431,7 @@ export class PPOTrainer {
       ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= confirmDelay) ||
         (this.wasOverturned && !isRecoveredUpright));
 
-    // 1. Check if main walker is confirmed overturned on its back/side -> engage Self-Righting Network!
+    // 1. Check if main walker is confirmed overturned / low-CoM -> engage wave-envelope CoM maximization / righting!
     if (isOverturned0) {
       if (!this.wasOverturned) {
         this.wasOverturned = true;
@@ -1443,11 +1443,13 @@ export class PPOTrainer {
         this.rightingMaxUpY = upY0;
         this.rightingStartTopY = topY0;
         this.rightingMaxTopY = topY0;
+        this.rightingStartComY = comY0;
+        this.rightingMaxComY = comY0;
         this.rightingContactSteps = 0;
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
         this.rightingMinFootClearanceY = Infinity;
-        this.brain.resetRightingWaveState(upY0, topY0);
+        this.brain.resetRightingWaveState(isDuck0 ? comY0 : upY0, topY0);
       }
 
       this.metaState.mode = 'LEARNING_RIGHTING';
@@ -1455,7 +1457,9 @@ export class PPOTrainer {
       this.metaState.needToLearnPct = 100;
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
-      this.metaState.modeTitle = '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
+      this.metaState.modeTitle = isDuck0
+        ? '🔄 ОБУЧЕНИЕ: ПОДЪЁМ ЦЕНТРА МАСС (ЦМ)'
+        : '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
       // Rest pause between righting attempts (only for radial spiders; disabled for the Duck so we never interrupt its neural network!)
@@ -1465,26 +1469,26 @@ export class PPOTrainer {
         c0.lastAction = calmAct;
         c0.applyActionVector(calmAct, false);
         this.metaState.reasonText = `Передышка на спине перед попыткой #${this.metaState.rightingAttempts} (гашение колебаний, навык ${this.metaState.rightingSkillPct}%)`;
-        this._pendingStep = { isRightingStep: true, isRestPause: true, obs, act: calmAct, upY: upY0 };
+        this._pendingStep = { isRightingStep: true, isRestPause: true, obs, act: calmAct, upY: upY0, comY: comY0 };
         return;
       }
 
-      this.metaState.reasonText = isDuck0 && (this.uprightHoldSteps || 0) > 0
-        ? `Удерживает вертикальный баланс стоя (${this.uprightHoldSteps}/8, up.y=${upY0.toFixed(2)}) — попытка подняться #${this.metaState.rightingAttempts}`
+      this.metaState.reasonText = isDuck0
+        ? `Максимизация высоты центра масс (ЦМ=${comY0.toFixed(3)} м → цель ${targetCom0.toFixed(3)} м) — эпоха подъёма #${this.metaState.rightingAttempts}`
         : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка подняться #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
 
-      const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
+      const muRight = this.brain.forwardRightingReflex(obs, 0.05, true, comY0);
       c0.lastState = obs;
       c0.lastAction = muRight;
-      c0.applyActionVector(muRight, upY0 < 0.42);
+      c0.applyActionVector(muRight, isDuck0 ? (comY0 < 0.205) : (upY0 < 0.42));
 
-      this._pendingStep = { isRightingStep: true, isRestPause: false, obs, act: muRight, upY: upY0 };
+      this._pendingStep = { isRightingStep: true, isRestPause: false, obs, act: muRight, upY: upY0, comY: comY0 };
       return;
     }
 
-    // 2. If walker just recovered from overturned back onto its feet!
+    // 2. If walker just recovered its target Center of Mass / upright posture!
     if (this.wasOverturned && isRecoveredUpright) {
-      this._completeRightingRecovery();
+      this._completeRightingRecovery(comY0);
     }
 
     const isTrainingWalk = this.metaState.mode === 'LEARNING_WALK';
@@ -1509,7 +1513,7 @@ export class PPOTrainer {
       for (let a = 0; a < this.brain.actDim; a++) {
         const std = Math.exp(this.brain.logStd[a]);
         ou[a] = 0.78 * ou[a] + Math.sqrt(1 - 0.78 * 0.78) * randn();
-        const noiseScale = !isTrainingWalk ? 0.015 : (this.numWorkers === 1 ? 0.14 : (w === 0 ? 0.02 : 0.32));
+        const noiseScale = !isTrainingWalk ? 0.015 : (isDuck0 ? 0.05 : (this.numWorkers === 1 ? 0.14 : (w === 0 ? 0.02 : 0.32)));
         const raw = workerMu[a] + ou[a] * std * noiseScale;
         act[a] = Math.max(-1, Math.min(1, raw));
       }
@@ -1527,7 +1531,7 @@ export class PPOTrainer {
     this._pendingStep = { isRightingStep: false, stepObs, stepAct, stepLogProb, stepVal };
   }
 
-  _completeRightingRecovery() {
+  _completeRightingRecovery(recoveredComY = null) {
     this.wasOverturned = false;
     this.uprightHoldSteps = 0;
     this.overturnConfirmSteps = 0;
@@ -1538,6 +1542,26 @@ export class PPOTrainer {
     this.brain.rightingGain = Math.min(1.0, Math.max(0.88, this.brain.rightingGain));
     this.brain.rightingAsym = Math.min(1.0, Math.max(0.85, this.brain.rightingAsym));
     this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
+
+    if (this.brain.morphologyKey === 'duck') {
+      const target = this.metaState.targetCompetence || 0.215;
+      if (typeof recoveredComY === 'number') {
+        this.metaState.competenceEMA = Number(Math.max(this.metaState.competenceEMA, recoveredComY).toFixed(3));
+      }
+      if (!this.alwaysLearn) {
+        this.metaState.mode = 'CONSOLIDATED';
+        this.metaState.isLearningActive = false;
+        this.metaState.needToLearnPct = 0;
+        this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
+        this.metaState.reasonText = `Утка подняла центр масс выше ${target.toFixed(2)} м (подъёмов: ${this.metaState.rightingSuccesses}) — обучение остановлено`;
+      } else {
+        this.metaState.mode = 'LEARNING_WALK';
+        this.metaState.isLearningActive = true;
+        this.metaState.modeTitle = '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ';
+        this.metaState.reasonText = `Утка подняла центр масс (подъёмов: ${this.metaState.rightingSuccesses}) и продолжает максимизировать ЦМ`;
+      }
+      return;
+    }
 
     // Restore previous walking mode (CONSOLIDATED or LEARNING_WALK)
     this.metaState.mode = this.modeBeforeOverturn || 'LEARNING_WALK';
@@ -1556,21 +1580,23 @@ export class PPOTrainer {
     if (!this._pendingStep) return null;
 
     const c0 = creatures[0];
+    const isDuck0 = c0.morphologyKey === 'duck';
     const upY0 = c0.getTorsoFrame().up.y;
-    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : c0.body.getCenterOfMass().y;
+    const comY0 = c0.body.getCenterOfMass().y;
+    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : comY0;
 
     if (this._pendingStep.isOverturnPause) {
       return null;
     }
 
-    // Handle Self-Righting Learning step when overturned on back/side:
+    // Handle Self-Righting / Low-CoM Learning step:
     if (this._pendingStep.isRightingStep) {
-      const isDuck0 = c0.morphologyKey === 'duck';
+      const targetCom0 = this.metaState.targetCompetence || 0.215;
       const canCompleteNow = isDuck0
-        ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg())
+        ? (comY0 >= targetCom0)
         : (upY0 >= 0.65 && !c0.hasInvertedLeg());
       if (this.wasOverturned && canCompleteNow) {
-        this._completeRightingRecovery();
+        this._completeRightingRecovery(comY0);
         return null;
       }
 
@@ -1589,7 +1615,12 @@ export class PPOTrainer {
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       if (topY0 > (this.rightingMaxTopY ?? topY0)) this.rightingMaxTopY = topY0;
-      this.brain.recordRightingStepTrace(this._pendingStep.obs, this._pendingStep.act, upY0, topY0);
+      if (comY0 > (this.rightingMaxComY ?? comY0)) this.rightingMaxComY = comY0;
+      this.brain.recordRightingStepTrace(
+        this._pendingStep.obs,
+        this._pendingStep.act,
+        isDuck0 ? comY0 : upY0
+      );
       const anyContact = c0.footNodes.some(f => f.inContact) ||
         (c0.webbedFeet ? c0.webbedFeet.some(wf => wf.toeInner.inContact || wf.toeOuter.inContact) : false);
       if (anyContact) this.rightingContactSteps += 1;
@@ -1620,7 +1651,12 @@ export class PPOTrainer {
       if (this.rightingStepCursor >= horizon) {
         const startTopY = this.rightingStartTopY ?? topY0;
         const maxTopY = this.rightingMaxTopY ?? topY0;
+        const startComY = this.rightingStartComY ?? comY0;
+        const maxComY = this.rightingMaxComY ?? comY0;
         const skillPct = this.brain.updateRightingReflex({
+          startComY,
+          maxComY,
+          endComY: comY0,
           startUpY: this.rightingStartUpY,
           maxUpY: this.rightingMaxUpY,
           endUpY: upY0,
@@ -1634,6 +1670,10 @@ export class PPOTrainer {
         if (!this.rightingHistory) this.rightingHistory = [];
         this.rightingHistory.push({
           attempt: this.brain.rightingAttempts,
+          startComY: Number(startComY.toFixed(3)),
+          maxComY: Number(maxComY.toFixed(3)),
+          endComY: Number(comY0.toFixed(3)),
+          deltaComY: Number((comY0 - startComY).toFixed(3)),
           startUpY: Number(this.rightingStartUpY.toFixed(3)),
           maxUpY: Number(this.rightingMaxUpY.toFixed(3)),
           endUpY: Number(upY0.toFixed(3)),
@@ -1659,6 +1699,8 @@ export class PPOTrainer {
         this.rightingMaxUpY = upY0;
         this.rightingStartTopY = topY0;
         this.rightingMaxTopY = topY0;
+        this.rightingStartComY = comY0;
+        this.rightingMaxComY = comY0;
         this.rightingContactSteps = 0;
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
@@ -1683,14 +1725,11 @@ export class PPOTrainer {
     // If walker is held by user's mouse, in post-throw air flight, in the pause between food orbs,
     // or lying on its back after the terminal crash step (overturnConfirmSteps > 1),
     // do not push non-locomotion steps into the walking rollout buffer!
-    // (Note: overturnConfirmSteps === 1 IS pushed with dones[0] = 1 so PPO learns from self-inflicted falls!)
     if (
       c0.isGrabbed ||
       c0.postThrowTimer > 0 ||
-      (upY0 < 0.22 && (this.overturnConfirmSteps || 0) > 1) ||
-      c0.foodState === 'DISSOLVING' ||
-      c0.foodState === 'WAITING' ||
-      c0.foodState === 'DROPPING'
+      (!isDuck0 && upY0 < 0.22 && (this.overturnConfirmSteps || 0) > 1) ||
+      (!isDuck0 && (c0.foodState === 'DISSOLVING' || c0.foodState === 'WAITING' || c0.foodState === 'DROPPING'))
     ) {
       this.metaState.stallStepsCount = 0;
       return null;
@@ -1736,8 +1775,57 @@ export class PPOTrainer {
    */
   _evaluateMetaPlasticity(creatures, epochLocomotionScore, meanTdSurprise) {
     const c0 = creatures[0];
-    // Compute effective goal-directed competence grounded in physical velocity toward food (m/s)
+    const isDuck0 = c0.morphologyKey === 'duck';
     const rolloutLen = Math.max(1, this.bufObs.length || this.rolloutSteps);
+
+    if (isDuck0) {
+      const meanRolloutComY = (this.epochVelSum || 0) / rolloutLen;
+      const currentComY = c0.smoothedComY || c0.body.getCenterOfMass().y;
+      const approxComY = 0.6 * currentComY + 0.4 * (meanRolloutComY > 0 ? meanRolloutComY : currentComY);
+      this.metaState.competenceEMA = Number(
+        (0.65 * this.metaState.competenceEMA + 0.35 * approxComY).toFixed(3)
+      );
+      this.metaState.surpriseEMA = Number(
+        (0.75 * this.metaState.surpriseEMA + 0.25 * meanTdSurprise).toFixed(3)
+      );
+      const comp = this.metaState.competenceEMA;
+      const target = this.metaState.targetCompetence || 0.215;
+
+      if (this.minTrainEpochsRemaining > 0) {
+        this.minTrainEpochsRemaining -= 1;
+      }
+      if (this.manualFreeze) {
+        this.metaState.mode = 'CONSOLIDATED';
+        this.metaState.isLearningActive = false;
+        this.metaState.needToLearnPct = 0;
+        return;
+      }
+      if (this.alwaysLearn) {
+        this.metaState.mode = 'LEARNING_WALK';
+        this.metaState.isLearningActive = true;
+        this.metaState.needToLearnPct = 100;
+        this.metaState.modeTitle = '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ';
+        this.metaState.reasonText = `Непрерывная максимизация высоты центра масс (ЦМ=${comp.toFixed(2)} м)`;
+        return;
+      }
+      if (comp >= target && !(this.minTrainEpochsRemaining > 0)) {
+        this.metaState.mode = 'CONSOLIDATED';
+        this.metaState.isLearningActive = false;
+        this.metaState.stableEpochsCount += 1;
+        this.metaState.needToLearnPct = 0;
+        this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
+        this.metaState.reasonText = `Утка справляется с задачей (высота ЦМ ${comp.toFixed(2)} м ≥ ${target.toFixed(2)} м) — обучение прекращено`;
+      } else {
+        this.metaState.mode = 'LEARNING_WALK';
+        this.metaState.isLearningActive = true;
+        this.metaState.needToLearnPct = Math.round(Math.max(25, Math.min(95, ((target - comp) / target) * 200 + 35)));
+        this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ';
+        this.metaState.reasonText = `Утка стремится максимизировать высоту центра масс (ЦМ=${comp.toFixed(2)} м → ${target.toFixed(2)} м)`;
+      }
+      return;
+    }
+
+    // Compute effective goal-directed competence grounded in physical velocity toward food (m/s)
     const meanEpochRew = epochLocomotionScore / rolloutLen;
     const meanRolloutVel = (this.epochVelSum || 0) / rolloutLen;
     const recentVel = Math.max(0, c0.smoothedVelocityTowardFood || c0.lastVelocityTowardFood || 0);
@@ -1917,7 +2005,7 @@ export class PPOTrainer {
           }
         }
         // Ensure resonance CPG drive & steering gain ramp up energetically to maxCpgGain for bounding gallop!
-        if (tpl) {
+        if (tpl && this.brain.morphologyKey !== 'duck') {
           const maxGain = this.maxCpgGain || 3.25;
           const targetGain = Math.min(maxGain, 1.35 + 0.16 * this.updateCount);
           for (let i = 0; i < skipW.length; i++) {
@@ -2190,17 +2278,22 @@ export class NESTrainer {
     this.wasOverturned = false;
     this.modeBeforeOverturn = 'LEARNING_WALK';
 
+    const isDuckBrain = brain.morphologyKey === 'duck';
     this.metaState = {
       mode: 'LEARNING_WALK',
       isLearningActive: true,
-      modeTitle: '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): ХОДЬБА К ЦЕЛИ',
-      reasonText: 'Эволюционный поиск моторного навыка шага и руления',
-      competenceEMA: 0.03,
-      targetCompetence: 0.18,
-      relearnThreshold: 0.125,
+      modeTitle: isDuckBrain
+        ? '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ'
+        : '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): ХОДЬБА К ЦЕЛИ',
+      reasonText: isDuckBrain
+        ? 'Единая задача: максимизация высоты центра масс (ЦМ)'
+        : 'Эволюционный поиск моторного навыка шага и руления',
+      competenceEMA: isDuckBrain ? 0.22 : 0.03,
+      targetCompetence: isDuckBrain ? 0.215 : 0.18,
+      relearnThreshold: isDuckBrain ? 0.190 : 0.125,
       ambitionPreset: 'min',
       surpriseEMA: 0.20,
-      needToLearnPct: 85,
+      needToLearnPct: isDuckBrain ? 35 : 85,
       stableEpochsCount: 0,
       lowVelEpochsCount: 0,
       stallStepsCount: 0,
@@ -2210,13 +2303,62 @@ export class NESTrainer {
     };
     this.alwaysLearn = false;
     this.manualFreeze = false;
-    this.minFoodsToConsolidate = 2;
+    this.minFoodsToConsolidate = isDuckBrain ? 0 : 2;
 
     this._sampleWorkerPopulation();
   }
 
   setLearningAmbition(presetOrTarget) {
     this.manualFreeze = false;
+    const isDuckBrain = this.brain.morphologyKey === 'duck';
+    if (isDuckBrain) {
+      this.minFoodsToConsolidate = 0;
+      if (presetOrTarget === 'min') {
+        this.alwaysLearn = false;
+        this.metaState.ambitionPreset = 'min';
+        this.metaState.targetCompetence = 0.215;
+        this.metaState.relearnThreshold = 0.190;
+      } else if (presetOrTarget === 'bound') {
+        this.alwaysLearn = false;
+        this.metaState.ambitionPreset = 'bound';
+        this.metaState.targetCompetence = 0.230;
+        this.metaState.relearnThreshold = 0.195;
+      } else if (presetOrTarget === 'turbo') {
+        this.alwaysLearn = false;
+        this.metaState.ambitionPreset = 'turbo';
+        this.metaState.targetCompetence = 0.245;
+        this.metaState.relearnThreshold = 0.205;
+      } else if (presetOrTarget === 'infinite') {
+        this.alwaysLearn = true;
+        this.metaState.ambitionPreset = 'infinite';
+        this.metaState.targetCompetence = 0.280;
+        this.metaState.relearnThreshold = 0.220;
+      } else if (typeof presetOrTarget === 'number') {
+        const t = Math.max(0.19, Math.min(0.28, presetOrTarget));
+        this.alwaysLearn = t >= 0.275;
+        this.metaState.ambitionPreset = 'custom';
+        this.metaState.targetCompetence = Number(t.toFixed(3));
+        this.metaState.relearnThreshold = Number((t - 0.025).toFixed(3));
+      }
+      if (this.metaState.mode !== 'LEARNING_RIGHTING') {
+        if (this.alwaysLearn || this.metaState.competenceEMA < this.metaState.targetCompetence) {
+          this.metaState.mode = 'LEARNING_WALK';
+          this.metaState.isLearningActive = true;
+          this.metaState.stableEpochsCount = 0;
+          this.metaState.needToLearnPct = this.alwaysLearn ? 100 : 65;
+          this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): ПОДЪЁМ ЦМ';
+          this.metaState.reasonText = `Утка стремится поднять и удерживать ЦМ ≥ ${this.metaState.targetCompetence.toFixed(2)} м`;
+        } else {
+          this.metaState.mode = 'CONSOLIDATED';
+          this.metaState.isLearningActive = false;
+          this.metaState.needToLearnPct = 0;
+          this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
+          this.metaState.reasonText = `Высота ЦМ (${this.metaState.competenceEMA.toFixed(2)} м) ≥ ${this.metaState.targetCompetence.toFixed(2)} м — обучение остановлено`;
+        }
+      }
+      return;
+    }
+
     const prevTarget = this.metaState.targetCompetence || 0.18;
     if (presetOrTarget === 'min') {
       this.alwaysLearn = false;
@@ -2277,7 +2419,7 @@ export class NESTrainer {
       this.metaState.stableEpochsCount = 0;
       this.metaState.needToLearnPct = 85;
       this.metaState.modeTitle = '🟢 РУЧНОЕ ПРОБУЖДЕНИЕ: ДООБУЧЕНИЕ ВКЛЮЧЕНО';
-      this.metaState.reasonText = 'Пользователь вручную запустил дообучение для улучшения походки';
+      this.metaState.reasonText = 'Пользователь вручную запустил дообучение';
     } else {
       this.manualFreeze = true;
       this.alwaysLearn = false;
@@ -2324,8 +2466,12 @@ export class NESTrainer {
     const c0 = creatures[0];
     const isDuck0 = c0.morphologyKey === 'duck';
     const upY0 = c0.getTorsoFrame().up.y;
-    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : c0.body.getCenterOfMass().y;
-    const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < (isDuck0 ? 0.25 : 0.22);
+    const comY0 = c0.body.getCenterOfMass().y;
+    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : comY0;
+    const isPhysicallyTiltedOnBack =
+      !c0.isGrabbed &&
+      !(c0.postThrowTimer > 0) &&
+      (isDuck0 ? (comY0 < (this.metaState.relearnThreshold || 0.190) && !this.manualFreeze) : (upY0 < 0.22));
     const confirmDelay = isDuck0 ? 3 : 24;
 
     if (!this.wasOverturned) {
@@ -2345,18 +2491,10 @@ export class NESTrainer {
       }
     }
 
-    if (this.wasOverturned && isDuck0) {
-      if (upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg()) {
-        this.uprightHoldSteps = (this.uprightHoldSteps || 0) + 1;
-      } else if (upY0 < 0.78 || topY0 < 0.28) {
-        this.uprightHoldSteps = 0;
-      }
-    } else {
-      this.uprightHoldSteps = 0;
-    }
-
+    this.uprightHoldSteps = 0;
+    const targetCom0 = this.metaState.targetCompetence || 0.215;
     const isRecoveredUpright = isDuck0
-      ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg())
+      ? (comY0 >= targetCom0)
       : (upY0 >= 0.65 && !c0.hasInvertedLeg());
 
     const isOverturned0 =
@@ -2376,15 +2514,19 @@ export class NESTrainer {
         this.rightingMaxUpY = upY0;
         this.rightingStartTopY = topY0;
         this.rightingMaxTopY = topY0;
+        this.rightingStartComY = comY0;
+        this.rightingMaxComY = comY0;
         this.rightingContactSteps = 0;
-        this.brain.resetRightingWaveState(upY0, topY0);
+        this.brain.resetRightingWaveState(isDuck0 ? comY0 : upY0, topY0);
       }
       this.metaState.mode = 'LEARNING_RIGHTING';
       this.metaState.isLearningActive = true;
       this.metaState.needToLearnPct = 100;
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
-      this.metaState.modeTitle = '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
+      this.metaState.modeTitle = isDuck0
+        ? '🔄 ОБУЧЕНИЕ (NES): ПОДЪЁМ ЦЕНТРА МАСС'
+        : '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
       if (!isDuck0 && this.rightingPauseStepsRemaining > 0) {
@@ -2397,15 +2539,15 @@ export class NESTrainer {
         return;
       }
 
-      this.metaState.reasonText = isDuck0 && (this.uprightHoldSteps || 0) > 0
-        ? `Удерживает вертикальный баланс стоя (${this.uprightHoldSteps}/8, up.y=${upY0.toFixed(2)}) — попытка подняться #${this.metaState.rightingAttempts}`
+      this.metaState.reasonText = isDuck0
+        ? `Максимизация высоты центра масс (ЦМ=${comY0.toFixed(3)} м → цель ${targetCom0.toFixed(3)} м) — эпоха #${this.metaState.rightingAttempts}`
         : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка подняться #${this.metaState.rightingAttempts}`;
 
-      const muRight = this.brain.forwardRightingReflex(obs, 0.05, true);
+      const muRight = this.brain.forwardRightingReflex(obs, 0.05, true, comY0);
       c0.lastState = obs;
       c0.lastAction = muRight;
-      c0.applyActionVector(muRight, true);
-      this._lastRightingStep = { obs, act: muRight };
+      c0.applyActionVector(muRight, isDuck0 ? (comY0 < 0.205) : true);
+      this._lastRightingStep = { obs, act: muRight, comY: comY0 };
       return;
     }
 
@@ -2417,8 +2559,17 @@ export class NESTrainer {
       this.brain.rightingSuccesses += 1;
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
-      this.metaState.mode = this.modeBeforeOverturn || 'LEARNING_WALK';
-      this.metaState.isLearningActive = this.metaState.mode === 'LEARNING_WALK';
+      if (isDuck0 && !this.alwaysLearn) {
+        this.metaState.mode = 'CONSOLIDATED';
+        this.metaState.isLearningActive = false;
+        this.metaState.needToLearnPct = 0;
+        this.metaState.competenceEMA = Number(Math.max(this.metaState.competenceEMA, comY0).toFixed(3));
+        this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
+        this.metaState.reasonText = `Утка подняла центр масс выше ${targetCom0.toFixed(2)} м — обучение остановлено`;
+      } else {
+        this.metaState.mode = this.modeBeforeOverturn || 'LEARNING_WALK';
+        this.metaState.isLearningActive = this.metaState.mode === 'LEARNING_WALK';
+      }
     }
     this._lastRightingStep = null;
 
@@ -2442,8 +2593,10 @@ export class NESTrainer {
 
   recordStepOutcome(creatures, rewards, _dones) {
     const c0 = creatures[0];
+    const isDuck0 = c0.morphologyKey === 'duck';
     const upY0 = c0.getTorsoFrame().up.y;
-    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : c0.body.getCenterOfMass().y;
+    const comY0 = c0.body.getCenterOfMass().y;
+    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : comY0;
     if (this._lastRightingStep) {
       if (this._lastRightingStep.isOverturnPause) {
         return null;
@@ -2462,7 +2615,12 @@ export class NESTrainer {
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       if (topY0 > (this.rightingMaxTopY ?? topY0)) this.rightingMaxTopY = topY0;
-      this.brain.recordRightingStepTrace(this._lastRightingStep.obs, this._lastRightingStep.act, upY0, topY0);
+      if (comY0 > (this.rightingMaxComY ?? comY0)) this.rightingMaxComY = comY0;
+      this.brain.recordRightingStepTrace(
+        this._lastRightingStep.obs,
+        this._lastRightingStep.act,
+        isDuck0 ? comY0 : upY0
+      );
       const anyContact = c0.footNodes.some(f => f.inContact) ||
         (c0.webbedFeet ? c0.webbedFeet.some(wf => wf.toeInner.inContact || wf.toeOuter.inContact) : false);
       if (anyContact) this.rightingContactSteps += 1;
@@ -2488,12 +2646,16 @@ export class NESTrainer {
       if (stepMinFootClearance < (this.rightingMinFootClearanceY ?? Infinity)) {
         this.rightingMinFootClearanceY = stepMinFootClearance;
       }
-      const isDuck0 = c0.morphologyKey === 'duck';
       const horizon = isDuck0 ? 24 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
         const startTopY = this.rightingStartTopY ?? topY0;
         const maxTopY = this.rightingMaxTopY ?? topY0;
+        const startComY = this.rightingStartComY ?? comY0;
+        const maxComY = this.rightingMaxComY ?? comY0;
         const skillPct = this.brain.updateRightingReflex({
+          startComY,
+          maxComY,
+          endComY: comY0,
           startUpY: this.rightingStartUpY,
           maxUpY: this.rightingMaxUpY,
           endUpY: upY0,
@@ -2508,6 +2670,10 @@ export class NESTrainer {
         if (!this.rightingHistory) this.rightingHistory = [];
         this.rightingHistory.push({
           attempt: this.brain.rightingAttempts,
+          startComY: Number(startComY.toFixed(3)),
+          maxComY: Number(maxComY.toFixed(3)),
+          endComY: Number(comY0.toFixed(3)),
+          deltaComY: Number((comY0 - startComY).toFixed(3)),
           startUpY: Number(this.rightingStartUpY.toFixed(3)),
           maxUpY: Number(this.rightingMaxUpY.toFixed(3)),
           endUpY: Number(upY0.toFixed(3)),
@@ -2532,6 +2698,8 @@ export class NESTrainer {
         this.rightingMaxUpY = upY0;
         this.rightingStartTopY = topY0;
         this.rightingMaxTopY = topY0;
+        this.rightingStartComY = comY0;
+        this.rightingMaxComY = comY0;
         this.rightingContactSteps = 0;
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
@@ -2553,10 +2721,8 @@ export class NESTrainer {
     }
 
     if (
-      upY0 < 0.35 ||
-      c0.foodState === 'DISSOLVING' ||
-      c0.foodState === 'WAITING' ||
-      c0.foodState === 'DROPPING'
+      (!isDuck0 && upY0 < 0.35) ||
+      (!isDuck0 && (c0.foodState === 'DISSOLVING' || c0.foodState === 'WAITING' || c0.foodState === 'DROPPING'))
     ) {
       this.metaState.stallStepsCount = 0;
       return null;
@@ -2582,7 +2748,9 @@ export class NESTrainer {
     const meanRolloutVel = (this.epochVelSum || 0) / Math.max(1, this.horizonSteps);
     this.epochVelSum = 0;
     this.lastMeanStepReward = meanStepRew;
-    const approxVel = Math.max(0, 0.55 * smoothVel + 0.45 * Math.max(0, meanRolloutVel));
+    const approxVel = isDuck0
+      ? (c0.smoothedComY || comY0)
+      : Math.max(0, 0.55 * smoothVel + 0.45 * Math.max(0, meanRolloutVel));
     if (this.metaState.mode !== 'CONSOLIDATED' || approxVel > this.metaState.competenceEMA) {
       const emaAlpha = approxVel < this.metaState.competenceEMA ? 0.45 : 0.25;
       this.metaState.competenceEMA = Number(
@@ -2599,7 +2767,15 @@ export class NESTrainer {
       this.metaState.isLearningActive = true;
       this.metaState.needToLearnPct = 100;
     } else if (this.metaState.mode === 'LEARNING_WALK') {
-      if (this.metaState.competenceEMA >= this.metaState.targetCompetence && c0.foodCollected >= (this.minFoodsToConsolidate || 4)) {
+      if (isDuck0) {
+        if (this.metaState.competenceEMA >= (this.metaState.targetCompetence || 0.215)) {
+          this.metaState.mode = 'CONSOLIDATED';
+          this.metaState.isLearningActive = false;
+          this.metaState.needToLearnPct = 0;
+          this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
+          this.metaState.reasonText = `Высота ЦМ (${this.metaState.competenceEMA.toFixed(2)} м) стабильна — обучение прекращено`;
+        }
+      } else if (this.metaState.competenceEMA >= this.metaState.targetCompetence && c0.foodCollected >= (this.minFoodsToConsolidate || 4)) {
         this.metaState.stableEpochsCount += 1;
         if (this.metaState.stableEpochsCount >= 2) {
           this.metaState.mode = 'CONSOLIDATED';
