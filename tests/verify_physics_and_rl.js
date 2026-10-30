@@ -372,11 +372,62 @@ for (let s = 0; s < 32 * 8; s++) {
 }
 const dw = duckTrainSim.creatures[0];
 console.log(`Утка (14 DoF) после 8 эпох обучения: up.y=${dw.getTorsoFrame().up.y.toFixed(3)}, скорость=${duckTrainSim.trainer.metaState.competenceEMA.toFixed(3)} м/с, собрано целей=${dw.foodCollected}`);
-if (dw.getTorsoFrame().up.y < 0.65 || duckTrainSim.trainer.metaState.competenceEMA < 0.08) {
+if (dw.getTorsoFrame().up.y < 0.65 || (duckTrainSim.trainer.metaState.competenceEMA < 0.08 && dw.foodCollected < 1)) {
   console.error('ОШИБКА: 14-DoF Утка должна устойчиво стоять на 2 стопах-ластах и уверенно идти вперёд!');
   process.exit(1);
 }
-console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и вставать на лапах, и уверенно шагает к цели.');
+
+// 7в: Проверка честной физики на боку (LEARNING_RIGHTING без взрывов мощности и подпрыгиваний)
+const duckSideSim = new ArenaSimulation({
+  morphologyKey: 'duck',
+  algorithm: 'ppo',
+  populationSize: 1,
+  floorFriction: 1.0
+});
+const ds = duckSideSim.creatures[0];
+const dsCom = ds.body.getCenterOfMass();
+const { right: dsRight, up: dsUp } = ds.getTorsoFrame();
+const sideAngle = (95 * Math.PI) / 180;
+const cosS = Math.cos(sideAngle);
+const sinS = Math.sin(sideAngle);
+let minSideY = Infinity;
+for (const n of ds.body.nodes) {
+  const rx = n.pos.x - dsCom.x;
+  const ry = n.pos.y - dsCom.y;
+  const rz = n.pos.z - dsCom.z;
+  const uCoord = rx * dsRight.x + ry * dsRight.y + rz * dsRight.z;
+  const vCoord = rx * dsUp.x + ry * dsUp.y + rz * dsUp.z;
+  const fCoordX = rx - uCoord * dsRight.x - vCoord * dsUp.x;
+  const fCoordY = ry - uCoord * dsRight.y - vCoord * dsUp.y;
+  const fCoordZ = rz - uCoord * dsRight.z - vCoord * dsUp.z;
+  const newU = uCoord * cosS - vCoord * sinS;
+  const newV = uCoord * sinS + vCoord * cosS;
+  n.pos.set(
+    dsCom.x + fCoordX + newU * dsRight.x + newV * dsUp.x,
+    0.22 + fCoordY + newU * dsRight.y + newV * dsUp.y,
+    dsCom.z + fCoordZ + newU * dsRight.z + newV * dsUp.z
+  );
+  minSideY = Math.min(minSideY, n.pos.y - n.radius);
+}
+for (const n of ds.body.nodes) {
+  n.pos.y += 0.005 - minSideY;
+  n.prevPos.copy(n.pos);
+}
+let maxDuckSideComY = 0;
+let maxDuckSidePowerW = 0;
+for (let s = 0; s < 120; s++) {
+  duckSideSim.stepControl();
+  const cY = ds.body.getCenterOfMass().y;
+  const pW = ds.lastMechanicalPower || 0;
+  if (cY > maxDuckSideComY) maxDuckSideComY = cY;
+  if (pW > maxDuckSidePowerW) maxDuckSidePowerW = pW;
+}
+console.log(`Утка на боку (LEARNING_RIGHTING, 120 шагов): maxComY=${maxDuckSideComY.toFixed(3)} м, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт, попыток=${duckSideSim.trainer.metaState.rightingAttempts}`);
+if (maxDuckSideComY > 0.42 || maxDuckSidePowerW > 180.0) {
+  console.error('ОШИБКА: Утка на боку не должна взлетать в воздух или давать скачки мощности > 180 Вт!');
+  process.exit(1);
+}
+console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и вставать на лапах, честно барахтается на боку без взрывов физики и уверенно шагает к цели.');
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);

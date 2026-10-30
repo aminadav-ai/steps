@@ -719,17 +719,44 @@ function attachOrthogonalLeg({
           (foot.pos.z - hipNode.pos.z) * upVec.z
         : (foot.pos.y - hipNode.pos.y);
 
-      const needDorsalReach = isRightingMode && actLift < 0 && (!upVec || upVec.y < 0.42);
-      const isUprightOrStanding = !isRightingMode || (upVec && upVec.y >= 0.42);
+      const needDorsalReach = !buildWebbedFoot && isRightingMode && actLift < 0 && (!upVec || upVec.y < 0.42);
+      const isUprightOrStanding = buildWebbedFoot || !isRightingMode || (upVec && upVec.y >= 0.42);
 
       // Physical Mechanical Joint Hard-Stops in 'servo' mode (conserving exact center-of-mass momentum sum m_i dx_i === 0):
-      // 1. Hip Ventral Stop: when the chassis is upright, the leg cannot passively fold/invert above the hip plane.
+      // 1. Hip Ventral Stop: when the chassis is upright (or for bipedal duck legs), the leg cannot fold/invert above the hip plane.
       // 2. Knee Anti-Hyperextension Stop ("Ʌ" stop): prevents the knee from ever snapping into a backward "V" bend,
       //    while allowing 100% free sagittal stride when the knee is in its normal "Ʌ" working range!
+      // IMPORTANT: When webbedFoot is present, foot + toeInner + toeOuter form a single rigid 3-node shoe,
+      // so any hard-stop shift on foot MUST translate toeInner and toeOuter by the exact same vector!
+      const mShoe = foot.mass + (webbedFoot ? webbedFoot.toeInner.mass + webbedFoot.toeOuter.mass : 0.0);
+      const shiftShoeNodes = (sx, sy, sz) => {
+        foot.pos.x += sx;
+        foot.pos.y += sy;
+        foot.pos.z += sz;
+        foot.prevPos.x += sx;
+        foot.prevPos.y += sy;
+        foot.prevPos.z += sz;
+        if (webbedFoot) {
+          webbedFoot.toeInner.pos.x += sx;
+          webbedFoot.toeInner.pos.y += sy;
+          webbedFoot.toeInner.pos.z += sz;
+          webbedFoot.toeInner.prevPos.x += sx;
+          webbedFoot.toeInner.prevPos.y += sy;
+          webbedFoot.toeInner.prevPos.z += sz;
+
+          webbedFoot.toeOuter.pos.x += sx;
+          webbedFoot.toeOuter.pos.y += sy;
+          webbedFoot.toeOuter.pos.z += sz;
+          webbedFoot.toeOuter.prevPos.x += sx;
+          webbedFoot.toeOuter.prevPos.y += sy;
+          webbedFoot.toeOuter.prevPos.z += sz;
+        }
+      };
+
       if (isServoMode && knee && upVec && forwardVec && rightVec) {
         if (isUprightOrStanding && footLocalUp > -0.055) {
           const corrUp = -0.068 - footLocalUp;
-          const mF = foot.mass;
+          const mF = mShoe;
           const mH = hipNode.mass;
           const wF = mH / (mF + mH);
           const wH = mF / (mF + mH);
@@ -737,12 +764,7 @@ function attachOrthogonalLeg({
           const dyStop = upVec.y * corrUp;
           const dzStop = upVec.z * corrUp;
 
-          foot.pos.x += dxStop * wF;
-          foot.pos.y += dyStop * wF;
-          foot.pos.z += dzStop * wF;
-          foot.prevPos.x += dxStop * wF;
-          foot.prevPos.y += dyStop * wF;
-          foot.prevPos.z += dzStop * wF;
+          shiftShoeNodes(dxStop * wF, dyStop * wF, dzStop * wF);
 
           hipNode.pos.x -= dxStop * wH;
           hipNode.pos.y -= dyStop * wH;
@@ -805,7 +827,7 @@ function attachOrthogonalLeg({
           const errKZ = corrH * (pf * forwardVec.z + pu * upVec.z) + corrR * rightVec.z;
 
           const mK = knee.mass;
-          const mHF = hipNode.mass + foot.mass;
+          const mHF = hipNode.mass + mShoe;
           const wK = mHF / (mK + mHF);
           const wHF = mK / (mK + mHF);
 
@@ -823,24 +845,17 @@ function attachOrthogonalLeg({
           hipNode.prevPos.y -= errKY * wHF;
           hipNode.prevPos.z -= errKZ * wHF;
 
-          foot.pos.x -= errKX * wHF;
-          foot.pos.y -= errKY * wHF;
-          foot.pos.z -= errKZ * wHF;
-          foot.prevPos.x -= errKX * wHF;
-          foot.prevPos.y -= errKY * wHF;
-          foot.prevPos.z -= errKZ * wHF;
+          shiftShoeNodes(-errKX * wHF, -errKY * wHF, -errKZ * wHF);
         }
       }
 
       let dx, dy, dz;
       const yawDiffStride = enableHipRoll ? ((legIdx === 0 ? -actHipYaw : +actHipYaw) * 0.065) : 0.0;
       if (!needDorsalReach) {
-        // Ventral mode (normal walking, standing tall, squatting onto bottom, OR stand-up phase once rolled past up.y >= 0.42):
-        // For 5-DoF bipedal duck (buildWebbedFoot), onboard BNO055 IMU pitch/roll feedback (forwardVec.y, rightVec.y)
-        // drives the physical hip & ankle servo targets to keep the CoM over the flat wedge shoes!
+        // Ventral mode (normal walking, standing tall, squatting onto bottom, and bipedal duck self-righting):
         dx = actStride * strideStroke + yawDiffStride;
         dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
-        dz = enableHipRoll ? (actHipRoll * 0.048) : 0;
+        dz = enableHipRoll ? (actHipRoll * (isRightingMode ? 0.075 : 0.048)) : 0;
       } else {
         // Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.42, actLift < 0):
         dx = actStride * 0.26;
@@ -858,11 +873,9 @@ function attachOrthogonalLeg({
       );
 
       // Physical STS3215 Servo Rotor Angular Speed / Slew-Rate Filter for 5-DoF Biped Legs:
-      // Prevents instantaneous 20 cm step commands from launching the 1.88 kg biped 1 m into the air!
+      // Prevents instantaneous 20 cm step commands from launching the biped 1 m into the air!
       if (buildWebbedFoot) {
-        if (needDorsalReach) {
-          this._smoothTargetPos = restFootPos.clone();
-        } else if (!this._smoothTargetPos) {
+        if (!this._smoothTargetPos) {
           this._smoothTargetPos = rawTargetPos.clone();
         } else {
           const alpha = 0.15;
@@ -1635,6 +1648,7 @@ function buildDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) 
   // a[0..4]  = Left Leg  (hip_yaw, hip_roll, hip_pitch, knee_pitch, ankle_pitch)
   // a[5..9]  = Right Leg (hip_yaw, hip_roll, right_hip_pitch, right_knee_pitch, right_ankle_pitch)
   // a[10..13]= Neck/Head (neck_pitch, head_pitch, head_yaw, head_roll)
+  let smoothHeadPos = restHeadPos.clone();
   creature.customApplyActions = (actions, isRightingMode = false) => {
     const clamp1 = v => Math.max(-1, Math.min(1, v || 0));
     const { up, forward, right } = creature.getTorsoFrame();
@@ -1689,11 +1703,16 @@ function buildDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) 
 
     const thetaPitch = baseNeckPitchRad + actNeckPitch * 0.45 + actHeadPitch * 0.25;
     const thetaRoll = actHeadRoll * 0.35 + actHeadYaw * 0.18;
-    const targetHeadPos = new Vec3(
+    const rawTargetHeadPos = new Vec3(
       restTorsoTop.x + L_neck * Math.sin(thetaPitch) * Math.cos(thetaRoll),
       restTorsoTop.y + L_neck * Math.cos(thetaPitch) * Math.cos(thetaRoll),
       restTorsoTop.z + L_neck * Math.sin(thetaRoll)
     );
+    const headAlpha = 0.18;
+    smoothHeadPos.x += headAlpha * (rawTargetHeadPos.x - smoothHeadPos.x);
+    smoothHeadPos.y += headAlpha * (rawTargetHeadPos.y - smoothHeadPos.y);
+    smoothHeadPos.z += headAlpha * (rawTargetHeadPos.z - smoothHeadPos.z);
+    const targetHeadPos = smoothHeadPos;
 
     neckPitchServo.targetAction = actNeckPitch;
     headPitchServo.targetAction = actHeadPitch;

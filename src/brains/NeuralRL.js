@@ -154,7 +154,7 @@ export class ActorCriticBrain {
     this.criticL2 = new DenseLayer(hidden1, hidden2, Math.sqrt(2 / (hidden1 + hidden2)));
     this.criticOut = new DenseLayer(hidden2, 1, 0.1);
 
-    // Dedicated Beetle Self-Righting Reflex Sub-Network ("Рефлекс жука"):
+    // Dedicated Self-Righting Sub-Network ("Рефлекс жука / Нейросеть вставания"):
     // Completely isolated from walking weights; active and trained ONLY when overturned (up.y < 0.35)
     this.rightingLayer = new DenseLayer(obsDim, actDim, 0.04);
     this.rightingGain = 0.32;       // Starts weak (32%) so first overturn attempt only rocks the shell
@@ -164,6 +164,10 @@ export class ActorCriticBrain {
     this.rightingAttempts = 0;
     this.rightingSuccesses = 0;
     this.rightingPhase = 0;
+    this.duckRightingBestProgress = 0;
+    this._duckRightingPerturbW = new Float64Array(obsDim * actDim);
+    this._duckRightingPerturbB = new Float64Array(actDim);
+    this._duckRightingPerturbReady = false;
 
     this.adamStepCount = 0;
     this.maxSkipRowNorm = 1.80;
@@ -368,74 +372,63 @@ export class ActorCriticBrain {
     this.cpgTemplate = Float64Array.from(this.actorSkip.W);
   }
 
+  _sampleDuckRightingPerturb() {
+    if (!this._duckRightingPerturbW || !this._duckRightingPerturbB) return;
+    this._duckRightingPerturbReady = true;
+    // Sample a coherent neural exploration hypothesis over posture, CPG clock, and proprioception (cols 6..obsDim-1)
+    for (let a = 0; a < this.actDim; a++) {
+      this._duckRightingPerturbB[a] = randn() * 0.22;
+      const row = a * this.obsDim;
+      for (let c = 0; c < this.obsDim; c++) {
+        if (c < 6) {
+          this._duckRightingPerturbW[row + c] = 0.0; // Ignore food position while trying to stand up
+        } else if (c <= 11) {
+          this._duckRightingPerturbW[row + c] = randn() * 0.20; // Posture (up.y, pitch, roll) & internal rhythm
+        } else {
+          this._duckRightingPerturbW[row + c] = randn() * 0.08; // Joint proprioception & foot contacts
+        }
+      }
+    }
+  }
+
   /**
-   * Forward pass of the dedicated Beetle Self-Righting Reflex ("Рефлекс жука")
-   * when the walker is overturned on its back (up.y < 0.35).
-   * Ignores food completely and coordinates dorsal leg extension + lateral tuck to roll onto feet.
+   * Forward pass of the Self-Righting Sub-Network when the walker is overturned (up.y < 0.35).
+   * For the 14-DoF Duck, zero hardcoded formulas or scripted hints are used:
+   * the neural network (rightingLayer + per-attempt parameter exploration) must discover how to coordinate
+   * its 10 leg servos and 4 neck/head servos by itself from posture & proprioceptive sensors.
    */
   forwardRightingReflex(obs, dt = 0.05, recordVis = true) {
     this.rightingPhase = (this.rightingPhase + dt * 6.8) % (Math.PI * 2);
     const zRight = new Float64Array(this.actDim);
     this.rightingLayer.forward(obs, zRight);
 
-    // Keep roll direction consistent throughout the attempt so it rolls all the way over the edge!
-    const upY = obs[6];
-    // Choose roll side so the leg that is actually ON THE FLOOR pushes dorsally against the floor:
-    // obs[8] is rollTilt = right.y. When right.y >= 0, hip 1 (-right) is on the floor and hip 0 (+right) is in the air!
-    const rollTilt = obs[8];
-    if (Math.abs(rollTilt) > 0.18) {
-      this.rightingSideSign = rollTilt >= 0 ? -1.0 : 1.0;
-    }
-    const side = this.rightingSideSign;
-    const s = Math.sin(this.rightingPhase);
-    const c = Math.cos(this.rightingPhase);
-
     const mu = new Float64Array(this.actDim);
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
-      for (let leg = 0; leg < 2; leg++) {
-        const base = leg * 5;
-        let kneeCmd = 0;
-        let pitchCmd = 0;
-        let rollCmd = 0;
-        let yawCmd = 0;
-        let ankleCmd = 0;
-
-        if (upY >= 0.42) {
-          kneeCmd = -0.22;
-          pitchCmd = 0.08 * this.rightingSweep * (leg === 0 ? s : -s);
-          rollCmd = -obs[8] * 0.35;
-          ankleCmd = obs[7] * 0.25;
-        } else if (leg === 0) {
-          kneeCmd = side >= 0
-            ? -this.rightingGain * (0.88 + 0.12 * Math.max(0, s))
-            : +0.20 * this.rightingAsym;
-          pitchCmd = this.rightingSweep * s;
-          rollCmd = side * 0.45 * this.rightingGain;
-          ankleCmd = -0.35 * c;
-        } else {
-          kneeCmd = side >= 0
-            ? +0.20 * this.rightingAsym
-            : -this.rightingGain * (0.88 + 0.12 * Math.max(0, s));
-          pitchCmd = -this.rightingSweep * s;
-          rollCmd = side * 0.45 * this.rightingGain;
-          ankleCmd = +0.35 * c;
-        }
-
-        mu[base + 0] = Math.tanh(yawCmd + 0.15 * zRight[base + 0]);
-        mu[base + 1] = Math.tanh(rollCmd + 0.15 * zRight[base + 1]);
-        mu[base + 2] = Math.tanh(pitchCmd + 0.15 * zRight[base + 2]);
-        mu[base + 3] = Math.tanh(kneeCmd + 0.15 * zRight[base + 3]);
-        mu[base + 4] = Math.tanh(ankleCmd + 0.15 * zRight[base + 4]);
+      if (!this._duckRightingPerturbReady) {
+        this._sampleDuckRightingPerturb();
       }
-
-      // Use the 4-DoF Neck & Head as a dynamic pendulum counterweight lever to help flip onto its feet!
-      const isSettling = upY >= 0.42;
-      mu[10] = Math.tanh((isSettling ? +0.20 : -0.75 * this.rightingGain * c) + 0.15 * zRight[10]);
-      mu[11] = Math.tanh((isSettling ? +0.10 : -0.55 * this.rightingGain * s) + 0.15 * zRight[11]);
-      mu[12] = Math.tanh((isSettling ? 0.0 : side * 0.45 * s) + 0.15 * zRight[12]);
-      mu[13] = Math.tanh((isSettling ? 0.0 : -side * 0.70 * this.rightingGain) + 0.15 * zRight[13]);
+      for (let a = 0; a < this.actDim; a++) {
+        const row = a * this.obsDim;
+        let pSum = this._duckRightingPerturbB ? this._duckRightingPerturbB[a] : 0.0;
+        if (this._duckRightingPerturbW) {
+          for (let c = 6; c < this.obsDim; c++) {
+            pSum += this._duckRightingPerturbW[row + c] * obs[c];
+          }
+        }
+        mu[a] = Math.tanh(zRight[a] + pSum);
+      }
     } else {
+      // Keep roll direction consistent throughout the attempt for radial Tripod/Quadruped walkers
+      const upY = obs[6];
+      const rollTilt = obs[8];
+      if (Math.abs(rollTilt) > 0.18) {
+        this.rightingSideSign = rollTilt >= 0 ? -1.0 : 1.0;
+      }
+      const side = this.rightingSideSign;
+      const s = Math.sin(this.rightingPhase);
+      const c = Math.cos(this.rightingPhase);
+
       const numLegs = Math.floor(this.actDim / 2);
       for (let leg = 0; leg < numLegs; leg++) {
         const liftIdx = leg * 2;
@@ -473,11 +466,15 @@ export class ActorCriticBrain {
 
     if (recordVis) {
       this.lastObs.set(obs);
+      const z1 = new Float64Array(this.hidden1);
+      this.actorL1.forward(obs, z1);
       for (let i = 0; i < this.hidden1; i++) {
-        this.lastH1[i] = Math.tanh(obs[6] * Math.cos(i) + obs[8] * Math.sin(i));
+        this.lastH1[i] = Math.tanh(z1[i]);
       }
+      const z2 = new Float64Array(this.hidden2);
+      this.actorL2.forward(this.lastH1, z2);
       for (let i = 0; i < this.hidden2; i++) {
-        this.lastH2[i] = Math.tanh(this.rightingGain * Math.sin(this.rightingPhase + i * 0.5));
+        this.lastH2[i] = Math.tanh(z2[i]);
       }
       this.lastMu.set(mu);
     }
@@ -486,13 +483,60 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Updates the Beetle Self-Righting Reflex parameters at the end of a 12-step (0.6s) attempt on the back.
-   * Reinforces dorsal extension gain, lateral tuck asymmetry, and posture-to-motor weights based on
-   * achieved upward rotation (deltaUpY, maxUpY) and floor contact leverage.
+   * Updates the Self-Righting Sub-Network parameters at the end of an attempt on the back/side.
+   * For the Duck, updates rightingLayer purely from the empirical upward rotation reward (no scripted priors).
    */
   updateRightingReflex({ startUpY, maxUpY, endUpY, contactSteps, lastObs, lastAct }) {
     this.rightingAttempts += 1;
     const progress = Math.max(0, maxUpY - startUpY) + Math.max(0, endUpY - startUpY);
+
+    if (this.morphologyKey === 'duck' && this.actDim === 14) {
+      const upDelta = endUpY - startUpY;
+      const peakGain = Math.max(0, maxUpY - startUpY);
+      const attemptScore = upDelta + 0.65 * peakGain + 0.015 * contactSteps;
+      if (peakGain > this.duckRightingBestProgress) {
+        this.duckRightingBestProgress = peakGain;
+      }
+
+      // Reinforce neural perturbation if the attempt rocked/rolled the torso closer to upright,
+      // or nudge away if it rolled further upside down
+      const stepScale = attemptScore > 0.01
+        ? Math.min(0.45, 0.25 * attemptScore)
+        : (attemptScore < -0.05 ? Math.max(-0.12, 0.15 * attemptScore) : 0.0);
+
+      if (stepScale !== 0.0 && this._duckRightingPerturbW && this._duckRightingPerturbB) {
+        for (let a = 0; a < this.actDim; a++) {
+          this.rightingLayer.b[a] = Math.max(
+            -0.8,
+            Math.min(0.8, this.rightingLayer.b[a] + stepScale * this._duckRightingPerturbB[a])
+          );
+          const row = a * this.obsDim;
+          for (let c = 6; c < this.obsDim; c++) {
+            this.rightingLayer.W[row + c] = Math.max(
+              -0.8,
+              Math.min(0.8, this.rightingLayer.W[row + c] + stepScale * this._duckRightingPerturbW[row + c])
+            );
+          }
+        }
+      }
+
+      if (lastObs && lastAct && progress > 0.01) {
+        const lr = 0.012;
+        for (let a = 0; a < this.actDim; a++) {
+          const row = a * this.obsDim;
+          for (let c = 6; c < this.obsDim; c++) {
+            this.rightingLayer.W[row + c] = Math.max(
+              -0.8,
+              Math.min(0.8, this.rightingLayer.W[row + c] + lr * progress * lastAct[a] * lastObs[c])
+            );
+          }
+        }
+      }
+
+      // Sample a fresh neural motor hypothesis for the next attempt
+      this._sampleDuckRightingPerturb();
+      return this.getRightingSkillPct();
+    }
 
     // Policy gradient / biomechanical reinforcement step on dorsal leverage gains:
     // Each attempt on its back teaches the beetle reflex that stronger dorsal push + opposite leg tuck
@@ -525,6 +569,11 @@ export class ActorCriticBrain {
   }
 
   getRightingSkillPct() {
+    if (this.morphologyKey === 'duck') {
+      const successScore = Math.min(60, this.rightingSuccesses * 25);
+      const progressScore = Math.min(35, Math.round((this.duckRightingBestProgress || 0) * 45));
+      return Math.round(Math.max(5, Math.min(100, 5 + successScore + progressScore)));
+    }
     const raw = ((this.rightingGain - 0.32) / (1.0 - 0.32)) * 80 + 20;
     return Math.round(Math.max(20, Math.min(100, raw)));
   }
