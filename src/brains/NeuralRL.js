@@ -285,11 +285,14 @@ export class ActorCriticBrain {
         this.actorSkip.W[yawRow + 15] = 0.18 * cosStride;
         this.actorSkip.W[yawRow + 14] = -0.18 * sinStride;
 
-        // 5. ankle_pitch (synchronized toe clearance in swing & plantar push-off in stance)
+        // 5. ankle_pitch (synchronized toe clearance in swing & plantar push-off in stance + BNO055 IMU pitch stabilization)
         this.actorSkip.W[ankleRow + 11] = 0.16 * cosLift;
         this.actorSkip.W[ankleRow + 10] = -0.16 * sinLift;
         this.actorSkip.W[ankleRow + 13] = 0.12 * cosStride;
         this.actorSkip.W[ankleRow + 12] = -0.12 * sinStride;
+        this.actorSkip.W[ankleRow + 7] = 0.22;  // IMU pitchTilt -> ankle plantar/dorsi reflex
+        this.actorSkip.W[pitchRow + 7] = -0.18; // IMU pitchTilt -> hip step-under-CoM reflex
+        this.actorSkip.W[rollRow + 8] = -0.22;  // IMU rollTilt  -> hip_roll lateral balance reflex
       }
 
       // Neck & Head Counterbalance (DoFs 10..13):
@@ -298,19 +301,22 @@ export class ActorCriticBrain {
       const headYawRow = 12 * this.obsDim;
       const headRollRow = 13 * this.obsDim;
 
-      // Forward-gated pitch counterbalance (shifts CoM forward during stride propulsion)
+      // Forward-gated pitch counterbalance + BNO055 IMU pitch/roll counterweight reflex
       this.actorSkip.W[neckPitchRow + 13] = 0.16;
       this.actorSkip.W[neckPitchRow + 12] = 0.10;
+      this.actorSkip.W[neckPitchRow + 7] = 0.32;
       this.actorSkip.W[headPitchRow + 13] = 0.12;
       this.actorSkip.W[headPitchRow + 12] = -0.08;
+      this.actorSkip.W[headPitchRow + 7] = 0.25;
 
       // Head yaw pans toward food target during turning
       this.actorSkip.W[headYawRow + 15] = 0.18;
       this.actorSkip.W[headYawRow + 14] = 0.12;
 
-      // Head roll counter-balances pelvic waddle
+      // Head roll counter-balances pelvic waddle & IMU roll tilt
       this.actorSkip.W[headRollRow + 11] = -0.14;
       this.actorSkip.W[headRollRow + 10] = 0.14;
+      this.actorSkip.W[headRollRow + 8] = -0.28;
 
       this.cpgTemplate = Float64Array.from(this.actorSkip.W);
       return;
@@ -396,10 +402,10 @@ export class ActorCriticBrain {
         let ankleCmd = 0;
 
         if (upY >= 0.42) {
-          kneeCmd = +0.16;
-          pitchCmd = 0.15 * this.rightingSweep * (leg === 0 ? s : -s);
-          rollCmd = 0.0;
-          ankleCmd = 0.0;
+          kneeCmd = -0.22;
+          pitchCmd = 0.08 * this.rightingSweep * (leg === 0 ? s : -s);
+          rollCmd = -obs[8] * 0.35;
+          ankleCmd = obs[7] * 0.25;
         } else if (leg === 0) {
           kneeCmd = side >= 0
             ? -this.rightingGain * (0.88 + 0.12 * Math.max(0, s))

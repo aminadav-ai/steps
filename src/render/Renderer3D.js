@@ -897,67 +897,131 @@ export class Renderer3D {
       const nBot = posOf(creature.frameRefs.bottom);
       const rawFront = posOf(creature.frameRefs.front);
       const rawTail = posOf(creature.frameRefs.tail);
-      const nFront = creature.isDuck
-        ? new Vec3(
-            0.55 * nTop.x + 0.45 * rawFront.x,
-            0.50 * nTop.y + 0.50 * rawFront.y,
-            0.55 * nTop.z + 0.45 * rawFront.z
-          )
-        : rawFront;
-      const nTail = creature.isDuck
-        ? new Vec3(
-            0.55 * nTop.x + 0.45 * rawTail.x,
-            0.50 * nTop.y + 0.50 * rawTail.y,
-            0.55 * nTop.z + 0.45 * rawTail.z
-          )
-        : rawTail;
-      const spineCenter = new Vec3(
-        0.5 * (nFront.x + nTail.x),
-        0.5 * (nFront.y + nTail.y),
-        0.5 * (nFront.z + nTail.z)
-      );
-      const spineAxis = Vec3.sub(nFront, nTail).normalize();
 
-      // Central spine diamond truss (strictly in mid-plane, never crossing leg sweep planes)
-      const spinePairs = [
-        [nTop, nFront],
-        [nTop, nTail],
-        [nBot, nFront],
-        [nBot, nTail],
-        [nTop, nBot],
-        [nFront, nTail]
-      ];
-      for (const [a, b] of spinePairs) {
-        const pA = proj(a);
-        const pB = proj(b);
-        if (pA && pB) {
-          ctx.beginPath();
-          ctx.moveTo(pA.sx, pA.sy);
-          ctx.lineTo(pB.sx, pB.sy);
-          ctx.stroke();
-        }
-      }
-
-      // Cantilever shoulder standoff axles from central spine out to each Hip Servo housing
-      ctx.strokeStyle = isLeader ? '#38bdf8' : '#94a3b8';
-      ctx.lineWidth = isLeader ? 3.2 : 2.0;
-      const visibleHips = creature.isDuck ? creature.hipNodes.slice(0, 2) : creature.hipNodes;
-      for (const hip of visibleHips) {
-        const hPos = posOf(hip);
-        const rel = Vec3.sub(hPos, spineCenter);
-        const along = rel.dot(spineAxis);
-        const mountPt = new Vec3(
-          spineCenter.x + spineAxis.x * along,
-          hPos.y,
-          spineCenter.z + spineAxis.z * along
+      if (creature.isDuck) {
+        // Open-Frame 3D Box / Octagonal Skeleton of Open_Duck_Mini_v2 (trunk_assembly without opaque armor)
+        const { up } = creature.getTorsoFrame();
+        const boxCenter = new Vec3(
+          0.52 * nTop.x + 0.48 * nBot.x,
+          0.52 * nTop.y + 0.48 * nBot.y,
+          0.52 * nTop.z + 0.48 * nBot.z
         );
-        const pM = proj(mountPt);
-        const pH = proj(hPos);
-        if (pM && pH) {
-          ctx.beginPath();
-          ctx.moveTo(pM.sx, pM.sy);
-          ctx.lineTo(pH.sx, pH.sy);
-          ctx.stroke();
+        const trunkPt = (fx, uy, rz) => new Vec3(
+          boxCenter.x + forward.x * fx + up.x * uy + right.x * rz,
+          boxCenter.y + forward.y * fx + up.y * uy + right.y * rz,
+          boxCenter.z + forward.z * fx + up.z * uy + right.z * rz
+        );
+        const tfl = trunkPt(+0.056, +0.058, +0.058);
+        const tfr = trunkPt(+0.056, +0.058, -0.058);
+        const tbl = trunkPt(-0.056, +0.058, +0.058);
+        const tbr = trunkPt(-0.056, +0.058, -0.058);
+        const bfl = trunkPt(+0.050, -0.062, +0.052);
+        const bfr = trunkPt(+0.050, -0.062, -0.052);
+        const bbl = trunkPt(-0.050, -0.062, +0.052);
+        const bbr = trunkPt(-0.050, -0.062, -0.052);
+
+        // Subtle translucent glass/polycarbonate side panels so all internal servos & battery remain visible
+        const drawQuad = (q1, q2, q3, q4, fillCol) => {
+          const p1 = proj(q1), p2 = proj(q2), p3 = proj(q3), p4 = proj(q4);
+          if (p1 && p2 && p3 && p4) {
+            ctx.fillStyle = fillCol;
+            ctx.beginPath();
+            ctx.moveTo(p1.sx, p1.sy);
+            ctx.lineTo(p2.sx, p2.sy);
+            ctx.lineTo(p3.sx, p3.sy);
+            ctx.lineTo(p4.sx, p4.sy);
+            ctx.closePath();
+            ctx.fill();
+          }
+        };
+        drawQuad(bfl, bfr, bbr, bbl, 'rgba(15, 23, 42, 0.55)'); // Heavy battery pack keel floor
+        drawQuad(tfl, tfr, bfr, bfl, 'rgba(56, 189, 248, 0.08)');
+
+        // Structural open-frame cage bars
+        ctx.strokeStyle = isLeader ? '#fde047' : creature.color;
+        ctx.lineWidth = isLeader ? 2.4 : 1.7;
+        const trunkEdges = [
+          [tfl, tfr], [tfr, tbr], [tbr, tbl], [tbl, tfl],
+          [bfl, bfr], [bfr, bbr], [bbr, bbl], [bbl, bfl],
+          [tfl, bfl], [tfr, bfr], [tbl, bbl], [tbr, bbr],
+          [nTop, nBot]
+        ];
+        for (const [a, b] of trunkEdges) {
+          const pA = proj(a);
+          const pB = proj(b);
+          if (pA && pB) {
+            ctx.beginPath();
+            ctx.moveTo(pA.sx, pA.sy);
+            ctx.lineTo(pB.sx, pB.sy);
+            ctx.stroke();
+          }
+        }
+
+        // Wide lateral hip brackets from trunk_assembly out to left/right hip_roll -> hip_pitch housings
+        ctx.strokeStyle = isLeader ? '#38bdf8' : '#94a3b8';
+        ctx.lineWidth = isLeader ? 3.2 : 2.2;
+        for (const hip of creature.hipNodes.slice(0, 2)) {
+          const hPos = posOf(hip);
+          const mountPt = new Vec3(boxCenter.x, hPos.y, boxCenter.z);
+          const pM = proj(mountPt);
+          const pH = proj(hPos);
+          if (pM && pH) {
+            ctx.beginPath();
+            ctx.moveTo(pM.sx, pM.sy);
+            ctx.lineTo(pH.sx, pH.sy);
+            ctx.stroke();
+          }
+        }
+      } else {
+        const nFront = rawFront;
+        const nTail = rawTail;
+        const spineCenter = new Vec3(
+          0.5 * (nFront.x + nTail.x),
+          0.5 * (nFront.y + nTail.y),
+          0.5 * (nFront.z + nTail.z)
+        );
+        const spineAxis = Vec3.sub(nFront, nTail).normalize();
+
+        // Central spine diamond truss (strictly in mid-plane, never crossing leg sweep planes)
+        const spinePairs = [
+          [nTop, nFront],
+          [nTop, nTail],
+          [nBot, nFront],
+          [nBot, nTail],
+          [nTop, nBot],
+          [nFront, nTail]
+        ];
+        for (const [a, b] of spinePairs) {
+          const pA = proj(a);
+          const pB = proj(b);
+          if (pA && pB) {
+            ctx.beginPath();
+            ctx.moveTo(pA.sx, pA.sy);
+            ctx.lineTo(pB.sx, pB.sy);
+            ctx.stroke();
+          }
+        }
+
+        // Cantilever shoulder standoff axles from central spine out to each Hip Servo housing
+        ctx.strokeStyle = isLeader ? '#38bdf8' : '#94a3b8';
+        ctx.lineWidth = isLeader ? 3.2 : 2.0;
+        for (const hip of creature.hipNodes) {
+          const hPos = posOf(hip);
+          const rel = Vec3.sub(hPos, spineCenter);
+          const along = rel.dot(spineAxis);
+          const mountPt = new Vec3(
+            spineCenter.x + spineAxis.x * along,
+            hPos.y,
+            spineCenter.z + spineAxis.z * along
+          );
+          const pM = proj(mountPt);
+          const pH = proj(hPos);
+          if (pM && pH) {
+            ctx.beginPath();
+            ctx.moveTo(pM.sx, pM.sy);
+            ctx.lineTo(pH.sx, pH.sy);
+            ctx.stroke();
+          }
         }
       }
     } else {
@@ -1197,63 +1261,110 @@ export class Renderer3D {
         ctx.stroke();
       }
 
-      // 4b. Render 3-Point Orange/Yellow Webbed Duck Foot ("стопа-ласта") + Ankle Pitch Servo Drum for Open_Duck_Mini
+      // 4b. Render 3D Yellow Trapezoidal Wedge Boot ("объёмный жёлтый башмак-ласта / утюжок", foot_assembly) + Ankle Pitch Servo Drum for Open_Duck_Mini_v2
       if (creature.webbedFeet && creature.webbedFeet[i] && pFoot) {
         const wf = creature.webbedFeet[i];
-        const posIn = posOf(wf.toeInner);
-        const posOut = posOf(wf.toeOuter);
-        const posMid = new Vec3(
-          0.5 * (posIn.x + posOut.x) + forward.x * 0.032,
-          0.5 * (posIn.y + posOut.y),
-          0.5 * (posIn.z + posOut.z) + forward.z * 0.032
+        const posIn = posOf(wf.toeInner);  // Front toe pad (+0.16 m ahead of ankle)
+        const posOut = posOf(wf.toeOuter); // Rear heel pad (-0.15 m behind ankle)
+        const { up: tUp } = creature.getTorsoFrame();
+
+        // Foot longitudinal and lateral unit axes derived from rear heel (posOut) -> front toe (posIn)
+        const footLong = Vec3.sub(posIn, posOut);
+        footLong.y *= 0.25;
+        const fDir = footLong.length() > 1e-4 ? footLong.normalize() : forward;
+        const rDir = Vec3.cross(tUp, fDir).normalize();
+        const uDir = Vec3.cross(fDir, rDir).normalize();
+
+        // Bottom flat trapezoidal sole corners (wider at front toe, narrower at rear heel)
+        const fl = new Vec3(posIn.x + rDir.x * 0.064, posIn.y, posIn.z + rDir.z * 0.064);
+        const fr = new Vec3(posIn.x - rDir.x * 0.064, posIn.y, posIn.z - rDir.z * 0.064);
+        const bl = new Vec3(posOut.x + rDir.x * 0.048, posOut.y, posOut.z + rDir.z * 0.048);
+        const br = new Vec3(posOut.x - rDir.x * 0.048, posOut.y, posOut.z - rDir.z * 0.048);
+
+        // Raised top ankle collar around center ankle joint (footPos)
+        const collarC = new Vec3(
+          footPos.x + uDir.x * 0.036,
+          footPos.y + uDir.y * 0.036,
+          footPos.z + uDir.z * 0.036
         );
+        const tfl = new Vec3(collarC.x + fDir.x * 0.034 + rDir.x * 0.030, collarC.y, collarC.z + fDir.z * 0.034 + rDir.z * 0.030);
+        const tfr = new Vec3(collarC.x + fDir.x * 0.034 - rDir.x * 0.030, collarC.y, collarC.z + fDir.z * 0.034 - rDir.z * 0.030);
+        const tbl = new Vec3(collarC.x - fDir.x * 0.032 + rDir.x * 0.028, collarC.y, collarC.z - fDir.z * 0.032 + rDir.z * 0.028);
+        const tbr = new Vec3(collarC.x - fDir.x * 0.032 - rDir.x * 0.028, collarC.y, collarC.z - fDir.z * 0.032 - rDir.z * 0.028);
+
+        const pFl = proj(fl), pFr = proj(fr), pBl = proj(bl), pBr = proj(br);
+        const pTfl = proj(tfl), pTfr = proj(tfr), pTbl = proj(tbl), pTbr = proj(tbr);
         const pIn = proj(posIn);
         const pOut = proj(posOut);
-        const pMid = proj(posMid);
         const anyWebContact = foot.inContact || wf.toeInner.inContact || wf.toeOuter.inContact;
 
-        if (pIn && pOut && pMid) {
-          // Flat trapezoidal/triangular Open_Duck_Mini yellow-orange foot sole
+        if (pFl && pFr && pBl && pBr && pTfl && pTfr && pTbl && pTbr) {
+          // 1. Dark TPU non-slip sole plate on bottom
           ctx.fillStyle = anyWebContact
-            ? 'rgba(249, 115, 22, 0.76)'
-            : 'rgba(251, 146, 60, 0.52)';
-          ctx.strokeStyle = anyWebContact ? '#fde047' : '#fb923c';
-          ctx.lineWidth = Math.max(1.8, 0.016 * pFoot.scale);
+            ? 'rgba(30, 41, 59, 0.82)'
+            : 'rgba(51, 65, 85, 0.65)';
           ctx.beginPath();
-          ctx.moveTo(pFoot.sx, pFoot.sy);
-          ctx.lineTo(pIn.sx, pIn.sy);
-          ctx.lineTo(pMid.sx, pMid.sy);
-          ctx.lineTo(pOut.sx, pOut.sy);
+          ctx.moveTo(pFl.sx, pFl.sy);
+          ctx.lineTo(pFr.sx, pFr.sy);
+          ctx.lineTo(pBr.sx, pBr.sy);
+          ctx.lineTo(pBl.sx, pBl.sy);
           ctx.closePath();
           ctx.fill();
-          ctx.stroke();
 
-          // Phalange structural ribs inside the webbed foot
-          ctx.strokeStyle = '#ea580c';
-          ctx.lineWidth = Math.max(1.4, 0.012 * pFoot.scale);
-          ctx.beginPath();
-          ctx.moveTo(pFoot.sx, pFoot.sy);
-          ctx.lineTo(pMid.sx, pMid.sy);
-          ctx.stroke();
-
-          // Toe contact pads
-          for (const [pToe, inCont] of [[pIn, wf.toeInner.inContact], [pMid, anyWebContact], [pOut, wf.toeOuter.inContact]]) {
-            ctx.fillStyle = inCont ? '#4ade80' : '#fb923c';
+          // 2. Semi-transparent yellow 3D wedge upper slopes (Open_Duck_Mini_v2 signature yellow shoe)
+          const wedgeFill = anyWebContact
+            ? 'rgba(250, 204, 21, 0.50)'
+            : 'rgba(234, 179, 8, 0.36)';
+          const drawShoeFace = (a, b, c, d, col) => {
+            ctx.fillStyle = col;
             ctx.beginPath();
-            ctx.arc(pToe.sx, pToe.sy, Math.max(2.6, 0.022 * pFoot.scale), 0, Math.PI * 2);
+            ctx.moveTo(a.sx, a.sy);
+            ctx.lineTo(b.sx, b.sy);
+            ctx.lineTo(c.sx, c.sy);
+            ctx.lineTo(d.sx, d.sy);
+            ctx.closePath();
             ctx.fill();
+          };
+          drawShoeFace(pFl, pFr, pTfr, pTfl, wedgeFill); // Front sloped vamp
+          drawShoeFace(pBl, pBr, pTbr, pTbl, wedgeFill); // Rear heel slope
+          drawShoeFace(pFl, pBl, pTbl, pTfl, 'rgba(250, 204, 21, 0.38)'); // Left side panel
+          drawShoeFace(pFr, pBr, pTbr, pTfr, 'rgba(250, 204, 21, 0.38)'); // Right side panel
+
+          // 3. Structural wireframe edges of the 3D wedge shoe (so internal ankle servo stays clearly visible!)
+          ctx.strokeStyle = anyWebContact ? '#fde047' : '#eab308';
+          ctx.lineWidth = Math.max(1.6, 0.015 * pFoot.scale);
+          const shoeEdges = [
+            [pFl, pFr], [pFr, pBr], [pBr, pBl], [pBl, pFl],
+            [pTfl, pTfr], [pTfr, pTbr], [pTbr, pTbl], [pTbl, pTfl],
+            [pFl, pTfl], [pFr, pTfr], [pBl, pTbl], [pBr, pTbr]
+          ];
+          for (const [eA, eB] of shoeEdges) {
+            ctx.beginPath();
+            ctx.moveTo(eA.sx, eA.sy);
+            ctx.lineTo(eB.sx, eB.sy);
+            ctx.stroke();
           }
 
-          // Ankle Pitch Servo Drum at heel/ankle joint (ankle_pitch)
+          // Contact indicator LEDs at front toe, center ankle, and rear heel
+          if (pIn && pOut) {
+            for (const [pPad, inCont] of [[pIn, wf.toeInner.inContact], [pFoot, foot.inContact], [pOut, wf.toeOuter.inContact]]) {
+              ctx.fillStyle = inCont ? '#4ade80' : '#f59e0b';
+              ctx.beginPath();
+              ctx.arc(pPad.sx, pPad.sy, Math.max(2.4, 0.020 * pFoot.scale), 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+
+          // 4. Ankle Pitch Servo Drum right inside the center ankle apex (ankle_pitch)
           const ankleServo = (ankleDof && ankleDof.primary) ? ankleDof.primary : (strideDof ? strideDof.primary : null);
           const ankleLoad = ankleServo ? (ankleServo.torqueLoadRatio ?? 0.2) : 0.2;
-          const ankleAng = Math.atan2(pMid.sy - pFoot.sy, pMid.sx - pFoot.sx);
+          const ankleAng = pIn ? Math.atan2(pIn.sy - pFoot.sy, pIn.sx - pFoot.sx) : 0;
           drawServoDrum(pFoot, 0.036 * pFoot.scale, ankleLoad, ankleAng);
         }
       }
     }
 
-    // 4c. Render Open-Frame 4-DoF Neck & BDX / Open_Duck_Mini Head Assembly (neck_pitch, head_pitch, head_yaw, head_roll, 2 headlight-eyes, 2 antennas)
+    // 4c. Render Open-Frame 4-DoF Neck & Massive BDX / Open_Duck_Mini_v2 Head Assembly (neck_pitch, head_pitch, head_yaw, head_roll, 2 headlight-eyes, yellow counterweight cap, 2 antennas)
     if (creature.isDuck && creature.frameRefs) {
       const { up } = creature.getTorsoFrame();
       const nTop = posOf(creature.frameRefs.top);
@@ -1326,16 +1437,16 @@ export class Renderer3D {
       const pHead = proj(headPos);
 
       if (pTop && pHead) {
-        // Metallic articulated neck column (nTop -> headPos)
+        // Metallic curved/inclined neck column (nTop -> headPos)
         ctx.strokeStyle = '#0f172a';
-        ctx.lineWidth = Math.max(5.2, 0.054 * pTop.scale);
+        ctx.lineWidth = Math.max(5.5, 0.058 * pTop.scale);
         ctx.beginPath();
         ctx.moveTo(pTop.sx, pTop.sy);
         ctx.lineTo(pHead.sx, pHead.sy);
         ctx.stroke();
 
         ctx.strokeStyle = '#e2e8f0';
-        ctx.lineWidth = Math.max(2.6, 0.026 * pTop.scale);
+        ctx.lineWidth = Math.max(2.8, 0.028 * pTop.scale);
         ctx.beginPath();
         ctx.moveTo(pTop.sx, pTop.sy);
         ctx.lineTo(pHead.sx, pHead.sy);
@@ -1345,43 +1456,87 @@ export class Renderer3D {
         const neckAng = Math.atan2(pHead.sy - pTop.sy, pHead.sx - pTop.sx);
         drawServoDrum(pTop, 0.042 * pTop.scale, neckLoad, neckAng);
 
-        // Open-Frame BDX / Open_Duck_Mini Head Structural Truss (sticks, not opaque armor!)
+        // Massive Open-Frame BDX / Open_Duck_Mini_v2 Head Truss (proportionally wider & longer than torso, like the real robot!)
         const headPt = (fx, uy, rz) => new Vec3(
           headPos.x + hFwd.x * fx + hUp.x * uy + hRight.x * rz,
           headPos.y + hFwd.y * fx + hUp.y * uy + hRight.y * rz,
           headPos.z + hFwd.z * fx + hUp.z * uy + hRight.z * rz
         );
 
-        const flt = headPt(+0.095, +0.042, +0.068);
-        const frt = headPt(+0.095, +0.042, -0.068);
-        const flb = headPt(+0.095, -0.032, +0.068);
-        const frb = headPt(+0.095, -0.032, -0.068);
-        const blt = headPt(-0.085, +0.042, +0.058);
-        const brt = headPt(-0.085, +0.042, -0.058);
-        const blb = headPt(-0.085, -0.032, +0.058);
-        const brb = headPt(-0.085, -0.032, -0.058);
+        const flt = headPt(+0.130, +0.054, +0.088);
+        const frt = headPt(+0.130, +0.054, -0.088);
+        const flb = headPt(+0.145, -0.040, +0.088);
+        const frb = headPt(+0.145, -0.040, -0.088);
+        const blt = headPt(-0.105, +0.056, +0.078);
+        const brt = headPt(-0.105, +0.056, -0.078);
+        const blb = headPt(-0.105, -0.036, +0.078);
+        const brb = headPt(-0.105, -0.036, -0.078);
 
-        // Orange Duck Bill / Beak protruding from lower front of head truss
-        const beakTip = headPt(+0.185, -0.022, 0.0);
-        const pBeakTip = proj(beakTip);
-        const pFlb = proj(flb);
-        const pFrb = proj(frb);
-        if (pBeakTip && pFlb && pFrb) {
-          ctx.fillStyle = 'rgba(249, 115, 22, 0.85)';
+        // Rear Rounded Yellow Counterweight Cap (iconic yellow back-of-head mass on Open_Duck_Mini_v2!)
+        const cwl = headPt(-0.138, +0.012, +0.056);
+        const cwr = headPt(-0.138, +0.012, -0.056);
+        const pBlt = proj(blt), pBrt = proj(brt), pBlb = proj(blb), pBrb = proj(brb);
+        const pCwl = proj(cwl), pCwr = proj(cwr);
+        if (pBlt && pBrt && pBlb && pBrb && pCwl && pCwr) {
+          ctx.fillStyle = 'rgba(250, 204, 21, 0.72)';
+          ctx.strokeStyle = '#fde047';
+          ctx.lineWidth = Math.max(1.5, 0.014 * pHead.scale);
+          ctx.beginPath();
+          ctx.moveTo(pBlt.sx, pBlt.sy);
+          ctx.lineTo(pBrt.sx, pBrt.sy);
+          ctx.lineTo(pCwr.sx, pCwr.sy);
+          ctx.lineTo(pBrb.sx, pBrb.sy);
+          ctx.lineTo(pBlb.sx, pBlb.sy);
+          ctx.lineTo(pCwl.sx, pCwl.sy);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+
+        // Subtle translucent glass/polycarbonate visor panels on the massive head block
+        const pFlt = proj(flt), pFrt = proj(frt), pFlb = proj(flb), pFrb = proj(frb);
+        if (pFlt && pFrt && pFlb && pFrb && pBlt && pBrt) {
+          ctx.fillStyle = 'rgba(248, 250, 252, 0.14)';
+          ctx.beginPath();
+          ctx.moveTo(pFlt.sx, pFlt.sy);
+          ctx.lineTo(pFrt.sx, pFrt.sy);
+          ctx.lineTo(pBrt.sx, pBrt.sy);
+          ctx.lineTo(pBlt.sx, pBlt.sy);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
+          ctx.beginPath();
+          ctx.moveTo(pFlt.sx, pFlt.sy);
+          ctx.lineTo(pFrt.sx, pFrt.sy);
+          ctx.lineTo(pFrb.sx, pFrb.sy);
+          ctx.lineTo(pFlb.sx, pFlb.sy);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Yellow-Orange Duck Bill / Lower Visor Lip protruding from lower front of head truss
+        const beakL = headPt(+0.205, -0.032, +0.052);
+        const beakR = headPt(+0.205, -0.032, -0.052);
+        const pBeakL = proj(beakL);
+        const pBeakR = proj(beakR);
+        if (pBeakL && pBeakR && pFlb && pFrb) {
+          ctx.fillStyle = 'rgba(250, 204, 21, 0.82)';
           ctx.strokeStyle = '#fde047';
           ctx.lineWidth = Math.max(1.5, 0.015 * pHead.scale);
           ctx.beginPath();
           ctx.moveTo(pFlb.sx, pFlb.sy);
-          ctx.lineTo(pBeakTip.sx, pBeakTip.sy);
+          ctx.lineTo(pBeakL.sx, pBeakL.sy);
+          ctx.lineTo(pBeakR.sx, pBeakR.sy);
           ctx.lineTo(pFrb.sx, pFrb.sy);
           ctx.closePath();
           ctx.fill();
           ctx.stroke();
         }
 
-        // Draw open-frame head truss tubes
-        ctx.strokeStyle = isLeader ? '#fde047' : '#38bdf8';
-        ctx.lineWidth = Math.max(1.9, 0.019 * pHead.scale);
+        // Draw open-frame head structural truss tubes
+        ctx.strokeStyle = isLeader ? '#fde047' : '#e2e8f0';
+        ctx.lineWidth = Math.max(2.1, 0.021 * pHead.scale);
         const headEdges = [
           [flt, frt], [frt, frb], [frb, flb], [flb, flt],
           [blt, brt], [brt, brb], [brb, blb], [blb, blt],
@@ -1398,22 +1553,22 @@ export class Renderer3D {
           }
         }
 
-        // Servos #12, #13, #14 inside the open-frame head gimbal (head_pitch, head_yaw, head_roll)
-        const pGimbalPitch = proj(headPt(-0.02, 0.0, 0.0));
-        const pGimbalRoll = proj(headPt(+0.03, +0.01, 0.0));
-        drawServoDrum(pHead, 0.036 * pHead.scale, headYawLoad, yawA);
-        if (pGimbalPitch) drawServoDrum(pGimbalPitch, 0.028 * pGimbalPitch.scale, headPitchLoad, pitchA);
-        if (pGimbalRoll) drawServoDrum(pGimbalRoll, 0.026 * pGimbalRoll.scale, headRollLoad, rollA);
+        // Servos #12, #13, #14 clearly visible inside the open-frame head gimbal (head_pitch, head_yaw, head_roll)
+        const pGimbalPitch = proj(headPt(-0.035, 0.0, 0.0));
+        const pGimbalRoll = proj(headPt(+0.045, +0.012, 0.0));
+        drawServoDrum(pHead, 0.038 * pHead.scale, headYawLoad, yawA);
+        if (pGimbalPitch) drawServoDrum(pGimbalPitch, 0.030 * pGimbalPitch.scale, headPitchLoad, pitchA);
+        if (pGimbalRoll) drawServoDrum(pGimbalRoll, 0.028 * pGimbalRoll.scale, headRollLoad, rollA);
 
-        // Two Rear Vertical Antennas (iconic Open_Duck_Mini / BDX silhouette!)
+        // Two Rear Vertical Antennas (iconic Open_Duck_Mini_v2 / BDX silhouette!)
         for (const sideS of [+1, -1]) {
-          const antBase = headPt(-0.065, +0.042, 0.044 * sideS);
-          const antTip = headPt(-0.075, +0.165, 0.052 * sideS);
+          const antBase = headPt(-0.082, +0.056, 0.056 * sideS);
+          const antTip = headPt(-0.095, +0.205, 0.064 * sideS);
           const pAB = proj(antBase);
           const pAT = proj(antTip);
           if (pAB && pAT) {
             ctx.strokeStyle = '#cbd5e1';
-            ctx.lineWidth = Math.max(1.6, 0.015 * pHead.scale);
+            ctx.lineWidth = Math.max(1.8, 0.016 * pHead.scale);
             ctx.beginPath();
             ctx.moveTo(pAB.sx, pAB.sy);
             ctx.lineTo(pAT.sx, pAT.sy);
@@ -1421,17 +1576,17 @@ export class Renderer3D {
 
             ctx.fillStyle = '#38bdf8';
             ctx.beginPath();
-            ctx.arc(pAT.sx, pAT.sy, Math.max(2.2, 0.018 * pAT.scale), 0, Math.PI * 2);
+            ctx.arc(pAT.sx, pAT.sy, Math.max(2.4, 0.019 * pAT.scale), 0, Math.PI * 2);
             ctx.fill();
           }
         }
 
-        // Two Large Round Front Headlight-Eyes on the front face of the head block
+        // Two Large Round Front Headlight-Eyes on the sloped front visor of the head block
         for (const sideS of [+1, -1]) {
-          const eyePos = headPt(+0.098, +0.008, 0.044 * sideS);
+          const eyePos = headPt(+0.140, +0.008, 0.054 * sideS);
           const pEye = proj(eyePos);
           if (pEye) {
-            const eyeR = Math.max(3.6, 0.030 * pEye.scale);
+            const eyeR = Math.max(4.4, 0.036 * pEye.scale);
             // Dark bezel ring
             ctx.fillStyle = '#0f172a';
             ctx.beginPath();
@@ -1443,7 +1598,7 @@ export class Renderer3D {
             ctx.arc(pEye.sx, pEye.sy, eyeR, 0, Math.PI * 2);
             ctx.fill();
             ctx.strokeStyle = '#38bdf8';
-            ctx.lineWidth = Math.max(1.4, eyeR * 0.28);
+            ctx.lineWidth = Math.max(1.6, eyeR * 0.28);
             ctx.stroke();
             // Pupil highlight
             ctx.fillStyle = '#0284c7';
