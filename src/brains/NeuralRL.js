@@ -937,10 +937,10 @@ export class PPOTrainer {
     if (!this.wasOverturned) {
       if (isPhysicallyTiltedOnBack) {
         this.overturnConfirmSteps = (this.overturnConfirmSteps || 0) + 1;
-        // During the 1.2s initial confirmation pause: if flat on its back (up.y < 0.05) for >0.3s,
-        // lie still and let momentum settle; otherwise let dynamic somersaults/rolls carry through!
+        // During the 1.2s initial confirmation pause: after 0.3s (6 steps) of staying tilted (< 0.22),
+        // lie still and let momentum settle; during the first 0.3s let dynamic somersaults/rolls carry through!
         if (this.overturnConfirmSteps < (this.overturnConfirmDelay || 24)) {
-          if (upY0 < 0.05 && this.overturnConfirmSteps >= 6) {
+          if (this.overturnConfirmSteps >= 6) {
             const obs = c0.getObservation();
             const calmAct = new Float64Array(this.brain.actDim);
             c0.lastState = obs;
@@ -1766,7 +1766,7 @@ export class NESTrainer {
     if (!this.wasOverturned) {
       if (isPhysicallyTiltedOnBack) {
         this.overturnConfirmSteps = (this.overturnConfirmSteps || 0) + 1;
-        if (this.overturnConfirmSteps < 24 && upY0 < 0.05 && this.overturnConfirmSteps >= 6) {
+        if (this.overturnConfirmSteps < 24 && this.overturnConfirmSteps >= 6) {
           const obs = c0.getObservation();
           const calmAct = new Float64Array(this.brain.actDim);
           c0.lastState = obs;

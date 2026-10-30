@@ -612,16 +612,30 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
   expStatusBadge.style.color = '#38bdf8';
 
   const c0 = sim.creatures[0];
+  if (sim.trainer && sim.trainer.metaState) {
+    sim.trainer.manualFreeze = false;
+    sim.trainer.metaState.mode = 'LEARNING_WALK';
+    sim.trainer.metaState.isLearningActive = true;
+    sim.trainer.minTrainEpochsRemaining = Math.max(sim.trainer.minTrainEpochsRemaining || 0, targetUpdates);
+  }
+
   sim._isHeadlessFastTrain = true;
   for (let u = 1; u <= targetUpdates; u++) {
     let updateEntry = null;
-    while (!updateEntry) {
+    let safetySteps = 0;
+    while (!updateEntry && safetySteps < 64) {
+      if (c0.getTorsoFrame().up.y < 0.28) {
+        sim.uprightCreature(0);
+      }
       updateEntry = sim.stepControl();
+      safetySteps += 1;
     }
-    handleUpdateEntry(updateEntry);
+    if (updateEntry) {
+      handleUpdateEntry(updateEntry);
+    }
     btnFastTrain.textContent = getT().btnFastTrainProgress(u, targetUpdates);
 
-    if (u % 3 === 0) {
+    if (u % 2 === 0) {
       updateHUD();
       await new Promise(r => setTimeout(r, 0));
     }

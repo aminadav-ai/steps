@@ -211,10 +211,14 @@ export class ArenaSimulation {
       c.lastAction.fill(0);
       c.applyActionVector(c.lastAction, false);
     }
-    if (this.trainer && this.trainer.wasOverturned) {
-      this.trainer.wasOverturned = false;
-      this.trainer.metaState.mode = this.trainer.modeBeforeOverturn || 'LEARNING_WALK';
-      this.trainer.metaState.isLearningActive = this.trainer.metaState.mode === 'LEARNING_WALK';
+    if (this.trainer) {
+      this.trainer.overturnConfirmSteps = 0;
+      this.trainer.rightingPauseStepsRemaining = 0;
+      if (this.trainer.wasOverturned) {
+        this.trainer.wasOverturned = false;
+        this.trainer.metaState.mode = this.trainer.modeBeforeOverturn || 'LEARNING_WALK';
+        this.trainer.metaState.isLearningActive = this.trainer.metaState.mode === 'LEARNING_WALK';
+      }
     }
 
     c.prevFoodDist = Math.hypot(c.foodPos.x - cx, c.foodPos.z - cz);
