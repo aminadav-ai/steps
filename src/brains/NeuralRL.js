@@ -937,9 +937,9 @@ export class PPOTrainer {
     if (!this.wasOverturned) {
       if (isPhysicallyTiltedOnBack) {
         this.overturnConfirmSteps = (this.overturnConfirmSteps || 0) + 1;
-        // During the 1.2s initial confirmation pause: after 0.3s (6 steps) of staying tilted (< 0.22),
+        // During the 1.0s initial confirmation pause: after 0.3s (6 steps) of staying tilted (< 0.22),
         // lie still and let momentum settle; during the first 0.3s let dynamic somersaults/rolls carry through!
-        if (this.overturnConfirmSteps < (this.overturnConfirmDelay || 24)) {
+        if (this.overturnConfirmSteps < (this.overturnConfirmDelay || 20)) {
           if (this.overturnConfirmSteps >= 6) {
             const obs = c0.getObservation();
             const calmAct = new Float64Array(this.brain.actDim);
@@ -958,7 +958,7 @@ export class PPOTrainer {
     const isOverturned0 =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= (this.overturnConfirmDelay || 24)) ||
+      ((isPhysicallyTiltedOnBack && this.overturnConfirmSteps >= (this.overturnConfirmDelay || 20)) ||
         (this.wasOverturned && upY0 < 0.65));
 
     // 1. Check if main walker is confirmed overturned on its back/side -> engage Self-Righting Reflex!
@@ -967,8 +967,9 @@ export class PPOTrainer {
         this.wasOverturned = true;
         this.rightingPauseStepsRemaining = 0;
         this.modeBeforeOverturn = this.metaState.mode === 'LEARNING_RIGHTING' ? 'LEARNING_WALK' : this.metaState.mode;
-        // Clear any partial walking rollout so falling/overturned steps NEVER corrupt walking weights!
-        this._resetBuffers();
+        // Note: We do NOT wipe this._resetBuffers() here because the terminal crash step (dones[0] = 1)
+        // is already recorded at the end of bufDone, so GAE cleanly separates pre-fall steps from post-recovery steps
+        // and teaches the walking policy to avoid self-inflicted falls!
         this.rightingStepCursor = 0;
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
@@ -1112,20 +1113,22 @@ export class PPOTrainer {
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
         this.rightingContactSteps = 0;
-        // If still overturned on its back/side after this attempt, pause for 0.7s like a real beetle!
+        // If still overturned on its back/side after this attempt, pause for 0.4s like a real beetle!
         if (upY0 < 0.35) {
-          this.rightingPauseStepsRemaining = this.rightingPauseDuration || 14;
+          this.rightingPauseStepsRemaining = this.rightingPauseDuration || 8;
         }
       }
       return null;
     }
 
-    // If walker suddenly tipped over, is held by user's mouse, OR is in the pause between food orbs (DISSOLVING / WAITING / DROPPING),
+    // If walker is held by user's mouse, in post-throw air flight, in the pause between food orbs,
+    // or lying on its back after the terminal crash step (overturnConfirmSteps > 1),
     // do not push non-locomotion steps into the walking rollout buffer!
+    // (Note: overturnConfirmSteps === 1 IS pushed with dones[0] = 1 so PPO learns from self-inflicted falls!)
     if (
       c0.isGrabbed ||
       c0.postThrowTimer > 0 ||
-      upY0 < 0.18 ||
+      (upY0 < 0.22 && (this.overturnConfirmSteps || 0) > 1) ||
       c0.foodState === 'DISSOLVING' ||
       c0.foodState === 'WAITING' ||
       c0.foodState === 'DROPPING'

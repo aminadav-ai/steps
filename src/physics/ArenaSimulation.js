@@ -574,8 +574,12 @@ export class ArenaSimulation {
         r = velToward * forwardFactor * 2.5;
         // 2) Orientation alignment reward
         r += 0.22 * alignCos;
-        // 3) Upright posture maintenance
-        r += 0.08 * Math.max(-1, up.y - 0.55);
+        // 3) Upright posture maintenance + self-inflicted overturn penalty (teaches walker to keep balance!)
+        r += up.y >= 0.55 ? 0.08 * (up.y - 0.55) : 0.45 * (up.y - 0.55);
+        if (up.y < 0.22) {
+          r -= 1.65;
+          dones[i] = 1;
+        }
         // 4) Mechanical power penalty (smooth, efficient locomotion)
         r -= 0.00035 * c.lastMechanicalPower;
 

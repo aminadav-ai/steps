@@ -620,18 +620,13 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
   }
 
   sim._isHeadlessFastTrain = true;
+  const stepsPerEpoch = sim.trainer.rolloutSteps || sim.trainer.horizonSteps || 32;
   for (let u = 1; u <= targetUpdates; u++) {
-    let updateEntry = null;
-    let safetySteps = 0;
-    while (!updateEntry && safetySteps < 64) {
-      if (c0.getTorsoFrame().up.y < 0.28) {
-        sim.uprightCreature(0);
+    for (let s = 0; s < stepsPerEpoch; s++) {
+      const updateEntry = sim.stepControl();
+      if (updateEntry) {
+        handleUpdateEntry(updateEntry);
       }
-      updateEntry = sim.stepControl();
-      safetySteps += 1;
-    }
-    if (updateEntry) {
-      handleUpdateEntry(updateEntry);
     }
     btnFastTrain.textContent = getT().btnFastTrainProgress(u, targetUpdates);
 
@@ -641,10 +636,6 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
     }
   }
   sim._isHeadlessFastTrain = false;
-
-  if (c0.getTorsoFrame().up.y < 0.45) {
-    sim.uprightCreature(0);
-  }
   renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
 
   simTimeAccum = 0;
