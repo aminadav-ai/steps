@@ -130,11 +130,12 @@ export class DenseLayer {
  *   Critic: s -> Dense(32) -> tanh -> Dense(24) -> tanh -> Dense(1) = V(s)
  */
 export class ActorCriticBrain {
-  constructor(obsDim, actDim, hidden1 = 32, hidden2 = 24) {
+  constructor(obsDim, actDim, hidden1 = 32, hidden2 = 24, morphologyKey = 'quadruped') {
     this.obsDim = obsDim;
     this.actDim = actDim;
     this.hidden1 = hidden1;
     this.hidden2 = hidden2;
+    this.morphologyKey = morphologyKey;
 
     // Actor layers
     this.actorL1 = new DenseLayer(obsDim, hidden1, Math.sqrt(0.5 / (obsDim + hidden1)));
@@ -247,11 +248,14 @@ export class ActorCriticBrain {
 
     for (let leg = 0; leg < numLegs; leg++) {
       // Bilaterally symmetric phase schedule:
+      // Duck (biped waddle): Left webbed foot (-0.36 rad) & Right webbed foot (+0.36 rad) waddle-step with Neck/Pelvis counter-phase (pi)
       // Tripod (3 legs): Front-Left (0) & Front-Right (0) alternate with Rear-Center (pi)
       // Quadruped (4 legs): Diagonal trot pairs FL+BR (0) and FR+BL (pi)
-      const delta = numLegs === 3
-        ? (leg === 2 ? Math.PI : 0.0)
-        : (leg === 0 || leg === 3 ? 0.0 : Math.PI);
+      const delta = this.morphologyKey === 'duck'
+        ? (leg === 0 ? -0.36 : leg === 1 ? +0.36 : Math.PI)
+        : numLegs === 3
+          ? (leg === 2 ? Math.PI : 0.0)
+          : (leg === 0 || leg === 3 ? 0.0 : Math.PI);
 
       const cosLift = Math.cos(delta);
       const sinLift = Math.sin(delta);

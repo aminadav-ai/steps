@@ -293,6 +293,57 @@ if (m0.actuatorMode !== 'muscle' || m0.kneeNodes.length !== 0 || m0.legControlle
 }
 console.log(`Классический режим приводов: ${m0.actuatorMode} (узлов коленей: ${m0.kneeNodes.length}, всего физических узлов: ${m0.body.nodes.length})`);
 
+console.log('\n=== 7. Проверка Конструкции №3: Двуногий серво-робот «Микро-Утка» (duck, Biped, 6 DoF) ===');
+const duckIceSim = new ArenaSimulation({
+  morphologyKey: 'duck',
+  actuatorMode: 'muscle', // Должен принудительно переключиться в 'servo'
+  algorithm: 'ppo',
+  populationSize: 1,
+  floorFriction: 0.0
+});
+const d0 = duckIceSim.creatures[0];
+if (duckIceSim.actuatorMode !== 'servo' || d0.actuatorMode !== 'servo' || !d0.isDuck || d0.webbedFeet.length !== 2) {
+  console.error('ОШИБКА: Микро-Утка должна всегда работать на жёстких сервоприводах (servo) и иметь 2 трёхточечные стопы-ласты!');
+  process.exit(1);
+}
+const dInitCom = d0.body.getCenterOfMass();
+for (let step = 0; step < 50; step++) {
+  const act = [
+    Math.sin(step * 0.6),
+    Math.cos(step * 0.6),
+    -Math.sin(step * 0.6),
+    -Math.cos(step * 0.6),
+    Math.sin(step * 0.3),
+    Math.cos(step * 0.3)
+  ];
+  d0.applyActionVector(act);
+  duckIceSim.world.step(0.05, () => d0.applyActionVector(act));
+}
+const dAfterCom = d0.body.getCenterOfMass();
+const duckDrift = Math.hypot(dAfterCom.x - dInitCom.x, dAfterCom.z - dInitCom.z);
+console.log(`Микро-Утка (duck): приводы=${d0.actuatorMode}, стоп-ласт=${d0.webbedFeet.length}, всего узлов=${d0.body.nodes.length}, дрейф при mu=0: ${duckDrift.toExponential(4)} м`);
+if (duckDrift > 1e-6) {
+  console.error('ОШИБКА: Нарушен закон сохранения импульса у Микро-Утки!');
+  process.exit(1);
+}
+
+const duckTrainSim = new ArenaSimulation({
+  morphologyKey: 'duck',
+  algorithm: 'ppo',
+  populationSize: 1,
+  floorFriction: 1.0
+});
+for (let s = 0; s < 32 * 8; s++) {
+  duckTrainSim.stepControl();
+}
+const dw = duckTrainSim.creatures[0];
+console.log(`Микро-Утка после 8 эпох обучения: up.y=${dw.getTorsoFrame().up.y.toFixed(3)}, скорость=${duckTrainSim.trainer.metaState.competenceEMA.toFixed(3)} м/с, собрано целей=${dw.foodCollected}`);
+if (dw.getTorsoFrame().up.y < 0.65 || duckTrainSim.trainer.metaState.competenceEMA < 0.08) {
+  console.error('ОШИБКА: Микро-Утка должна устойчиво стоять на стопах-ластах и уверенно идти вперёд!');
+  process.exit(1);
+}
+console.log('ОК: Микро-Утка сохраняет импульс с машинной точностью и уверенно шагает вразвалочку к цели на стопах-ластах.');
+
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);
 console.log(`После 25 эпох (1 шагоход): Vel=${lastMetrics.meanVelocity.toFixed(3)} m/s, Food=${lastMetrics.c0Food}, Mode=${lastMetrics.metaMode}`);

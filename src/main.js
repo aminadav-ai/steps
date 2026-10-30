@@ -128,7 +128,19 @@ function formatFrictionLabel(mu) {
 
 function getMorphDescriptionText(morphKey) {
   const t = getT();
+  if (morphKey === 'duck') return t.morphDescDuck || t.morphDescTripod;
   return morphKey === 'quadruped' ? t.morphDescQuadruped : t.morphDescTripod;
+}
+
+function syncActuatorLockForMorphology(morphKey) {
+  if (!selectActuator) return;
+  const muscleOpt = selectActuator.querySelector('option[value="muscle"]');
+  if (morphKey === 'duck') {
+    selectActuator.value = 'servo';
+    if (muscleOpt) muscleOpt.disabled = true;
+  } else {
+    if (muscleOpt) muscleOpt.disabled = false;
+  }
 }
 
 function renderLogsList(logs) {
@@ -349,7 +361,8 @@ async function startNewExperiment({ clearSaved = false, resetDefaults = clearSav
     }
   }
   const morphologyKey = selectMorphology.value;
-  const actuatorMode = selectActuator ? selectActuator.value : 'servo';
+  syncActuatorLockForMorphology(morphologyKey);
+  const actuatorMode = morphologyKey === 'duck' ? 'servo' : (selectActuator ? selectActuator.value : 'servo');
   const algorithm = selectAlgorithm.value;
   const floorFriction = parseFloat(rangeFriction.value);
 
@@ -399,6 +412,7 @@ async function restoreOrStartExperiment() {
 
   if (ckpt && ckpt.morphologyKey && MORPHOLOGY_REGISTRY[ckpt.morphologyKey]) {
     applyRestoredUIState(ckpt);
+    syncActuatorLockForMorphology(ckpt.morphologyKey);
     const spec = MORPHOLOGY_REGISTRY[ckpt.morphologyKey];
     morphDescription.textContent = getMorphDescriptionText(ckpt.morphologyKey);
     nnDimLabel.textContent = `${spec.obsDim} → 32 → 24 → ${spec.actDim}`;

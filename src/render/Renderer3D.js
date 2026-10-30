@@ -895,8 +895,22 @@ export class Renderer3D {
     if (isServoMode && creature.frameRefs) {
       const nTop = posOf(creature.frameRefs.top);
       const nBot = posOf(creature.frameRefs.bottom);
-      const nFront = posOf(creature.frameRefs.front);
-      const nTail = posOf(creature.frameRefs.tail);
+      const rawFront = posOf(creature.frameRefs.front);
+      const rawTail = posOf(creature.frameRefs.tail);
+      const nFront = creature.isDuck
+        ? new Vec3(
+            0.55 * nTop.x + 0.45 * rawFront.x,
+            0.45 * nTop.y + 0.55 * rawFront.y,
+            0.55 * nTop.z + 0.45 * rawFront.z
+          )
+        : rawFront;
+      const nTail = creature.isDuck
+        ? new Vec3(
+            0.50 * nTop.x + 0.50 * rawTail.x,
+            0.55 * nTop.y + 0.45 * rawTail.y,
+            0.50 * nTop.z + 0.50 * rawTail.z
+          )
+        : rawTail;
       const spineCenter = new Vec3(
         0.5 * (nFront.x + nTail.x),
         0.5 * (nFront.y + nTail.y),
@@ -927,7 +941,8 @@ export class Renderer3D {
       // Cantilever shoulder standoff axles from central spine out to each Hip Servo housing
       ctx.strokeStyle = isLeader ? '#38bdf8' : '#94a3b8';
       ctx.lineWidth = isLeader ? 3.2 : 2.0;
-      for (const hip of creature.hipNodes) {
+      const visibleHips = creature.isDuck ? creature.hipNodes.slice(0, 2) : creature.hipNodes;
+      for (const hip of visibleHips) {
         const hPos = posOf(hip);
         const rel = Vec3.sub(hPos, spineCenter);
         const along = rel.dot(spineAxis);
@@ -1003,7 +1018,8 @@ export class Renderer3D {
       ctx.fill();
     };
 
-    for (let i = 0; i < creature.footNodes.length; i++) {
+    const visibleLegCount = creature.isDuck ? 2 : creature.footNodes.length;
+    for (let i = 0; i < visibleLegCount; i++) {
       const hip = creature.hipNodes[i];
       const foot = creature.footNodes[i];
       if (!hip || !foot) continue;
@@ -1146,11 +1162,181 @@ export class Renderer3D {
         ctx.ellipse(pFootGround.sx, pFootGround.sy, ringRad, ringRad * 0.48, 0, 0, Math.PI * 2);
         ctx.stroke();
       }
+
+      // 4b. Render 3-Point Orange Webbed Duck Foot ("стопа-ласта") + Ankle Pitch Servo Drum for MicroDuck
+      if (creature.webbedFeet && creature.webbedFeet[i] && pFoot) {
+        const wf = creature.webbedFeet[i];
+        const posIn = posOf(wf.toeInner);
+        const posOut = posOf(wf.toeOuter);
+        const posMid = new Vec3(
+          0.5 * (posIn.x + posOut.x) + forward.x * 0.032,
+          0.5 * (posIn.y + posOut.y),
+          0.5 * (posIn.z + posOut.z) + forward.z * 0.032
+        );
+        const pIn = proj(posIn);
+        const pOut = proj(posOut);
+        const pMid = proj(posMid);
+        const anyWebContact = foot.inContact || wf.toeInner.inContact || wf.toeOuter.inContact;
+
+        if (pIn && pOut && pMid) {
+          // Orange webbed membrane polygon
+          ctx.fillStyle = anyWebContact
+            ? 'rgba(249, 115, 22, 0.72)'
+            : 'rgba(251, 146, 60, 0.48)';
+          ctx.strokeStyle = anyWebContact ? '#fde047' : '#fb923c';
+          ctx.lineWidth = Math.max(1.8, 0.016 * pFoot.scale);
+          ctx.beginPath();
+          ctx.moveTo(pFoot.sx, pFoot.sy);
+          ctx.lineTo(pIn.sx, pIn.sy);
+          ctx.lineTo(pMid.sx, pMid.sy);
+          ctx.lineTo(pOut.sx, pOut.sy);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Phalange structural ribs inside the webbed foot
+          ctx.strokeStyle = '#ea580c';
+          ctx.lineWidth = Math.max(1.4, 0.012 * pFoot.scale);
+          ctx.beginPath();
+          ctx.moveTo(pFoot.sx, pFoot.sy);
+          ctx.lineTo(pMid.sx, pMid.sy);
+          ctx.stroke();
+
+          // Toe contact pads
+          for (const [pToe, inCont] of [[pIn, wf.toeInner.inContact], [pMid, anyWebContact], [pOut, wf.toeOuter.inContact]]) {
+            ctx.fillStyle = inCont ? '#4ade80' : '#fb923c';
+            ctx.beginPath();
+            ctx.arc(pToe.sx, pToe.sy, Math.max(2.6, 0.022 * pFoot.scale), 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          // Ankle Pitch Servo Drum at heel/ankle joint
+          const strideServo = strideDof ? strideDof.primary : null;
+          const ankleLoad = strideServo ? (strideServo.torqueLoadRatio ?? 0.2) : 0.2;
+          const ankleAng = Math.atan2(pMid.sy - pFoot.sy, pMid.sx - pFoot.sx);
+          drawServoDrum(pFoot, 0.036 * pFoot.scale, ankleLoad, ankleAng);
+        }
+      }
+    }
+
+    // 4c. Render Articulated MicroDuck Neck, Head, Orange Beak & Optical Eyes (for morphologyKey === 'duck')
+    if (creature.isDuck && creature.frameRefs) {
+      const { up } = creature.getTorsoFrame();
+      const nTop = posOf(creature.frameRefs.top);
+      const neckPitchDof = creature.logicalDoFs[4] ? creature.logicalDoFs[4].primary : null;
+      const neckYawDof = creature.logicalDoFs[5] ? creature.logicalDoFs[5].primary : null;
+      const neckPitchCmd = neckPitchDof ? (neckPitchDof.targetAction || 0) : 0;
+      const neckYawCmd = neckYawDof ? (neckYawDof.targetAction || 0) : 0;
+      const neckLoad = neckPitchDof ? (neckPitchDof.torqueLoadRatio ?? 0.2) : 0.2;
+
+      const headPos = new Vec3(
+        nTop.x + forward.x * (0.11 + neckPitchCmd * 0.04) + up.x * 0.14 + right.x * (neckYawCmd * 0.04),
+        nTop.y + forward.y * (0.11 + neckPitchCmd * 0.04) + up.y * 0.14 + right.y * (neckYawCmd * 0.04),
+        nTop.z + forward.z * (0.11 + neckPitchCmd * 0.04) + up.z * 0.14 + right.z * (neckYawCmd * 0.04)
+      );
+      const beakTip = new Vec3(
+        headPos.x + forward.x * 0.17 - up.x * 0.015,
+        headPos.y + forward.y * 0.17 - up.y * 0.015,
+        headPos.z + forward.z * 0.17 - up.z * 0.015
+      );
+      const beakLeft = new Vec3(
+        headPos.x + forward.x * 0.05 + right.x * 0.055 - up.x * 0.015,
+        headPos.y + forward.y * 0.05 + right.y * 0.055 - up.y * 0.015,
+        headPos.z + forward.z * 0.05 + right.z * 0.055 - up.z * 0.015
+      );
+      const beakRight = new Vec3(
+        headPos.x + forward.x * 0.05 - right.x * 0.055 - up.x * 0.015,
+        headPos.y + forward.y * 0.05 - right.y * 0.055 - up.y * 0.015,
+        headPos.z + forward.z * 0.05 - right.z * 0.055 - up.z * 0.015
+      );
+
+      const pTop = proj(nTop);
+      const pHead = proj(headPos);
+      const pBeakTip = proj(beakTip);
+      const pBeakL = proj(beakLeft);
+      const pBeakR = proj(beakRight);
+
+      if (pTop && pHead) {
+        // Metallic articulated neck column
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = Math.max(5.0, 0.052 * pTop.scale);
+        ctx.beginPath();
+        ctx.moveTo(pTop.sx, pTop.sy);
+        ctx.lineTo(pHead.sx, pHead.sy);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = Math.max(2.6, 0.026 * pTop.scale);
+        ctx.beginPath();
+        ctx.moveTo(pTop.sx, pTop.sy);
+        ctx.lineTo(pHead.sx, pHead.sy);
+        ctx.stroke();
+
+        // Neck Base Servo Drum
+        const neckAng = Math.atan2(pHead.sy - pTop.sy, pHead.sx - pTop.sx);
+        drawServoDrum(pTop, 0.044 * pTop.scale, neckLoad, neckAng);
+
+        // 3D Orange Duck Bill / Beak ("клюв")
+        if (pBeakTip && pBeakL && pBeakR) {
+          ctx.fillStyle = '#f97316';
+          ctx.strokeStyle = '#fde047';
+          ctx.lineWidth = Math.max(1.4, 0.014 * pHead.scale);
+          ctx.beginPath();
+          ctx.moveTo(pBeakL.sx, pBeakL.sy);
+          ctx.lineTo(pBeakTip.sx, pBeakTip.sy);
+          ctx.lineTo(pBeakR.sx, pBeakR.sy);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+
+        // Rounded MicroDuck Head Dome
+        const headR = Math.max(6.5, 0.072 * pHead.scale);
+        ctx.fillStyle = '#f8fafc';
+        ctx.beginPath();
+        ctx.arc(pHead.sx, pHead.sy, headR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+
+        // Optical Camera Eyes on left & right of head
+        for (const sideS of [+1, -1]) {
+          const eyePos = new Vec3(
+            headPos.x + forward.x * 0.042 + right.x * (0.048 * sideS) + up.x * 0.018,
+            headPos.y + forward.y * 0.042 + right.y * (0.048 * sideS) + up.y * 0.018,
+            headPos.z + forward.z * 0.042 + right.z * (0.048 * sideS) + up.z * 0.018
+          );
+          const pEye = proj(eyePos);
+          if (pEye) {
+            const eyeR = Math.max(2.2, 0.020 * pEye.scale);
+            ctx.fillStyle = '#0f172a';
+            ctx.beginPath();
+            ctx.arc(pEye.sx, pEye.sy, eyeR, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#38bdf8';
+            ctx.beginPath();
+            ctx.arc(pEye.sx - eyeR * 0.25, pEye.sy - eyeR * 0.25, eyeR * 0.42, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
     }
 
     // 5. Render 3D Nodes (Torso, Hips / Hip Servo Drums, Head Sensor, Feet)
     for (const node of creature.body.nodes) {
-      if (node.role === 'knee') continue; // Drawn as servo drum / knee joint in step 4
+      if (node.role === 'knee' || node.role === 'foot_pad') continue;
+      if (creature.isDuck) {
+        if (
+          node === creature.hipNodes[2] ||
+          node === creature.footNodes[2] ||
+          node === creature.frameRefs.top ||
+          node === creature.frameRefs.front ||
+          node === creature.frameRefs.tail
+        ) {
+          continue;
+        }
+      }
       const p = proj(posOf(node));
       if (!p) continue;
       const rPx = Math.max(3, node.radius * p.scale * 0.85);
@@ -1170,6 +1356,7 @@ export class Renderer3D {
       }
 
       if (node.role === 'foot') {
+        if (creature.isDuck) continue; // Drawn as Ankle Servo Drum + Webbed Duck Foot in 4b
         ctx.fillStyle = node.inContact ? '#4ade80' : '#94a3b8';
       } else if (node.role === 'head') {
         ctx.fillStyle = '#f43f5e';

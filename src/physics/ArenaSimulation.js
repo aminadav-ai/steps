@@ -63,6 +63,9 @@ export class ArenaSimulation {
   _initSimulation() {
     const morph = MORPHOLOGY_REGISTRY[this.morphologyKey] || MORPHOLOGY_REGISTRY.tripod;
     this.morphSpec = morph;
+    if (this.morphologyKey === 'duck') {
+      this.actuatorMode = 'servo';
+    }
 
     this.world = new PhysicsWorld3D({
       gravity: -9.81,
@@ -71,7 +74,7 @@ export class ArenaSimulation {
       substeps: 10
     });
 
-    this.brain = new ActorCriticBrain(morph.obsDim, morph.actDim, 32, 24);
+    this.brain = new ActorCriticBrain(morph.obsDim, morph.actDim, 32, 24, this.morphologyKey);
     if (this.algorithm === 'nes') {
       this.trainer = new NESTrainer(this.brain, this.populationSize);
     } else {
