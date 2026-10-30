@@ -614,7 +614,11 @@ async function runFastHeadlessTraining(targetUpdates = 25) {
   const c0 = sim.creatures[0];
   if (sim.trainer && sim.trainer.metaState) {
     sim.trainer.manualFreeze = false;
-    sim.trainer.metaState.mode = 'LEARNING_WALK';
+    if (sim.trainer.wasOverturned || sim.trainer.metaState.mode === 'LEARNING_RIGHTING') {
+      sim.trainer.modeBeforeOverturn = 'LEARNING_WALK';
+    } else {
+      sim.trainer.metaState.mode = 'LEARNING_WALK';
+    }
     sim.trainer.metaState.isLearningActive = true;
     sim.trainer.minTrainEpochsRemaining = Math.max(sim.trainer.minTrainEpochsRemaining || 0, targetUpdates);
   }
