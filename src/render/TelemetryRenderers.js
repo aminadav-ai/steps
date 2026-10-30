@@ -74,14 +74,20 @@ export class NeuralGraphRenderer {
 
     const outCount = brain.actDim;
     const outNodes = Array.from({ length: outCount }, (_, a) => {
-      const legNum = Math.floor(a / 2) + 1;
-      const isLift = a % 2 === 0;
-      const outLabel = t
-        ? (isLift && typeof t.nnOutLift === 'function' ? t.nnOutLift(legNum) : (!isLift && typeof t.nnOutStride === 'function' ? t.nnOutStride(legNum) : `Out ${a + 1}`))
-        : (logicalDoFs && logicalDoFs[a] ? logicalDoFs[a].name.replace('Лапа ', 'Л').replace(' (Подъём/Опора)', '').replace(' (Шаг вперёд/назад)', '') : `Out ${a + 1}`);
+      const dofObj = logicalDoFs && logicalDoFs[a] ? logicalDoFs[a] : null;
+      let outLabel;
+      if (dofObj && dofObj.shortLabel) {
+        outLabel = dofObj.shortLabel;
+      } else {
+        const legNum = Math.floor(a / 2) + 1;
+        const isLift = a % 2 === 0;
+        outLabel = t
+          ? (isLift && typeof t.nnOutLift === 'function' ? t.nnOutLift(legNum) : (!isLift && typeof t.nnOutStride === 'function' ? t.nnOutStride(legNum) : `Out ${a + 1}`))
+          : (dofObj ? dofObj.name.replace('Лапа ', 'Л').replace(' (Подъём/Опора)', '').replace(' (Шаг вперёд/назад)', '') : `Out ${a + 1}`);
+      }
       return {
         x: colX[3],
-        y: ((a + 0.7) / (outCount + 1.4)) * h,
+        y: ((a + 0.65) / (outCount + 1.35)) * h,
         val: mu[a] || 0,
         label: outLabel
       };
@@ -180,12 +186,19 @@ export class NeuralGraphRenderer {
     for (const n of h1Nodes) drawNode(n, rHid);
     for (const n of h2Nodes) drawNode(n, rHid);
 
-    const rOut = Math.max(4.5, 5.2 * dpr);
+    const rOut = outCount > 8 ? Math.max(2.9, 3.4 * dpr) : Math.max(4.5, 5.2 * dpr);
+    if (outCount > 8) {
+      const outFontSize = Math.max(7.5, Math.floor(8.2 * dpr));
+      ctx.font = `${outFontSize}px system-ui, -apple-system, sans-serif`;
+    }
     for (const n of outNodes) {
       drawNode(n, rOut);
       ctx.fillStyle = '#f8fafc';
       ctx.textAlign = 'left';
-      ctx.fillText(n.label, n.x + rOut + 4 * dpr, n.y);
+      ctx.fillText(n.label, n.x + rOut + 3.5 * dpr, n.y);
+    }
+    if (outCount > 8) {
+      ctx.font = `${fontSize}px system-ui, -apple-system, sans-serif`;
     }
 
     // Critic V(s) badge at bottom right

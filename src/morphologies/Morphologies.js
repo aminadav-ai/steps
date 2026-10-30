@@ -23,6 +23,8 @@ export class CreatureInstance {
     this.actuatorMode = actuatorMode; // 'servo' (Rigid Revolute PD Servos) | 'muscle' (Soft XPBD Bio-Muscles)
     this.body = body;
     this.frameRefs = frameRefs; // { top, bottom, front, tail, backLeft, backRight }
+    this.torsoTop = frameRefs ? frameRefs.top : null;
+    this.torsoBottom = frameRefs ? frameRefs.bottom : null;
     this.footNodes = footNodes;
     this.hipNodes = hipNodes || [];
     this.kneeNodes = kneeNodes || [];
@@ -198,10 +200,14 @@ export class CreatureInstance {
   }
 
   /**
-   * Applies the action vector a_t in [-1, 1]^actionDim to the 2-DoF leg controllers
-   * so all 4 internal tendons of each leg converge to a geometrically consistent 3D point.
+   * Applies the action vector a_t in [-1, 1]^actionDim to the creature's actuators
+   * so all internal XPBD tendons/servos converge to geometrically consistent 3D targets.
    */
   applyActionVector(actions, isRightingMode = false) {
+    if (typeof this.customApplyActions === 'function') {
+      this.lastMechanicalPower = this.customApplyActions(actions, isRightingMode);
+      return;
+    }
     let totalPower = 0;
     const { up, forward, right } = this.getTorsoFrame();
     // Differential between front-left (leg 0) and front-right (leg 1) stride commands
@@ -246,6 +252,8 @@ function attachOrthogonalLeg({
   isRearCenter = false,
   kneeBendSign = null,
   buildWebbedFoot = false,
+  enableHipRoll = false,
+  restFootOffsetX = 0.0,
   dofLabelPrefix = null,
   footY = 0.06,
   strideStroke = 0.185,
@@ -257,7 +265,7 @@ function attachOrthogonalLeg({
   const L_femur = 0.195;
   const L_tibia = 0.195;
 
-  const restFootPos = new Vec3(hipNode.pos.x, footY, hipNode.pos.z);
+  const restFootPos = new Vec3(hipNode.pos.x + restFootOffsetX, footY, hipNode.pos.z);
   const restHipPos = hipNode.pos.clone();
   const restFrontPos = frontAnchor.pos.clone();
   const restRearPos = rearAnchor.pos.clone();
@@ -268,13 +276,13 @@ function attachOrthogonalLeg({
   const restComZ = 0.5 * (restFrontPos.z + restRearPos.z);
 
   // Exact 3D Revolute 2-Link Knee Kinematics in canonical torso frame:
-  // In 'servo' mode, enforces strict 2D sagittal-plane revolute joint geometry (pz === 0, uz === 0)
-  // with outward X-configuration knee orientation (front knees bend forward, rear knees bend aft away from chassis)
+  // In 'servo' mode, enforces strict 2D sagittal-plane revolute joint geometry (or 3D hip-roll plane when enableHipRoll=true)
+  // with outward X-configuration or avian knee orientation
   // while guaranteeing ||kneePos - restHipPos|| === L_femur and ||kneePos - targetFootPos|| === L_tibia.
   const computeKneeTarget3D = targetFootPos => {
     const ux = targetFootPos.x - restHipPos.x;
     const uy = targetFootPos.y - restHipPos.y;
-    const uz = isServoMode ? 0.0 : (targetFootPos.z - restHipPos.z);
+    const uz = (isServoMode && !enableHipRoll) ? 0.0 : (targetFootPos.z - restHipPos.z);
     const rawD = Math.hypot(ux, uy, uz);
     const maxReach = (L_femur + L_tibia) * 0.992;
     const d = Math.max(0.05, Math.min(maxReach, rawD));
@@ -484,21 +492,23 @@ function attachOrthogonalLeg({
       })
     : null;
 
-  // Optional 3-point flat Webbed Duck Foot ("стопа-ласта") with parallel-linkage Ankle Pitch Servo stabilization
+  // Optional 3-point flat Webbed Duck Foot ("стопа-ласта") with parallel-linkage Ankle Pitch & Yaw Servo stabilization
   let webbedFoot = null;
   let toeInnerFront = null;
   let toeInnerRear = null;
   let toeInnerHip = null;
   let toeInnerLat = null;
+  let toeInnerDorsal = null;
   let toeOuterFront = null;
   let toeOuterRear = null;
   let toeOuterHip = null;
   let toeOuterLat = null;
-  const toeOffsetFwd = 0.165;
-  const toeHalfSpreadZ = 0.058;
+  let toeOuterDorsal = null;
+  const toeOffsetFwd = 0.21;
+  const toeHalfSpreadZ = 0.064;
   const sideSignZ = restFootPos.z >= 0 ? 1 : -1;
-  const restToeInnerOffset = new Vec3(toeOffsetFwd, 0.0, -sideSignZ * toeHalfSpreadZ * 0.65);
-  const restToeOuterOffset = new Vec3(toeOffsetFwd, 0.0, +sideSignZ * toeHalfSpreadZ * 1.15);
+  const restToeInnerOffset = new Vec3(toeOffsetFwd, 0.0, -sideSignZ * toeHalfSpreadZ * 0.72);
+  const restToeOuterOffset = new Vec3(toeOffsetFwd, 0.0, +sideSignZ * toeHalfSpreadZ * 1.18);
 
   if (buildWebbedFoot && isServoMode) {
     const toeInnerPos = new Vec3(
@@ -516,9 +526,9 @@ function attachOrthogonalLeg({
       x: toeInnerPos.x,
       y: toeInnerPos.y,
       z: toeInnerPos.z,
-      mass: 0.018,
-      radius: 0.032,
-      friction: 0.45,
+      mass: 0.065,
+      radius: 0.056,
+      friction: 1.55,
       role: 'foot_pad',
       color: '#fb923c'
     });
@@ -527,9 +537,9 @@ function attachOrthogonalLeg({
       x: toeOuterPos.x,
       y: toeOuterPos.y,
       z: toeOuterPos.z,
-      mass: 0.018,
-      radius: 0.032,
-      friction: 0.45,
+      mass: 0.065,
+      radius: 0.056,
+      friction: 1.55,
       role: 'foot_pad',
       color: '#fb923c'
     });
@@ -539,7 +549,7 @@ function attachOrthogonalLeg({
     body.addBone(foot, toeOuter, null, 0.0, 'foot_pad');
     body.addBone(toeInner, toeOuter, null, 0.0, 'foot_pad');
 
-    // Parallel-linkage Ankle Pitch & Roll Servo actuators keep the webbed foot pad parallel to the pelvis
+    // Parallel-linkage Ankle Pitch, Roll & Yaw Servo actuators keep the flat duck foot stabilized relative to the pelvis
     toeInnerFront = body.addMuscle({
       name: `leg${legIdx}_ankle_in_front`,
       nodeA: frontAnchor,
@@ -547,8 +557,8 @@ function attachOrthogonalLeg({
       pivotNode: foot,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 32.0,
-      compliance: 0.00035
+      maxForce: 145.0,
+      compliance: 0.00006
     });
     toeInnerRear = body.addMuscle({
       name: `leg${legIdx}_ankle_in_rear`,
@@ -557,8 +567,8 @@ function attachOrthogonalLeg({
       pivotNode: foot,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 32.0,
-      compliance: 0.00035
+      maxForce: 145.0,
+      compliance: 0.00006
     });
     toeInnerHip = body.addMuscle({
       name: `leg${legIdx}_ankle_in_hip`,
@@ -567,8 +577,8 @@ function attachOrthogonalLeg({
       pivotNode: foot,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 36.0,
-      compliance: 0.00030
+      maxForce: 155.0,
+      compliance: 0.00005
     });
     toeInnerLat = body.addMuscle({
       name: `leg${legIdx}_ankle_in_lat`,
@@ -577,9 +587,21 @@ function attachOrthogonalLeg({
       pivotNode: foot,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 32.0,
-      compliance: 0.00035
+      maxForce: 145.0,
+      compliance: 0.00006
     });
+    if (dorsalAnchor) {
+      toeInnerDorsal = body.addMuscle({
+        name: `leg${legIdx}_ankle_in_dorsal`,
+        nodeA: dorsalAnchor,
+        nodeB: toeInner,
+        pivotNode: foot,
+        minFactor: 0.20,
+        maxFactor: 2.20,
+        maxForce: 135.0,
+        compliance: 0.00007
+      });
+    }
 
     toeOuterFront = body.addMuscle({
       name: `leg${legIdx}_ankle_out_front`,
@@ -588,8 +610,8 @@ function attachOrthogonalLeg({
       pivotNode: foot,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 32.0,
-      compliance: 0.00035
+      maxForce: 145.0,
+      compliance: 0.00006
     });
     toeOuterRear = body.addMuscle({
       name: `leg${legIdx}_ankle_out_rear`,
@@ -598,8 +620,8 @@ function attachOrthogonalLeg({
       pivotNode: foot,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 32.0,
-      compliance: 0.00035
+      maxForce: 145.0,
+      compliance: 0.00006
     });
     toeOuterHip = body.addMuscle({
       name: `leg${legIdx}_ankle_out_hip`,
@@ -608,8 +630,8 @@ function attachOrthogonalLeg({
       pivotNode: foot,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 36.0,
-      compliance: 0.00030
+      maxForce: 155.0,
+      compliance: 0.00005
     });
     toeOuterLat = body.addMuscle({
       name: `leg${legIdx}_ankle_out_lat`,
@@ -618,9 +640,21 @@ function attachOrthogonalLeg({
       pivotNode: foot,
       minFactor: 0.25,
       maxFactor: 2.20,
-      maxForce: 32.0,
-      compliance: 0.00035
+      maxForce: 145.0,
+      compliance: 0.00006
     });
+    if (dorsalAnchor) {
+      toeOuterDorsal = body.addMuscle({
+        name: `leg${legIdx}_ankle_out_dorsal`,
+        nodeA: dorsalAnchor,
+        nodeB: toeOuter,
+        pivotNode: foot,
+        minFactor: 0.20,
+        maxFactor: 2.20,
+        maxForce: 135.0,
+        compliance: 0.00007
+      });
+    }
 
     webbedFoot = { heel: foot, toeInner, toeOuter };
   }
@@ -637,13 +671,45 @@ function attachOrthogonalLeg({
   strideFwd.jointTorqueNm = 0.0;
   strideFwd.torqueLoadRatio = 0.0;
 
+  latMuscle.isServo = isServoMode;
+  latMuscle.jointAngleRad = 0.0;
+  latMuscle.maxTorqueNm = 18.0;
+  latMuscle.jointTorqueNm = 0.0;
+  latMuscle.torqueLoadRatio = 0.0;
+
+  if (toeInnerHip) {
+    toeInnerHip.isServo = true;
+    toeInnerHip.jointAngleRad = 0.0;
+    toeInnerHip.maxTorqueNm = 15.0;
+    toeInnerHip.jointTorqueNm = 0.0;
+    toeInnerHip.torqueLoadRatio = 0.0;
+  }
+  if (toeOuterFront) {
+    toeOuterFront.isServo = true;
+    toeOuterFront.jointAngleRad = 0.0;
+    toeOuterFront.maxTorqueNm = 14.0;
+    toeOuterFront.jointTorqueNm = 0.0;
+    toeOuterFront.torqueLoadRatio = 0.0;
+  }
+
   const controller = {
     isServo: isServoMode,
     jointAngleRad: kneeLift.jointAngleRad,
     jointTorqueNm: 0.0,
     maxTorqueNm: 22.0,
     torqueLoadRatio: 0.0,
-    applyLegActions(actLift, actStride, diffTurn = 0, isRightingMode = false, upVec = null, forwardVec = null, rightVec = null) {
+    applyLegActions(
+      actLift,
+      actStride,
+      diffTurn = 0,
+      isRightingMode = false,
+      upVec = null,
+      forwardVec = null,
+      rightVec = null,
+      actHipRoll = 0,
+      actHipYaw = 0,
+      actAnklePitch = null
+    ) {
       let footLocalUp = upVec
         ? (foot.pos.x - hipNode.pos.x) * upVec.x +
           (foot.pos.y - hipNode.pos.y) * upVec.y +
@@ -680,7 +746,6 @@ function attachOrthogonalLeg({
           hipNode.pos.z -= dzStop * wH;
           hipNode.prevPos.x -= dxStop * wH;
           hipNode.prevPos.y -= dyStop * wH;
-          hipNode.prevPos.z -= dyStop * 0;
           hipNode.prevPos.z -= dzStop * wH;
 
           footLocalUp = -0.068;
@@ -727,9 +792,10 @@ function attachOrthogonalLeg({
         const minHealthyH = Math.min(0.055, hTarget * 0.65);
 
         // Only engage sagittal knee hard-stop if knee tries to hyperextend/invert below minHealthyH,
-        // plus always enforce planar bearing alignment (-kR along rightVec)
+        // plus enforce planar bearing alignment (allowing hip_roll offset when enableHipRoll=true)
+        const targetKR = enableHipRoll ? (actHipRoll * 0.025) : 0.0;
         const corrH = hActual < minHealthyH ? (hTarget - hActual) * 0.85 : 0.0;
-        const corrR = -kR * 0.75;
+        const corrR = (targetKR - kR) * 0.75;
         if (corrH > 1e-5 || Math.abs(corrR) > 1e-5) {
           const errKX = corrH * (pf * forwardVec.x + pu * upVec.x) + corrR * rightVec.x;
           const errKY = corrH * (pf * forwardVec.y + pu * upVec.y) + corrR * rightVec.y;
@@ -764,19 +830,20 @@ function attachOrthogonalLeg({
       }
 
       let dx, dy, dz;
+      const yawDiffStride = enableHipRoll ? ((legIdx === 0 ? -actHipYaw : +actHipYaw) * 0.075) : 0.0;
       if (!needDorsalReach) {
-        // Ventral mode (normal walking OR stand-up phase once rolled past up.y >= 0.45):
-        dx = actStride * strideStroke;
+        // Ventral mode (normal walking, standing tall, squatting onto bottom, OR stand-up phase once rolled past up.y >= 0.42):
+        dx = actStride * strideStroke + yawDiffStride;
         dy = actLift < 0 ? -actLift * liftStrokeUp : -actLift * liftStrokeDown;
-        dz = 0;
+        dz = enableHipRoll ? (actHipRoll * 0.052) : 0;
       } else {
         // Self-Righting Mode ("Замах и упор лапой за спину" when overturned, up.y < 0.42, actLift < 0):
-        // In 'servo' mode, the 2-DoF revolute leg stays strictly in its sagittal bearing plane (dz === 0)
-        // and rotates on its cantilevered hip shaft outside the chassis frame!
         dx = actStride * 0.26;
         dy = 0.24 + (-actLift) * 0.28;
         const outSign = restFootPos.z >= 0 ? 1 : -1;
-        dz = isServoMode ? 0.0 : (isRearCenter ? diffTurn * 0.24 : -outSign * (-actLift) * 0.10);
+        dz = isServoMode
+          ? (enableHipRoll ? actHipRoll * 0.065 : 0.0)
+          : (isRearCenter ? diffTurn * 0.24 : -outSign * (-actLift) * 0.10);
       }
 
       const rawTargetPos = new Vec3(
@@ -820,6 +887,7 @@ function attachOrthogonalLeg({
 
       kneeLift.targetAction = actLift;
       strideFwd.targetAction = actStride;
+      latMuscle.targetAction = actHipRoll;
 
       kneeLift.setTargetLengthDirect(Vec3.dist(restHipPos, targetPos));
       strideFwd.setTargetLengthDirect(Vec3.dist(restFrontPos, targetPos));
@@ -847,28 +915,63 @@ function attachOrthogonalLeg({
         }
 
         if (webbedFoot) {
-          // Parallel-linkage Ankle Pitch Servo: keeps the triangular webbed foot parallel to the pelvis
-          // with toe-up dorsiflexion during swing (actLift < 0) and flat plant during stance (actLift >= 0)
-          const anklePitchY = actLift < 0 ? (-actLift) * 0.032 : 0.0;
+          // 5-DoF Ankle Pitch + Hip Yaw rotation of the 3-point flat webbed duck foot:
+          // - hip_yaw rotates (restToeInnerOffset, restToeOuterOffset) around the vertical Y axis
+          // - ankle_pitch tilts the front toes up/down relative to the heel
+          const yawRad = actHipYaw * 0.36;
+          const cosY = Math.cos(yawRad);
+          const sinY = Math.sin(yawRad);
+          const inRx = restToeInnerOffset.x * cosY - restToeInnerOffset.z * sinY;
+          const inRz = restToeInnerOffset.x * sinY + restToeInnerOffset.z * cosY;
+          const outRx = restToeOuterOffset.x * cosY - restToeOuterOffset.z * sinY;
+          const outRz = restToeOuterOffset.x * sinY + restToeOuterOffset.z * cosY;
+
+          const ankleCmd = actAnklePitch !== null ? actAnklePitch : 0.0;
+          const anklePitchY = -ankleCmd * 0.016;
           const targetToeIn = new Vec3(
-            targetPos.x + restToeInnerOffset.x,
+            targetPos.x + inRx,
             targetPos.y + anklePitchY,
-            targetPos.z + restToeInnerOffset.z
+            targetPos.z + inRz
           );
           const targetToeOut = new Vec3(
-            targetPos.x + restToeOuterOffset.x,
+            targetPos.x + outRx,
             targetPos.y + anklePitchY,
-            targetPos.z + restToeOuterOffset.z
+            targetPos.z + outRz
           );
           toeInnerFront.setTargetLengthDirect(Vec3.dist(restFrontPos, targetToeIn));
           toeInnerRear.setTargetLengthDirect(Vec3.dist(restRearPos, targetToeIn));
           toeInnerHip.setTargetLengthDirect(Vec3.dist(restHipPos, targetToeIn));
           toeInnerLat.setTargetLengthDirect(Vec3.dist(restLatPos, targetToeIn));
+          if (toeInnerDorsal && restDorsalPos) {
+            toeInnerDorsal.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetToeIn));
+          }
 
           toeOuterFront.setTargetLengthDirect(Vec3.dist(restFrontPos, targetToeOut));
           toeOuterRear.setTargetLengthDirect(Vec3.dist(restRearPos, targetToeOut));
           toeOuterHip.setTargetLengthDirect(Vec3.dist(restHipPos, targetToeOut));
           toeOuterLat.setTargetLengthDirect(Vec3.dist(restLatPos, targetToeOut));
+          if (toeOuterDorsal && restDorsalPos) {
+            toeOuterDorsal.setTargetLengthDirect(Vec3.dist(restDorsalPos, targetToeOut));
+          }
+
+          toeInnerHip.targetAction = ankleCmd;
+          toeInnerHip.jointAngleRad = ankleCmd * 0.55;
+          toeInnerHip.jointTorqueNm = Math.max(-15.0, Math.min(15.0, toeInnerHip.appliedForce * 0.16));
+          toeInnerHip.torqueLoadRatio = Math.min(1.0, Math.abs(toeInnerHip.jointTorqueNm) / 15.0);
+
+          toeOuterFront.targetAction = actHipYaw;
+          toeOuterFront.jointAngleRad = yawRad;
+          toeOuterFront.jointTorqueNm = Math.max(-14.0, Math.min(14.0, (toeOuterFront.appliedForce - toeInnerFront.appliedForce) * 0.14));
+          toeOuterFront.torqueLoadRatio = Math.min(1.0, Math.abs(toeOuterFront.jointTorqueNm) / 14.0);
+
+          // Aggregate ground contact across all 3 nodes of the flat duck sole (heel + inner toe + outer toe)
+          if (webbedFoot.toeInner.inContact || webbedFoot.toeOuter.inContact) {
+            foot.inContact = true;
+            foot.normalForce = Math.max(
+              foot.normalForce || 0,
+              (webbedFoot.toeInner.normalForce || 0) + (webbedFoot.toeOuter.normalForce || 0)
+            );
+          }
         }
 
         // Compute Revolute PD Servo joint angle & torque telemetry (N*m) for robotics HUD & 3D drum rendering
@@ -885,6 +988,12 @@ function attachOrthogonalLeg({
         strideFwd.maxTorqueNm = 18.0;
         strideFwd.jointTorqueNm = Math.max(-18.0, Math.min(18.0, (strideFwd.appliedForce - strideBwd.appliedForce) * L_femur));
         strideFwd.torqueLoadRatio = Math.min(1.0, Math.abs(strideFwd.jointTorqueNm) / 18.0);
+
+        latMuscle.isServo = true;
+        latMuscle.jointAngleRad = actHipRoll * 0.45;
+        latMuscle.maxTorqueNm = 18.0;
+        latMuscle.jointTorqueNm = Math.max(-18.0, Math.min(18.0, latMuscle.appliedForce * L_femur));
+        latMuscle.torqueLoadRatio = Math.min(1.0, Math.abs(latMuscle.jointTorqueNm) / 18.0);
 
         this.jointAngleRad = kneeLift.jointAngleRad;
         this.jointTorqueNm = kneeLift.jointTorqueNm;
@@ -903,6 +1012,7 @@ function attachOrthogonalLeg({
   };
 
   const prefix = dofLabelPrefix || `Лапа ${legIdx + 1}`;
+  const sideCode = legIdx === 0 ? 'L' : 'R';
   return {
     foot,
     knee,
@@ -921,7 +1031,39 @@ function attachOrthogonalLeg({
         : `${prefix}: Мах бедра (Шаг вперёд/назад)`,
       primary: strideFwd,
       antagonist: strideBwd
-    }
+    },
+    duck5DoFs: buildWebbedFoot ? [
+      {
+        name: `${prefix}: hip_yaw (Поворот стопы)`,
+        shortLabel: `${sideCode} hip_yaw`,
+        primary: toeOuterFront,
+        antagonist: toeInnerFront
+      },
+      {
+        name: `${prefix}: hip_roll (Боковой перенос веса)`,
+        shortLabel: `${sideCode} hip_roll`,
+        primary: latMuscle,
+        antagonist: null
+      },
+      {
+        name: `${prefix}: hip_pitch (Мах бедра)`,
+        shortLabel: `${sideCode} hip_pitch`,
+        primary: strideFwd,
+        antagonist: strideBwd
+      },
+      {
+        name: `${prefix}: knee_pitch (Колено / Присед)`,
+        shortLabel: `${sideCode} knee`,
+        primary: kneeLift,
+        antagonist: null
+      },
+      {
+        name: `${prefix}: ankle_pitch (Стопа-ласта)`,
+        shortLabel: `${sideCode} ankle`,
+        primary: toeInnerHip,
+        antagonist: toeOuterHip
+      }
+    ] : null
   };
 }
 
@@ -1201,25 +1343,26 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
 }
 
 /**
- * Morphology #3: Bipedal Servo Duck Walker ("Двуногий робот «Микро-Утка»", 6 DoF, Revolute PD Servos)
- * Inspired by open-source bipedal duck robotics (Open Duck Mini / Microduck kinematics, Apache 2.0):
- * - Always uses Rigid Revolute PD Servos ('servo') with avian backward-bending knees ("<")
- * - 2 wide 3-point flat Webbed Duck Feet ("стопы-ласты") with parallel-linkage Ankle Pitch Servos
- * - Low pelvic battery/motor center-of-mass + active Neck/Tail dynamic counterbalance (DoF 4 & 5)
- * - Alternating left-right bipedal waddle gait (Δφ = π between Left and Right webbed feet)
+ * Morphology #3: Bipedal Servo Duck Walker ("Двуногий робот «Open Duck Mini / Микро-Утка»", 14 DoF, Revolute PD Servos)
+ * Full 14-Servo kinematic compatibility with Open_Duck_Mini (apirrone/Open_Duck_Mini, Apache 2.0):
+ * - Left Leg  (5 DoF: a[0..4]):  left_hip_yaw, left_hip_roll, left_hip_pitch, left_knee_pitch, left_ankle_pitch
+ * - Right Leg (5 DoF: a[5..9]):  right_hip_yaw, right_hip_roll, right_hip_pitch, right_knee_pitch, right_ankle_pitch
+ * - Neck & Head Counterbalance (4 DoF: a[10..13]): neck_pitch, head_pitch, head_yaw, head_roll
+ * - Pure 2-legged bipedal stance on two wide 3-point flat duck feet (heel + inner toe + outer toe)
+ * - Capable of rising tall on its legs (knee_pitch > 0) and squatting all the way down to sit on its bottom (torsoBottom)
  */
 function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) {
   const duckActuatorMode = 'servo';
   const body = new ArticulatedBody();
 
-  // Upper neck/head mount & low heavy pelvic battery keel
+  // Upper torso / neck base mount & low heavy pelvic seat ("попа" / battery keel)
   const torsoTop = body.addNode({
     id: `c${id}_top`,
-    x: origin.x + 0.04,
-    y: origin.y + 0.48,
+    x: origin.x + 0.02,
+    y: origin.y + 0.46,
     z: origin.z,
-    mass: 0.10,
-    radius: 0.065,
+    mass: 0.12,
+    radius: 0.055,
     friction: 0.02,
     role: 'torso',
     color
@@ -1228,22 +1371,22 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
   const torsoBottom = body.addNode({
     id: `c${id}_bottom`,
     x: origin.x - 0.02,
-    y: origin.y + 0.14,
+    y: origin.y + 0.145,
     z: origin.z,
-    mass: 0.88,
-    radius: 0.075,
-    friction: 0.03,
+    mass: 0.82,
+    radius: 0.062,
+    friction: 0.35, // Allows stable sitting on its bottom when knees squat!
     role: 'torso',
     color
   });
 
   const noseNode = body.addNode({
     id: `c${id}_nose`,
-    x: origin.x + 0.40,
+    x: origin.x + 0.36,
     y: origin.y + 0.28,
     z: origin.z,
-    mass: 0.15,
-    radius: 0.060,
+    mass: 0.16,
+    radius: 0.052,
     friction: 0.04,
     role: 'hip',
     color
@@ -1251,21 +1394,20 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
 
   const tailNode = body.addNode({
     id: `c${id}_tail`,
-    x: origin.x - 0.44,
+    x: origin.x - 0.36,
     y: origin.y + 0.28,
     z: origin.z,
-    mass: 0.16,
-    radius: 0.060,
+    mass: 0.18,
+    radius: 0.052,
     friction: 0.04,
     role: 'hip',
     color
   });
 
-  // Left & Right outboard hip servo housings + rear pelvic/tail dynamic stabilizer mount
+  // Left & Right 3-axis Hip Servo assemblies (hip_yaw + hip_roll + hip_pitch) — strictly 2 legs!
   const hipCoords = [
-    { x: +0.14, y: 0.30, z: +0.24 }, // Leg 0: Left Duck Leg + Webbed Foot
-    { x: +0.14, y: 0.30, z: -0.24 }, // Leg 1: Right Duck Leg + Webbed Foot
-    { x: -0.24, y: 0.30, z:  0.00 }  // Actuator 2: Tail / Neck-Pelvis Dynamic Counterbalance
+    { x: +0.04, y: 0.30, z: +0.22 }, // Leg 0: Left 5-DoF Duck Leg + Flat 3-Point Duck Foot
+    { x: +0.04, y: 0.30, z: -0.22 }  // Leg 1: Right 5-DoF Duck Leg + Flat 3-Point Duck Foot
   ];
 
   const hips = hipCoords.map((hc, idx) =>
@@ -1275,26 +1417,115 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
       y: origin.y + hc.y,
       z: origin.z + hc.z,
       mass: 0.18,
-      radius: 0.060,
+      radius: 0.058,
       friction: 0.04,
       role: 'hip',
       color
     })
   );
 
-  lockRigidFrame(body, [torsoTop, torsoBottom, noseNode, tailNode, hips[0], hips[1], hips[2]]);
+  // Lock the 6-node pelvic torso cage into one rigid 3D body
+  lockRigidFrame(body, [torsoTop, torsoBottom, noseNode, tailNode, hips[0], hips[1]]);
+
+  // Physical Articulated Neck & Head-Block Counterweight (4 DoF: neck_pitch, head_pitch, head_yaw, head_roll)
+  const restTorsoTop = torsoTop.pos.clone();
+  const restTorsoBottom = torsoBottom.pos.clone();
+  const restNosePos = noseNode.pos.clone();
+  const restTailPos = tailNode.pos.clone();
+  const restHipLPos = hips[0].pos.clone();
+  const restHipRPos = hips[1].pos.clone();
+
+  const L_neck = 0.18;
+  const baseNeckPitchRad = 0.38;
+  const restHeadPos = new Vec3(
+    restTorsoTop.x + L_neck * Math.sin(baseNeckPitchRad),
+    restTorsoTop.y + L_neck * Math.cos(baseNeckPitchRad),
+    restTorsoTop.z
+  );
+
+  const headNode = body.addNode({
+    id: `c${id}_duck_head`,
+    x: restHeadPos.x,
+    y: restHeadPos.y,
+    z: restHeadPos.z,
+    mass: 0.18,
+    radius: 0.055,
+    friction: 0.08,
+    role: 'duck_head',
+    color: '#f8fafc'
+  });
+
+  // Rigid neck column link between torsoTop (neck_pitch base) and headNode (head_pitch / head_yaw / head_roll hub)
+  body.addBone(torsoTop, headNode, L_neck, 0.0, 'neck');
+
+  const neckPitchServo = body.addMuscle({
+    name: 'duck_neck_pitch_servo',
+    nodeA: noseNode,
+    nodeB: headNode,
+    pivotNode: torsoTop,
+    minFactor: 0.25,
+    maxFactor: 2.20,
+    maxForce: 115.0,
+    compliance: 0.00008
+  });
+  const headPitchServo = body.addMuscle({
+    name: 'duck_head_pitch_servo',
+    nodeA: tailNode,
+    nodeB: headNode,
+    pivotNode: torsoTop,
+    minFactor: 0.25,
+    maxFactor: 2.20,
+    maxForce: 115.0,
+    compliance: 0.00008
+  });
+  const headYawServo = body.addMuscle({
+    name: 'duck_head_yaw_servo',
+    nodeA: hips[0],
+    nodeB: headNode,
+    pivotNode: torsoTop,
+    minFactor: 0.25,
+    maxFactor: 2.20,
+    maxForce: 115.0,
+    compliance: 0.00008
+  });
+  const headRollServo = body.addMuscle({
+    name: 'duck_head_roll_servo',
+    nodeA: hips[1],
+    nodeB: headNode,
+    pivotNode: torsoTop,
+    minFactor: 0.25,
+    maxFactor: 2.20,
+    maxForce: 115.0,
+    compliance: 0.00008
+  });
+  const headVerticalServo = body.addMuscle({
+    name: 'duck_head_vertical_servo',
+    nodeA: torsoBottom,
+    nodeB: headNode,
+    pivotNode: torsoTop,
+    minFactor: 0.35,
+    maxFactor: 2.20,
+    maxForce: 125.0,
+    compliance: 0.00007
+  });
+
+  for (const s of [neckPitchServo, headPitchServo, headYawServo, headRollServo]) {
+    s.isServo = true;
+    s.jointAngleRad = 0.0;
+    s.maxTorqueNm = 12.0;
+    s.jointTorqueNm = 0.0;
+    s.torqueLoadRatio = 0.0;
+  }
 
   const feet = [];
   const knees = [];
   const webbedFeet = [];
   const legControllers = [];
   const logicalDoFs = [];
-  const dofPrefixes = ['Ласта L', 'Ласта R', 'Шея/Баланс'];
+  const dofPrefixes = ['Лапа L', 'Лапа R'];
 
-  for (let i = 0; i < 3; i++) {
-    const lateralAnchor = i === 0 ? hips[1] : i === 1 ? hips[0] : hips[0];
-    const oppositeLateralAnchor = i === 2 ? hips[1] : null;
-    const isBipedDuckLeg = i === 0 || i === 1;
+  for (let i = 0; i < 2; i++) {
+    const lateralAnchor = i === 0 ? hips[1] : hips[0];
     const leg = attachOrthogonalLeg({
       body,
       id,
@@ -1304,11 +1535,15 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
       frontAnchor: noseNode,
       rearAnchor: tailNode,
       lateralAnchor,
-      oppositeLateralAnchor,
+      oppositeLateralAnchor: null,
       dorsalAnchor: torsoTop,
-      isRearCenter: i === 2,
-      kneeBendSign: isBipedDuckLeg ? -1 : -1, // Avian backward-bending knee ("<")
-      buildWebbedFoot: isBipedDuckLeg,        // 3-point orange Webbed Duck Foot on Left & Right legs
+      isRearCenter: false,
+      kneeBendSign: -1,          // Avian / Open_Duck_Mini backward-bending knee ("<")
+      buildWebbedFoot: true,     // 3-point flat duck foot sole (heel + inner toe + outer toe)
+      enableHipRoll: true,       // Active hip_roll & hip_yaw 3D kinematics
+      restFootOffsetX: -0.07,    // Heel sits at x = -0.03, front toes sit at x = +0.18 (21 cm flat sole centering CoM!)
+      liftStrokeUp: 0.092,       // Allows deep knee flexion to sit squarely on torsoBottom while keeping both flat feet planted!
+      liftStrokeDown: 0.115,     // Allows tall knee extension to rise high on both legs!
       dofLabelPrefix: dofPrefixes[i],
       footY: origin.y + 0.06,
       color
@@ -1317,8 +1552,37 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
     if (leg.knee) knees.push(leg.knee);
     if (leg.webbedFoot) webbedFeet.push(leg.webbedFoot);
     legControllers.push(leg.controller);
-    logicalDoFs.push(leg.liftDoF, leg.strideDoF);
+    // Push 5 DoFs for this leg: [hip_yaw, hip_roll, hip_pitch, knee_pitch, ankle_pitch]
+    logicalDoFs.push(...leg.duck5DoFs);
   }
+
+  // Append the 4 Neck & Head DoFs (indices 10..13) to complete the 14-DoF Open_Duck_Mini specification
+  logicalDoFs.push(
+    {
+      name: 'Шея: neck_pitch (Продольный баланс)',
+      shortLabel: 'neck_pitch',
+      primary: neckPitchServo,
+      antagonist: headPitchServo
+    },
+    {
+      name: 'Голова: head_pitch (Кивок головы)',
+      shortLabel: 'head_pitch',
+      primary: headPitchServo,
+      antagonist: neckPitchServo
+    },
+    {
+      name: 'Голова: head_yaw (Поворот к цели)',
+      shortLabel: 'head_yaw',
+      primary: headYawServo,
+      antagonist: headRollServo
+    },
+    {
+      name: 'Голова: head_roll (Боковой контр-баланс)',
+      shortLabel: 'head_roll',
+      primary: headRollServo,
+      antagonist: headYawServo
+    }
+  );
 
   const creature = new CreatureInstance({
     id,
@@ -1342,7 +1606,110 @@ function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24
   });
   creature.logicalDoFs = logicalDoFs;
   creature.webbedFeet = webbedFeet;
+  creature.headNode = headNode;
   creature.isDuck = true;
+
+  // Custom 14-DoF Action Dispatcher for Open_Duck_Mini:
+  // a[0..4]  = Left Leg  (hip_yaw, hip_roll, hip_pitch, knee_pitch, ankle_pitch)
+  // a[5..9]  = Right Leg (hip_yaw, hip_roll, right_hip_pitch, right_knee_pitch, right_ankle_pitch)
+  // a[10..13]= Neck/Head (neck_pitch, head_pitch, head_yaw, head_roll)
+  creature.customApplyActions = (actions, isRightingMode = false) => {
+    const clamp1 = v => Math.max(-1, Math.min(1, v || 0));
+    const { up, forward, right } = creature.getTorsoFrame();
+    let totalPower = 0;
+
+    // 1. Left Leg (5 DoF: actions[0..4])
+    const lHipYaw = clamp1(actions[0]);
+    const lHipRoll = clamp1(actions[1]);
+    const lHipPitch = clamp1(actions[2]);
+    const lKneePitch = clamp1(actions[3]);
+    const lAnklePitch = clamp1(actions[4]);
+
+    // 2. Right Leg (5 DoF: actions[5..9])
+    const rHipYaw = clamp1(actions[5]);
+    const rHipRoll = clamp1(actions[6]);
+    const rHipPitch = clamp1(actions[7]);
+    const rKneePitch = clamp1(actions[8]);
+    const rAnklePitch = clamp1(actions[9]);
+
+    const diffTurn = 0.5 * (rHipPitch - lHipPitch);
+
+    totalPower += legControllers[0].applyLegActions(
+      lKneePitch,
+      lHipPitch,
+      diffTurn,
+      isRightingMode,
+      up,
+      forward,
+      right,
+      lHipRoll,
+      lHipYaw,
+      lAnklePitch
+    );
+    totalPower += legControllers[1].applyLegActions(
+      rKneePitch,
+      rHipPitch,
+      diffTurn,
+      isRightingMode,
+      up,
+      forward,
+      right,
+      rHipRoll,
+      rHipYaw,
+      rAnklePitch
+    );
+
+    // 3. Articulated Neck & Head Counterbalance (4 DoF: actions[10..13])
+    const actNeckPitch = clamp1(actions[10]);
+    const actHeadPitch = clamp1(actions[11]);
+    const actHeadYaw = clamp1(actions[12]);
+    const actHeadRoll = clamp1(actions[13]);
+
+    const thetaPitch = baseNeckPitchRad + actNeckPitch * 0.45 + actHeadPitch * 0.25;
+    const thetaRoll = actHeadRoll * 0.35 + actHeadYaw * 0.18;
+    const targetHeadPos = new Vec3(
+      restTorsoTop.x + L_neck * Math.sin(thetaPitch) * Math.cos(thetaRoll),
+      restTorsoTop.y + L_neck * Math.cos(thetaPitch) * Math.cos(thetaRoll),
+      restTorsoTop.z + L_neck * Math.sin(thetaRoll)
+    );
+
+    neckPitchServo.targetAction = actNeckPitch;
+    headPitchServo.targetAction = actHeadPitch;
+    headYawServo.targetAction = actHeadYaw;
+    headRollServo.targetAction = actHeadRoll;
+
+    neckPitchServo.setTargetLengthDirect(Vec3.dist(restNosePos, targetHeadPos));
+    headPitchServo.setTargetLengthDirect(Vec3.dist(restTailPos, targetHeadPos));
+    headYawServo.setTargetLengthDirect(Vec3.dist(restHipLPos, targetHeadPos));
+    headRollServo.setTargetLengthDirect(Vec3.dist(restHipRPos, targetHeadPos));
+    headVerticalServo.setTargetLengthDirect(Vec3.dist(restTorsoBottom, targetHeadPos));
+
+    neckPitchServo.jointAngleRad = actNeckPitch * 0.55;
+    neckPitchServo.jointTorqueNm = Math.max(-12.0, Math.min(12.0, (neckPitchServo.appliedForce - headPitchServo.appliedForce) * L_neck));
+    neckPitchServo.torqueLoadRatio = Math.min(1.0, Math.abs(neckPitchServo.jointTorqueNm) / 12.0);
+
+    headPitchServo.jointAngleRad = actHeadPitch * 0.45;
+    headPitchServo.jointTorqueNm = Math.max(-12.0, Math.min(12.0, headPitchServo.appliedForce * L_neck));
+    headPitchServo.torqueLoadRatio = Math.min(1.0, Math.abs(headPitchServo.jointTorqueNm) / 12.0);
+
+    headYawServo.jointAngleRad = actHeadYaw * 0.65;
+    headYawServo.jointTorqueNm = Math.max(-12.0, Math.min(12.0, (headYawServo.appliedForce - headRollServo.appliedForce) * L_neck));
+    headYawServo.torqueLoadRatio = Math.min(1.0, Math.abs(headYawServo.jointTorqueNm) / 12.0);
+
+    headRollServo.jointAngleRad = actHeadRoll * 0.50;
+    headRollServo.jointTorqueNm = Math.max(-12.0, Math.min(12.0, headRollServo.appliedForce * L_neck));
+    headRollServo.torqueLoadRatio = Math.min(1.0, Math.abs(headRollServo.jointTorqueNm) / 12.0);
+
+    totalPower +=
+      neckPitchServo.instantPower +
+      headPitchServo.instantPower +
+      headYawServo.instantPower +
+      headRollServo.instantPower +
+      headVerticalServo.instantPower;
+
+    return totalPower;
+  };
+
   return creature;
 }
 
@@ -1367,11 +1734,11 @@ export const MORPHOLOGY_REGISTRY = {
   },
   duck: {
     key: 'duck',
-    name: 'Конструкция №3: Двуногий робот «Микро-Утка» (Biped, 6 DoF)',
-    shortName: 'Микро-Утка (Biped, 6 DoF)',
-    description: 'Двуногий робот на жёстких сервоприводах (Revolute PD, Н·м) по мотивам открытой робототехники Open Duck Mini / Microduck. Две широкие трёхточечные стопы-ласты с сервоприводами голеностопа, птичьи колени обратного сгиба и активная балансирующая шея с клювом.',
-    obsDim: 31,
-    actDim: 6,
+    name: 'Конструкция №3: Двуногий робот «Микро-Утка / Open Duck Mini» (Biped, 14 DoF)',
+    shortName: 'Микро-Утка (Biped, 14 DoF)',
+    description: 'Двуногий робот на 14 жёстких сервоприводах (Revolute PD, Н·м) с полной по-суставной совместимостью со стандартом Open Duck Mini: по 5 сервоприводов в каждой лапе (hip_yaw, hip_roll, hip_pitch, knee, ankle) + 4 сервопривода в шее и голове-балансире (neck_pitch, head_pitch, head_yaw, head_roll). Способен ходить вразвалочку, высоко приподниматься на лапах и садиться на попу.',
+    obsDim: 46,
+    actDim: 14,
     build: buildMicroDuckWalker
   }
 };

@@ -242,20 +242,89 @@ export class ActorCriticBrain {
     // 10 = clockSin, 11 = clockCos
     // 12 = clockSin * forwardGate, 13 = clockCos * forwardGate
     // 14 = clockSin * turnDrive,   15 = clockCos * turnDrive
-    const numLegs = Math.floor(this.actDim / 2);
-    // Resonance phase lag between vertical knee lift and horizontal hip stride (210 deg = 7*pi/6)
     const psi = (210 * Math.PI) / 180;
+
+    if (this.morphologyKey === 'duck' && this.actDim === 14) {
+      // 14-DoF Open_Duck_Mini CPG Prior:
+      // Leg 0 (Left):  [0]=hip_yaw, [1]=hip_roll, [2]=hip_pitch, [3]=knee_pitch, [4]=ankle_pitch
+      // Leg 1 (Right): [5]=hip_yaw, [6]=hip_roll, [7]=hip_pitch, [8]=knee_pitch, [9]=ankle_pitch
+      // Neck & Head:   [10]=neck_pitch, [11]=head_pitch, [12]=head_yaw, [13]=head_roll
+      for (let leg = 0; leg < 2; leg++) {
+        const base = leg * 5;
+        // True 180-degree (pi rad) alternating bipedal waddle gait: Left & Right legs step in anti-phase!
+        const delta = leg === 0 ? 0.0 : Math.PI;
+        const cosLift = Math.cos(delta);
+        const sinLift = Math.sin(delta);
+
+        const thetaStride = delta + psi;
+        const cosStride = Math.cos(thetaStride);
+        const sinStride = Math.sin(thetaStride);
+
+        const yawRow = (base + 0) * this.obsDim;
+        const rollRow = (base + 1) * this.obsDim;
+        const pitchRow = (base + 2) * this.obsDim;
+        const kneeRow = (base + 3) * this.obsDim;
+        const ankleRow = (base + 4) * this.obsDim;
+
+        // 1. knee_pitch (vertical step lift/extension in anti-phase)
+        this.actorSkip.W[kneeRow + 11] = 0.28 * cosLift;
+        this.actorSkip.W[kneeRow + 10] = -0.28 * sinLift;
+
+        // 2. hip_roll (lateral pelvic waddle weight shift synchronized with stance/swing)
+        this.actorSkip.W[rollRow + 11] = 0.14 * cosLift;
+        this.actorSkip.W[rollRow + 10] = -0.14 * sinLift;
+
+        // 3. hip_pitch (forward-gated sagittal thigh swing + differential yaw steering)
+        this.actorSkip.W[pitchRow + 13] = 0.30 * cosStride;
+        this.actorSkip.W[pitchRow + 12] = -0.30 * sinStride;
+        const turnSign = leg === 0 ? -1.0 : +1.0;
+        this.actorSkip.W[pitchRow + 15] = turnSign * 0.26 * cosStride;
+        this.actorSkip.W[pitchRow + 14] = -turnSign * 0.26 * sinStride;
+
+        // 4. hip_yaw (active foot twist yaw steering when turning toward target)
+        this.actorSkip.W[yawRow + 15] = 0.18 * cosStride;
+        this.actorSkip.W[yawRow + 14] = -0.18 * sinStride;
+
+        // 5. ankle_pitch (synchronized toe clearance in swing & plantar push-off in stance)
+        this.actorSkip.W[ankleRow + 11] = 0.16 * cosLift;
+        this.actorSkip.W[ankleRow + 10] = -0.16 * sinLift;
+        this.actorSkip.W[ankleRow + 13] = 0.12 * cosStride;
+        this.actorSkip.W[ankleRow + 12] = -0.12 * sinStride;
+      }
+
+      // Neck & Head Counterbalance (DoFs 10..13):
+      const neckPitchRow = 10 * this.obsDim;
+      const headPitchRow = 11 * this.obsDim;
+      const headYawRow = 12 * this.obsDim;
+      const headRollRow = 13 * this.obsDim;
+
+      // Forward-gated pitch counterbalance (shifts CoM forward during stride propulsion)
+      this.actorSkip.W[neckPitchRow + 13] = 0.16;
+      this.actorSkip.W[neckPitchRow + 12] = 0.10;
+      this.actorSkip.W[headPitchRow + 13] = 0.12;
+      this.actorSkip.W[headPitchRow + 12] = -0.08;
+
+      // Head yaw pans toward food target during turning
+      this.actorSkip.W[headYawRow + 15] = 0.18;
+      this.actorSkip.W[headYawRow + 14] = 0.12;
+
+      // Head roll counter-balances pelvic waddle
+      this.actorSkip.W[headRollRow + 11] = -0.14;
+      this.actorSkip.W[headRollRow + 10] = 0.14;
+
+      this.cpgTemplate = Float64Array.from(this.actorSkip.W);
+      return;
+    }
+
+    const numLegs = Math.floor(this.actDim / 2);
 
     for (let leg = 0; leg < numLegs; leg++) {
       // Bilaterally symmetric phase schedule:
-      // Duck (biped waddle): Left webbed foot (-0.36 rad) & Right webbed foot (+0.36 rad) waddle-step with Neck/Pelvis counter-phase (pi)
       // Tripod (3 legs): Front-Left (0) & Front-Right (0) alternate with Rear-Center (pi)
       // Quadruped (4 legs): Diagonal trot pairs FL+BR (0) and FR+BL (pi)
-      const delta = this.morphologyKey === 'duck'
-        ? (leg === 0 ? -0.36 : leg === 1 ? +0.36 : Math.PI)
-        : numLegs === 3
-          ? (leg === 2 ? Math.PI : 0.0)
-          : (leg === 0 || leg === 3 ? 0.0 : Math.PI);
+      const delta = numLegs === 3
+        ? (leg === 2 ? Math.PI : 0.0)
+        : (leg === 0 || leg === 3 ? 0.0 : Math.PI);
 
       const cosLift = Math.cos(delta);
       const sinLift = Math.sin(delta);
@@ -300,7 +369,6 @@ export class ActorCriticBrain {
    */
   forwardRightingReflex(obs, dt = 0.05, recordVis = true) {
     this.rightingPhase = (this.rightingPhase + dt * 6.8) % (Math.PI * 2);
-    const numLegs = Math.floor(this.actDim / 2);
     const zRight = new Float64Array(this.actDim);
     this.rightingLayer.forward(obs, zRight);
 
@@ -317,37 +385,84 @@ export class ActorCriticBrain {
     const c = Math.cos(this.rightingPhase);
 
     const mu = new Float64Array(this.actDim);
-    for (let leg = 0; leg < numLegs; leg++) {
-      const liftIdx = leg * 2;
-      const strideIdx = leg * 2 + 1;
-      let liftCmd = 0;
-      let strideCmd = 0;
 
-      // Stage 2: Once the torso has rolled past upY >= 0.42,
-      // settle legs to neutral ventral standing pose (+0.12) so dorsalMuscle unfolds any dorsal leg without stilt-propping!
-      if (upY >= 0.42) {
-        liftCmd = +0.12;
-        strideCmd = 0.15 * this.rightingSweep * (leg === 0 ? s : leg === 1 ? -s : c);
-      } else if (leg === 0) {
-        // Stage 1 (upY < 0.42, overturned): Front-Left leg (at +right) is on the floor when right.y < 0 (side > 0)
-        liftCmd = side >= 0
-          ? -this.rightingGain * (0.85 + 0.15 * Math.max(0, s))
-          : +0.15 * this.rightingAsym;
-        strideCmd = this.rightingSweep * s;
-      } else if (leg === 1) {
-        // Front-Right leg (at -right) is on the floor when right.y >= 0 (side < 0)
-        liftCmd = side >= 0
-          ? +0.15 * this.rightingAsym
-          : -this.rightingGain * (0.85 + 0.15 * Math.max(0, s));
-        strideCmd = -this.rightingSweep * s;
-      } else {
-        // Rear leg(s): rhythmic dorsal rocking lever
-        liftCmd = -this.rightingGain * (0.70 + 0.30 * Math.max(0, c));
-        strideCmd = this.rightingSweep * c;
+    if (this.morphologyKey === 'duck' && this.actDim === 14) {
+      for (let leg = 0; leg < 2; leg++) {
+        const base = leg * 5;
+        let kneeCmd = 0;
+        let pitchCmd = 0;
+        let rollCmd = 0;
+        let yawCmd = 0;
+        let ankleCmd = 0;
+
+        if (upY >= 0.42) {
+          kneeCmd = +0.16;
+          pitchCmd = 0.15 * this.rightingSweep * (leg === 0 ? s : -s);
+          rollCmd = 0.0;
+          ankleCmd = 0.0;
+        } else if (leg === 0) {
+          kneeCmd = side >= 0
+            ? -this.rightingGain * (0.88 + 0.12 * Math.max(0, s))
+            : +0.20 * this.rightingAsym;
+          pitchCmd = this.rightingSweep * s;
+          rollCmd = side * 0.45 * this.rightingGain;
+          ankleCmd = -0.35 * c;
+        } else {
+          kneeCmd = side >= 0
+            ? +0.20 * this.rightingAsym
+            : -this.rightingGain * (0.88 + 0.12 * Math.max(0, s));
+          pitchCmd = -this.rightingSweep * s;
+          rollCmd = side * 0.45 * this.rightingGain;
+          ankleCmd = +0.35 * c;
+        }
+
+        mu[base + 0] = Math.tanh(yawCmd + 0.15 * zRight[base + 0]);
+        mu[base + 1] = Math.tanh(rollCmd + 0.15 * zRight[base + 1]);
+        mu[base + 2] = Math.tanh(pitchCmd + 0.15 * zRight[base + 2]);
+        mu[base + 3] = Math.tanh(kneeCmd + 0.15 * zRight[base + 3]);
+        mu[base + 4] = Math.tanh(ankleCmd + 0.15 * zRight[base + 4]);
       }
 
-      mu[liftIdx] = Math.tanh(liftCmd + 0.15 * zRight[liftIdx]);
-      mu[strideIdx] = Math.tanh(strideCmd + 0.15 * zRight[strideIdx]);
+      // Use the 4-DoF Neck & Head as a dynamic pendulum counterweight lever to help flip onto its feet!
+      const isSettling = upY >= 0.42;
+      mu[10] = Math.tanh((isSettling ? +0.20 : -0.75 * this.rightingGain * c) + 0.15 * zRight[10]);
+      mu[11] = Math.tanh((isSettling ? +0.10 : -0.55 * this.rightingGain * s) + 0.15 * zRight[11]);
+      mu[12] = Math.tanh((isSettling ? 0.0 : side * 0.45 * s) + 0.15 * zRight[12]);
+      mu[13] = Math.tanh((isSettling ? 0.0 : -side * 0.70 * this.rightingGain) + 0.15 * zRight[13]);
+    } else {
+      const numLegs = Math.floor(this.actDim / 2);
+      for (let leg = 0; leg < numLegs; leg++) {
+        const liftIdx = leg * 2;
+        const strideIdx = leg * 2 + 1;
+        let liftCmd = 0;
+        let strideCmd = 0;
+
+        // Stage 2: Once the torso has rolled past upY >= 0.42,
+        // settle legs to neutral ventral standing pose (+0.12) so dorsalMuscle unfolds any dorsal leg without stilt-propping!
+        if (upY >= 0.42) {
+          liftCmd = +0.12;
+          strideCmd = 0.15 * this.rightingSweep * (leg === 0 ? s : leg === 1 ? -s : c);
+        } else if (leg === 0) {
+          // Stage 1 (upY < 0.42, overturned): Front-Left leg (at +right) is on the floor when right.y < 0 (side > 0)
+          liftCmd = side >= 0
+            ? -this.rightingGain * (0.85 + 0.15 * Math.max(0, s))
+            : +0.15 * this.rightingAsym;
+          strideCmd = this.rightingSweep * s;
+        } else if (leg === 1) {
+          // Front-Right leg (at -right) is on the floor when right.y >= 0 (side < 0)
+          liftCmd = side >= 0
+            ? +0.15 * this.rightingAsym
+            : -this.rightingGain * (0.85 + 0.15 * Math.max(0, s));
+          strideCmd = -this.rightingSweep * s;
+        } else {
+          // Rear leg(s): rhythmic dorsal rocking lever
+          liftCmd = -this.rightingGain * (0.70 + 0.30 * Math.max(0, c));
+          strideCmd = this.rightingSweep * c;
+        }
+
+        mu[liftIdx] = Math.tanh(liftCmd + 0.15 * zRight[liftIdx]);
+        mu[strideIdx] = Math.tanh(strideCmd + 0.15 * zRight[strideIdx]);
+      }
     }
 
     if (recordVis) {

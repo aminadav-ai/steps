@@ -293,7 +293,7 @@ if (m0.actuatorMode !== 'muscle' || m0.kneeNodes.length !== 0 || m0.legControlle
 }
 console.log(`Классический режим приводов: ${m0.actuatorMode} (узлов коленей: ${m0.kneeNodes.length}, всего физических узлов: ${m0.body.nodes.length})`);
 
-console.log('\n=== 7. Проверка Конструкции №3: Двуногий серво-робот «Микро-Утка» (duck, Biped, 6 DoF) ===');
+console.log('\n=== 7. Проверка Конструкции №3: Двуногий серво-робот «Микро-Утка» (Open_Duck_Mini, Biped, 14 DoF) ===');
 const duckIceSim = new ArenaSimulation({
   morphologyKey: 'duck',
   actuatorMode: 'muscle', // Должен принудительно переключиться в 'servo'
@@ -302,28 +302,62 @@ const duckIceSim = new ArenaSimulation({
   floorFriction: 0.0
 });
 const d0 = duckIceSim.creatures[0];
-if (duckIceSim.actuatorMode !== 'servo' || d0.actuatorMode !== 'servo' || !d0.isDuck || d0.webbedFeet.length !== 2) {
-  console.error('ОШИБКА: Микро-Утка должна всегда работать на жёстких сервоприводах (servo) и иметь 2 трёхточечные стопы-ласты!');
+if (
+  duckIceSim.actuatorMode !== 'servo' ||
+  d0.actuatorMode !== 'servo' ||
+  !d0.isDuck ||
+  d0.webbedFeet.length !== 2 ||
+  d0.footNodes.length !== 2 ||
+  d0.logicalDoFs.length !== 14 ||
+  duckIceSim.brain.obsDim !== 46 ||
+  duckIceSim.brain.actDim !== 14 ||
+  !d0.headNode
+) {
+  console.error('ОШИБКА: Микро-Утка должна иметь ровно 14 сервоприводов (14 DoF, obsDim=46), 2 ноги (footNodes=2), 2 стопы-ласты и балансир головы (headNode)!');
   process.exit(1);
 }
 const dInitCom = d0.body.getCenterOfMass();
 for (let step = 0; step < 50; step++) {
-  const act = [
-    Math.sin(step * 0.6),
-    Math.cos(step * 0.6),
-    -Math.sin(step * 0.6),
-    -Math.cos(step * 0.6),
-    Math.sin(step * 0.3),
-    Math.cos(step * 0.3)
-  ];
+  const act = new Array(14).fill(0).map((_, idx) => Math.sin(step * 0.5 + idx * 0.45));
   d0.applyActionVector(act);
   duckIceSim.world.step(0.05, () => d0.applyActionVector(act));
 }
 const dAfterCom = d0.body.getCenterOfMass();
 const duckDrift = Math.hypot(dAfterCom.x - dInitCom.x, dAfterCom.z - dInitCom.z);
-console.log(`Микро-Утка (duck): приводы=${d0.actuatorMode}, стоп-ласт=${d0.webbedFeet.length}, всего узлов=${d0.body.nodes.length}, дрейф при mu=0: ${duckDrift.toExponential(4)} м`);
+console.log(`Микро-Утка (Open_Duck_Mini): приводы=${d0.actuatorMode}, сервоприводов=${d0.logicalDoFs.length} DoF (obs=${duckIceSim.brain.obsDim}), стоп-ласт=${d0.webbedFeet.length}, всего узлов=${d0.body.nodes.length}, дрейф при mu=0: ${duckDrift.toExponential(4)} м`);
 if (duckDrift > 1e-6) {
-  console.error('ОШИБКА: Нарушен закон сохранения импульса у Микро-Утки!');
+  console.error('ОШИБКА: Нарушен закон сохранения импульса у 14-DoF Микро-Утки!');
+  process.exit(1);
+}
+
+// 7б: Проверка приседания на попу (torsoBottom) и выпрямления во весь рост на 2 лапах
+const duckPoseSim = new ArenaSimulation({
+  morphologyKey: 'duck',
+  algorithm: 'ppo',
+  populationSize: 1,
+  floorFriction: 1.0
+});
+const dp = duckPoseSim.creatures[0];
+// Садимся на попу: сгибаем оба колена (a[3] < 0, a[8] < 0) при плоской стопе (ankle_pitch = 0)
+const sitAct = [0, 0, 0.0, -0.95, 0.0, 0, 0, 0.0, -0.95, 0.0, 0.1, 0.0, 0, 0];
+for (let step = 0; step < 35; step++) {
+  dp.applyActionVector(sitAct);
+  duckPoseSim.world.step(0.05, () => dp.applyActionVector(sitAct));
+}
+const sitBottomY = dp.torsoBottom.pos.y;
+const sitHeadY = dp.headNode.pos.y;
+
+// Встаём во весь рост на выпрямленных лапах: разгибаем оба колена (a[3] > 0, a[8] > 0)
+const standAct = [0, 0, 0.0, 0.85, 0.0, 0, 0, 0.0, 0.85, 0.0, 0.2, 0.1, 0, 0];
+for (let step = 0; step < 35; step++) {
+  dp.applyActionVector(standAct);
+  duckPoseSim.world.step(0.05, () => dp.applyActionVector(standAct));
+}
+const standBottomY = dp.torsoBottom.pos.y;
+const standHeadY = dp.headNode.pos.y;
+console.log(`Позы Микро-Утки: сидя на попе bottomY=${sitBottomY.toFixed(3)} м (headY=${sitHeadY.toFixed(3)} м) -> стоя во весь рост bottomY=${standBottomY.toFixed(3)} м (headY=${standHeadY.toFixed(3)} м), подъём корпуса +${((standBottomY - sitBottomY) * 100).toFixed(1)} см, up.y=${dp.getTorsoFrame().up.y.toFixed(3)}`);
+if (sitBottomY > 0.115 || standBottomY - sitBottomY < 0.04 || dp.getTorsoFrame().up.y < 0.70) {
+  console.error('ОШИБКА: Микро-Утка должна уметь садиться на попу (bottomY <= 0.115 м) и подниматься на лапах во весь рост без потери равновесия!');
   process.exit(1);
 }
 
@@ -337,12 +371,12 @@ for (let s = 0; s < 32 * 8; s++) {
   duckTrainSim.stepControl();
 }
 const dw = duckTrainSim.creatures[0];
-console.log(`Микро-Утка после 8 эпох обучения: up.y=${dw.getTorsoFrame().up.y.toFixed(3)}, скорость=${duckTrainSim.trainer.metaState.competenceEMA.toFixed(3)} м/с, собрано целей=${dw.foodCollected}`);
+console.log(`Микро-Утка (14 DoF) после 8 эпох обучения: up.y=${dw.getTorsoFrame().up.y.toFixed(3)}, скорость=${duckTrainSim.trainer.metaState.competenceEMA.toFixed(3)} м/с, собрано целей=${dw.foodCollected}`);
 if (dw.getTorsoFrame().up.y < 0.65 || duckTrainSim.trainer.metaState.competenceEMA < 0.08) {
-  console.error('ОШИБКА: Микро-Утка должна устойчиво стоять на стопах-ластах и уверенно идти вперёд!');
+  console.error('ОШИБКА: 14-DoF Микро-Утка должна устойчиво стоять на 2 стопах-ластах и уверенно идти вперёд!');
   process.exit(1);
 }
-console.log('ОК: Микро-Утка сохраняет импульс с машинной точностью и уверенно шагает вразвалочку к цели на стопах-ластах.');
+console.log('ОК: 14-DoF Микро-Утка (Open_Duck_Mini) сохраняет импульс, умеет садиться на попу и вставать на лапах, и уверенно шагает к цели.');
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);
