@@ -174,6 +174,20 @@ export class ActorCriticBrain {
     this._duckRightingLastH = new Float64Array(16);
     this._duckRightingPerturbReady = false;
 
+    // Wave-envelope & trajectory eligibility-trace state for oscillatory self-righting
+    this._eligW = new Float64Array(obsDim * actDim);
+    this._eligOutW = new Float64Array(16 * actDim);
+    this._traceW = new Float64Array(obsDim * actDim);
+    this._traceOutW = new Float64Array(16 * actDim);
+    this._waveBaseCrestUpY = null;
+    this._waveBaseMeanUpY = null;
+    this._waveBaseSpanUpY = 0;
+    this._waveBaseCrestTopY = null;
+    this._waveBaseMeanTopY = null;
+    this._waveBaseSpanTopY = 0;
+    this._waveStagnantCount = 0;
+    this._resetRightingWindow(0, 0.18);
+
     this.adamStepCount = 0;
     this.maxSkipRowNorm = 1.80;
 
@@ -387,10 +401,10 @@ export class ActorCriticBrain {
   _ensureDuckRightingLayers() {
     if (!this.rightingH1) {
       this.rightingH1 = new DenseLayer(this.obsDim, this.rightingHiddenDim, 0.14);
-      // Zero food inputs (0..5) in hidden righting layer
+      // Zero food inputs (0..2) in hidden righting layer; keep body velocities (3..5), posture & CPG (6..)
       for (let h = 0; h < this.rightingHiddenDim; h++) {
         const row = h * this.obsDim;
-        for (let c = 0; c < 6; c++) this.rightingH1.W[row + c] = 0.0;
+        for (let c = 0; c < 3; c++) this.rightingH1.W[row + c] = 0.0;
       }
     }
     if (!this.rightingOut) {
@@ -398,28 +412,117 @@ export class ActorCriticBrain {
     }
   }
 
+  _resetRightingWindow(upY = 0, topY = 0.18) {
+    this._winSteps = 0;
+    this._winStartUpY = upY;
+    this._winMinUpY = upY;
+    this._winMaxUpY = upY;
+    this._winSumUpY = 0;
+    this._winPrevUpY = upY;
+    this._winStartTopY = topY;
+    this._winMinTopY = topY;
+    this._winMaxTopY = topY;
+    this._winSumTopY = 0;
+    this._winPrevTopY = topY;
+    if (this._traceW) this._traceW.fill(0);
+    if (this._traceOutW) this._traceOutW.fill(0);
+  }
+
+  resetRightingWaveState(upY = 0, topY = 0.18) {
+    this._waveBaseCrestUpY = upY;
+    this._waveBaseMeanUpY = upY;
+    this._waveBaseSpanUpY = 0;
+    this._waveBaseCrestTopY = topY;
+    this._waveBaseMeanTopY = topY;
+    this._waveBaseSpanTopY = 0;
+    this._waveStagnantCount = 0;
+    if (this._eligW) this._eligW.fill(0);
+    if (this._eligOutW) this._eligOutW.fill(0);
+    this._resetRightingWindow(upY, topY);
+  }
+
+  /**
+   * Accumulates wave-envelope statistics (min/max/mean of up.y and torsoTop.y)
+   * and a causal decaying trajectory eligibility trace across all steps of the oscillation window.
+   */
+  recordRightingStepTrace(obs, act, upY, topY = 0.18) {
+    if (this._waveBaseCrestUpY === null) {
+      this.resetRightingWaveState(upY, topY);
+    }
+    this._winSteps += 1;
+    const isNewCrestUp = upY > this._winMaxUpY;
+    const isNewCrestTop = topY > this._winMaxTopY;
+    if (upY < this._winMinUpY) this._winMinUpY = upY;
+    if (upY > this._winMaxUpY) this._winMaxUpY = upY;
+    this._winSumUpY += upY;
+
+    if (topY < this._winMinTopY) this._winMinTopY = topY;
+    if (topY > this._winMaxTopY) this._winMaxTopY = topY;
+    this._winSumTopY += topY;
+
+    const dUp = upY - this._winPrevUpY;
+    const dTop = (topY - this._winPrevTopY) * 2.5;
+    this._winPrevUpY = upY;
+    this._winPrevTopY = topY;
+
+    if (this.morphologyKey === 'duck' && this.actDim === 14 && obs && act) {
+      const lam = 0.82;
+      const oneMinusLam = 1.0 - lam;
+      // Weight steps by upward body velocity + wave-crest breakthrough + uniform wave baseline
+      // Because _eligW holds a ~6-step decaying memory of (act_t * obs_t), actions taken during the
+      // wind-up trough (замах) are automatically credited when the body surges upward (dUp + dTop > 0)!
+      const vWave = dUp + dTop;
+      const wStep = 0.035 + 1.85 * Math.max(0, vWave) + ((isNewCrestUp || isNewCrestTop) ? 0.18 : 0.0);
+      const hR = this._duckRightingLastH;
+
+      for (let a = 0; a < this.actDim; a++) {
+        const actA = act[a];
+        const row = a * this.obsDim;
+        for (let c = 3; c < this.obsDim; c++) {
+          const idx = row + c;
+          const e = lam * this._eligW[idx] + oneMinusLam * actA * obs[c];
+          this._eligW[idx] = e;
+          this._traceW[idx] += wStep * e;
+        }
+        if (hR && this._eligOutW && this._traceOutW) {
+          const outRow = a * this.rightingHiddenDim;
+          for (let h = 0; h < this.rightingHiddenDim; h++) {
+            const idx = outRow + h;
+            const eOut = lam * this._eligOutW[idx] + oneMinusLam * actA * hR[h];
+            this._eligOutW[idx] = eOut;
+            this._traceOutW[idx] += wStep * eOut;
+          }
+        }
+      }
+    }
+  }
+
   _sampleDuckRightingPerturb(scale = 1.0) {
     if (!this._duckRightingPerturbW || !this._duckRightingPerturbB) return;
     this._ensureDuckRightingLayers();
     this._duckRightingPerturbReady = true;
-    // Sample a coherent neural exploration hypothesis over posture, CPG clock, and proprioception (cols 6..obsDim-1)
-    // plus non-linear hidden layer readout weights (rightingOut)
+    // Sample a dynamic wave hypothesis over body velocities (3..5), posture (6..9), CPG wave (10..11),
+    // and proprioception (16..obsDim-1), keeping static bias modest so tanh never freezes into a static pose!
     for (let a = 0; a < this.actDim; a++) {
-      this._duckRightingPerturbB[a] = randn() * 0.22 * scale;
+      this._duckRightingPerturbB[a] = randn() * 0.12 * scale;
       const row = a * this.obsDim;
       for (let c = 0; c < this.obsDim; c++) {
-        if (c < 6) {
+        if (c < 3) {
           this._duckRightingPerturbW[row + c] = 0.0; // Ignore food position while trying to stand up
+        } else if (c <= 9) {
+          this._duckRightingPerturbW[row + c] = randn() * 0.22 * scale; // Body 3D velocity & posture feedback
         } else if (c <= 11) {
-          this._duckRightingPerturbW[row + c] = randn() * 0.20 * scale; // Posture (up.y, pitch, roll) & internal rhythm
+          this._duckRightingPerturbW[row + c] = randn() * 0.34 * scale; // Strong CPG wave rhythm (sin/cos) for rocking
+        } else if (c <= 15) {
+          this._duckRightingPerturbW[row + c] = 0.0; // Zero when overturned (food gates are 0)
         } else {
-          this._duckRightingPerturbW[row + c] = randn() * 0.08 * scale; // Joint proprioception & foot contacts
+          this._duckRightingPerturbW[row + c] = randn() * 0.09 * scale; // Joint proprioception & foot contacts
         }
       }
       if (this._duckRightingPerturbOutW) {
         const outRow = a * this.rightingHiddenDim;
         for (let h = 0; h < this.rightingHiddenDim; h++) {
-          this._duckRightingPerturbOutW[outRow + h] = randn() * 0.16 * scale;
+          this._duckRightingPerturbOutW[outRow + h] = randn() * 0.18 * scale;
         }
       }
     }
@@ -443,12 +546,12 @@ export class ActorCriticBrain {
         this._sampleDuckRightingPerturb(1.0);
       }
 
-      // Compute non-linear hidden representation hR = tanh(rightingH1 * obs) (ignoring food cols 0..5)
+      // Compute non-linear hidden representation hR = tanh(rightingH1 * obs) (ignoring food cols 0..2)
       const hR = this._duckRightingLastH;
       for (let h = 0; h < this.rightingHiddenDim; h++) {
         const row = h * this.obsDim;
         let sum = this.rightingH1.b[h];
-        for (let c = 6; c < this.obsDim; c++) {
+        for (let c = 3; c < this.obsDim; c++) {
           sum += this.rightingH1.W[row + c] * obs[c];
         }
         hR[h] = Math.tanh(sum);
@@ -461,7 +564,7 @@ export class ActorCriticBrain {
         const row = a * this.obsDim;
         let pSum = this._duckRightingPerturbB ? this._duckRightingPerturbB[a] : 0.0;
         if (this._duckRightingPerturbW) {
-          for (let c = 6; c < this.obsDim; c++) {
+          for (let c = 3; c < this.obsDim; c++) {
             pSum += this._duckRightingPerturbW[row + c] * obs[c];
           }
         }
@@ -539,8 +642,9 @@ export class ActorCriticBrain {
 
   /**
    * Updates the Self-Righting Sub-Network parameters at the end of an attempt on the back/side.
-   * For the Duck, updates rightingLayer purely from the body's vertical posture (up.y) and torso elevation (top.y),
-   * with zero reward for foot-floor contactSteps.
+   * For the Duck, evaluates the WAVE ENVELOPE (growth of wave crests maxUpY/maxTopY, wave mean, and rocking span)
+   * and updates weights via the full-window trajectory eligibility trace (_traceW, _traceOutW)
+   * so oscillatory / wave-like rocking is rewarded without being penalized by downward wind-ups (замахи).
    */
   updateRightingReflex({
     startUpY,
@@ -558,90 +662,158 @@ export class ActorCriticBrain {
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
       this._ensureDuckRightingLayers();
-      const upDelta = endUpY - startUpY;
-      const peakGain = Math.max(0, maxUpY - startUpY);
-      const topDelta = (endTopY - startTopY) * 2.5;
-      const peakTopGain = Math.max(0, maxTopY - startTopY) * 2.5;
-      const uprightBonus = (endUpY > 0.48 && endTopY > 0.28)
-        ? (endUpY - 0.48) * 0.85 + (endTopY - 0.28) * 1.8
+
+      const steps = Math.max(1, this._winSteps || 1);
+      const minUpY = Number.isFinite(this._winMinUpY) ? Math.min(this._winMinUpY, startUpY, endUpY) : Math.min(startUpY, endUpY);
+      const meanUpY = this._winSteps > 0 ? (this._winSumUpY / steps) : 0.5 * (startUpY + endUpY);
+      const minTopY = Number.isFinite(this._winMinTopY) ? Math.min(this._winMinTopY, startTopY, endTopY) : Math.min(startTopY, endTopY);
+      const meanTopY = this._winSteps > 0 ? (this._winSumTopY / steps) : 0.5 * (startTopY + endTopY);
+
+      const waveSpanUp = Math.max(0, maxUpY - minUpY);
+      const waveSpanTop = Math.max(0, maxTopY - minTopY) * 2.5;
+
+      const baseCrestUp = this._waveBaseCrestUpY !== null ? this._waveBaseCrestUpY : startUpY;
+      const baseMeanUp = this._waveBaseMeanUpY !== null ? this._waveBaseMeanUpY : startUpY;
+      const baseSpanUp = this._waveBaseSpanUpY || 0;
+      const baseCrestTop = this._waveBaseCrestTopY !== null ? this._waveBaseCrestTopY : startTopY;
+      const baseMeanTop = this._waveBaseMeanTopY !== null ? this._waveBaseMeanTopY : startTopY;
+      const baseSpanTop = this._waveBaseSpanTopY || 0;
+
+      // 1. Wave-Envelope Gains (independent of whether the window ended on a downward wind-up / замах!):
+      const crestGainUp = maxUpY - baseCrestUp;
+      const meanGainUp = meanUpY - baseMeanUp;
+      const crestGainTop = (maxTopY - baseCrestTop) * 2.5;
+      const meanGainTop = (meanTopY - baseMeanTop) * 2.5;
+      const spanGain = (waveSpanUp - baseSpanUp) + 0.5 * (waveSpanTop - baseSpanTop);
+
+      // Reward expanding wave amplitude (active rocking) when still low on the ground,
+      // but ONLY when the wave is expanding or advancing its crest (never for a stagnant standing wave!)
+      const rockingBonus = maxUpY < 0.55
+        ? 0.45 * Math.max(0, spanGain) + (crestGainUp > 0.01 || crestGainTop > 0.01 ? 0.20 * Math.min(0.45, waveSpanUp) : 0.0)
         : 0.0;
+
+      const uprightBonus = (maxUpY > 0.48 && maxTopY > 0.28)
+        ? (maxUpY - 0.48) * 0.85 + (maxTopY - 0.28) * 1.8
+        : 0.0;
+
       const attemptScore =
-        upDelta +
-        0.55 * peakGain +
-        0.65 * topDelta +
-        0.35 * peakTopGain +
+        1.20 * crestGainUp +
+        0.85 * crestGainTop +
+        0.65 * meanGainUp +
+        0.55 * meanGainTop +
+        rockingBonus +
         uprightBonus;
-      const combinedPeak = Math.max(peakGain, 0.5 * (peakGain + peakTopGain));
+
+      // Update wave-envelope baselines:
+      // Ratchet up quickly when the wave breaks a new crest so a standing wave cannot farm reward twice,
+      // and relax gently when a new exploratory hypothesis starts from a lower level.
+      const alphaCrestUp = maxUpY >= baseCrestUp ? 0.65 : 0.22;
+      const alphaCrestTop = maxTopY >= baseCrestTop ? 0.65 : 0.22;
+      this._waveBaseCrestUpY = (1 - alphaCrestUp) * baseCrestUp + alphaCrestUp * maxUpY;
+      this._waveBaseMeanUpY = 0.60 * baseMeanUp + 0.40 * meanUpY;
+      this._waveBaseSpanUpY = 0.55 * baseSpanUp + 0.45 * waveSpanUp;
+      this._waveBaseCrestTopY = (1 - alphaCrestTop) * baseCrestTop + alphaCrestTop * maxTopY;
+      this._waveBaseMeanTopY = 0.60 * baseMeanTop + 0.40 * meanTopY;
+      this._waveBaseSpanTopY = 0.55 * baseSpanTop + 0.45 * waveSpanTop;
+
+      const combinedPeak = Math.max(
+        Math.max(0, crestGainUp) + 0.35 * waveSpanUp,
+        0.5 * (Math.max(0, crestGainUp) + Math.max(0, crestGainTop) + 0.35 * waveSpanUp)
+      );
       if (combinedPeak > this.duckRightingBestProgress) {
         this.duckRightingBestProgress = combinedPeak;
       }
 
-      // Reinforce neural perturbation if the attempt lifted/rotated the body closer to upright level,
-      // or nudge away if the body dropped or rolled further down
-      const stepScale = attemptScore > 0.02
-        ? Math.min(0.45, 0.25 * attemptScore)
-        : (attemptScore < -0.05 ? Math.max(-0.12, 0.15 * attemptScore) : 0.0);
+      // 2. Reinforce neural perturbation & trajectory eligibility trace when the wave envelope grew
+      const stepScale = attemptScore > 0.018
+        ? Math.min(0.45, 0.28 * attemptScore)
+        : (attemptScore < -0.06 ? Math.max(-0.12, 0.14 * attemptScore) : 0.0);
 
       if (stepScale !== 0.0 && this._duckRightingPerturbW && this._duckRightingPerturbB) {
         for (let a = 0; a < this.actDim; a++) {
+          // Clamp static bias tightly to [-0.35, 0.35] so static offset never overwhelms CPG/posture oscillations
           this.rightingLayer.b[a] = Math.max(
-            -0.8,
-            Math.min(0.8, this.rightingLayer.b[a] + stepScale * this._duckRightingPerturbB[a])
+            -0.35,
+            Math.min(0.35, this.rightingLayer.b[a] * 0.96 + stepScale * this._duckRightingPerturbB[a])
           );
           const row = a * this.obsDim;
-          for (let c = 6; c < this.obsDim; c++) {
+          for (let c = 3; c < this.obsDim; c++) {
             this.rightingLayer.W[row + c] = Math.max(
-              -0.8,
-              Math.min(0.8, this.rightingLayer.W[row + c] + stepScale * this._duckRightingPerturbW[row + c])
+              -0.85,
+              Math.min(0.85, this.rightingLayer.W[row + c] + stepScale * this._duckRightingPerturbW[row + c])
             );
           }
           if (this.rightingOut && this._duckRightingPerturbOutW) {
             const outRow = a * this.rightingHiddenDim;
             for (let h = 0; h < this.rightingHiddenDim; h++) {
               this.rightingOut.W[outRow + h] = Math.max(
-                -0.8,
-                Math.min(0.8, this.rightingOut.W[outRow + h] + stepScale * this._duckRightingPerturbOutW[outRow + h])
+                -0.85,
+                Math.min(0.85, this.rightingOut.W[outRow + h] + stepScale * this._duckRightingPerturbOutW[outRow + h])
               );
             }
           }
         }
       }
 
-      const bodyProgress = Math.max(0, progress + Math.max(0, topDelta) + Math.max(0, peakTopGain) * 0.5);
-      if (lastObs && lastAct && bodyProgress > 0.02) {
-        const lr = 0.012;
-        const hR = this._duckRightingLastH;
+      // 3. Apply Trajectory Eligibility Trace (_traceW, _traceOutW) accumulated over the ENTIRE wave (wind-up + push),
+      // rather than reinforcing only the static 24th frame!
+      const waveProgress = Math.max(0, attemptScore);
+      if (waveProgress > 0.015 && this._traceW) {
+        const lrTrace = 0.028 * Math.min(1.5, waveProgress);
         for (let a = 0; a < this.actDim; a++) {
           const row = a * this.obsDim;
-          for (let c = 6; c < this.obsDim; c++) {
-            this.rightingLayer.W[row + c] = Math.max(
-              -0.8,
-              Math.min(0.8, this.rightingLayer.W[row + c] + lr * bodyProgress * lastAct[a] * lastObs[c])
+          for (let c = 3; c < this.obsDim; c++) {
+            const idx = row + c;
+            this.rightingLayer.W[idx] = Math.max(
+              -0.85,
+              Math.min(0.85, this.rightingLayer.W[idx] + lrTrace * this._traceW[idx])
             );
           }
-          if (this.rightingOut && hR) {
+          if (this.rightingOut && this._traceOutW) {
             const outRow = a * this.rightingHiddenDim;
             for (let h = 0; h < this.rightingHiddenDim; h++) {
-              this.rightingOut.W[outRow + h] = Math.max(
-                -0.8,
-                Math.min(0.8, this.rightingOut.W[outRow + h] + lr * bodyProgress * lastAct[a] * hR[h])
+              const idx = outRow + h;
+              this.rightingOut.W[idx] = Math.max(
+                -0.85,
+                Math.min(0.85, this.rightingOut.W[idx] + lrTrace * this._traceOutW[idx])
               );
             }
           }
         }
       }
 
-      // IMPORTANT: Do NOT disrupt an ongoing successful stand-up!
-      // Only sample a brand-new random hypothesis when the attempt stalled or dropped;
-      // if the body is actively rising (upDelta > 0.06 or topDelta > 0.06) or already elevated & semi-upright,
-      // keep the current working weights and only decay the exploratory perturbation slightly!
-      if (upDelta > 0.06 || topDelta > 0.06 || (endUpY >= 0.42 && endTopY >= 0.27)) {
-        for (let i = 0; i < this._duckRightingPerturbW.length; i++) this._duckRightingPerturbW[i] *= 0.65;
-        for (let i = 0; i < this._duckRightingPerturbB.length; i++) this._duckRightingPerturbB[i] *= 0.65;
-        for (let i = 0; i < this._duckRightingPerturbOutW.length; i++) this._duckRightingPerturbOutW[i] *= 0.65;
+      // Save last wave diagnostics for logging in rightingHistory
+      this.lastRightingWaveMetrics = {
+        minUpY: Number(minUpY.toFixed(3)),
+        meanUpY: Number(meanUpY.toFixed(3)),
+        waveSpanUp: Number(waveSpanUp.toFixed(3)),
+        crestGainUp: Number(crestGainUp.toFixed(3)),
+        attemptScore: Number(attemptScore.toFixed(3))
+      };
+
+      // 4. Keep working wave hypothesis if the wave envelope is growing (crestGainUp > 0.025, crestGainTop > 0.025,
+      // or spanGain > 0.04 while rocking), even if endUpY dipped on a wind-up!
+      // If the wave stagnates for 2 windows in a row, sample a fresh wave hypothesis.
+      const isWaveGrowing =
+        crestGainUp > 0.025 ||
+        crestGainTop > 0.025 ||
+        (spanGain > 0.045 && waveSpanUp > 0.08) ||
+        (maxUpY >= 0.48 && maxTopY >= 0.28);
+
+      if (isWaveGrowing) {
+        this._waveStagnantCount = 0;
+        for (let i = 0; i < this._duckRightingPerturbW.length; i++) this._duckRightingPerturbW[i] *= 0.72;
+        for (let i = 0; i < this._duckRightingPerturbB.length; i++) this._duckRightingPerturbB[i] *= 0.60;
+        for (let i = 0; i < this._duckRightingPerturbOutW.length; i++) this._duckRightingPerturbOutW[i] *= 0.72;
       } else {
-        this._sampleDuckRightingPerturb(1.0);
+        this._waveStagnantCount = (this._waveStagnantCount || 0) + 1;
+        if (this._waveStagnantCount >= 2 || attemptScore < -0.04) {
+          this._waveStagnantCount = 0;
+          this._sampleDuckRightingPerturb(1.0);
+        }
       }
+
+      this._resetRightingWindow(endUpY, endTopY);
       return this.getRightingSkillPct();
     }
 
@@ -1275,6 +1447,7 @@ export class PPOTrainer {
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
         this.rightingMinFootClearanceY = Infinity;
+        this.brain.resetRightingWaveState(upY0, topY0);
       }
 
       this.metaState.mode = 'LEARNING_RIGHTING';
@@ -1416,6 +1589,7 @@ export class PPOTrainer {
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       if (topY0 > (this.rightingMaxTopY ?? topY0)) this.rightingMaxTopY = topY0;
+      this.brain.recordRightingStepTrace(this._pendingStep.obs, this._pendingStep.act, upY0, topY0);
       const anyContact = c0.footNodes.some(f => f.inContact) ||
         (c0.webbedFeet ? c0.webbedFeet.some(wf => wf.toeInner.inContact || wf.toeOuter.inContact) : false);
       if (anyContact) this.rightingContactSteps += 1;
@@ -1464,6 +1638,7 @@ export class PPOTrainer {
           maxUpY: Number(this.rightingMaxUpY.toFixed(3)),
           endUpY: Number(upY0.toFixed(3)),
           deltaUpY: Number((upY0 - this.rightingStartUpY).toFixed(3)),
+          ...(this.brain.lastRightingWaveMetrics || {}),
           startTopY: Number(startTopY.toFixed(3)),
           maxTopY: Number(maxTopY.toFixed(3)),
           endTopY: Number(topY0.toFixed(3)),
@@ -2202,6 +2377,7 @@ export class NESTrainer {
         this.rightingStartTopY = topY0;
         this.rightingMaxTopY = topY0;
         this.rightingContactSteps = 0;
+        this.brain.resetRightingWaveState(upY0, topY0);
       }
       this.metaState.mode = 'LEARNING_RIGHTING';
       this.metaState.isLearningActive = true;
@@ -2286,6 +2462,7 @@ export class NESTrainer {
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       if (topY0 > (this.rightingMaxTopY ?? topY0)) this.rightingMaxTopY = topY0;
+      this.brain.recordRightingStepTrace(this._lastRightingStep.obs, this._lastRightingStep.act, upY0, topY0);
       const anyContact = c0.footNodes.some(f => f.inContact) ||
         (c0.webbedFeet ? c0.webbedFeet.some(wf => wf.toeInner.inContact || wf.toeOuter.inContact) : false);
       if (anyContact) this.rightingContactSteps += 1;
@@ -2335,6 +2512,7 @@ export class NESTrainer {
           maxUpY: Number(this.rightingMaxUpY.toFixed(3)),
           endUpY: Number(upY0.toFixed(3)),
           deltaUpY: Number((upY0 - this.rightingStartUpY).toFixed(3)),
+          ...(this.brain.lastRightingWaveMetrics || {}),
           startTopY: Number(startTopY.toFixed(3)),
           maxTopY: Number(maxTopY.toFixed(3)),
           endTopY: Number(topY0.toFixed(3)),
