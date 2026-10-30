@@ -573,11 +573,17 @@ export class ArenaSimulation {
         r = 0;
       } else if (isOverturnedNow) {
         // When overturned on its back: ZERO thoughts about food or walking!
-        // Reward is 100% dedicated to the Beetle Self-Righting task: increasing up.y toward +1
-        // and leveraging feet against the floor to roll back onto its feet.
         const upVel = (up.y - prevUpY) / dt;
-        const contactBonus = c.footNodes.some(f => f.inContact) ? 0.18 : 0.0;
-        r = 3.5 * upVel + 0.35 * up.y + contactBonus;
+        if (c.isDuck) {
+          // For the Duck, evaluate purely the body's own posture and upper-torso elevation:
+          // legs are free to push, step, or tap-dance however needed to lift and level the body.
+          const topY = c.torsoTop ? c.torsoTop.pos.y : center.y;
+          r = 3.5 * upVel + 0.35 * up.y + 0.45 * Math.max(0, topY - 0.18);
+        } else {
+          // Beetle Self-Righting task: increasing up.y toward +1 and leveraging feet against the floor.
+          const contactBonus = c.footNodes.some(f => f.inContact) ? 0.18 : 0.0;
+          r = 3.5 * upVel + 0.35 * up.y + contactBonus;
+        }
         c.lastVelocityTowardFood = 0;
         dones[i] = 1;
       } else if (isWaitingForFood) {

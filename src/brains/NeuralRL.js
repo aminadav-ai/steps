@@ -539,9 +539,20 @@ export class ActorCriticBrain {
 
   /**
    * Updates the Self-Righting Sub-Network parameters at the end of an attempt on the back/side.
-   * For the Duck, updates rightingLayer purely from the empirical upward rotation reward (no scripted priors).
+   * For the Duck, updates rightingLayer purely from the body's vertical posture (up.y) and torso elevation (top.y),
+   * with zero reward for foot-floor contactSteps.
    */
-  updateRightingReflex({ startUpY, maxUpY, endUpY, contactSteps, lastObs, lastAct }) {
+  updateRightingReflex({
+    startUpY,
+    maxUpY,
+    endUpY,
+    startTopY = 0.18,
+    maxTopY = 0.18,
+    endTopY = 0.18,
+    contactSteps,
+    lastObs,
+    lastAct
+  }) {
     this.rightingAttempts += 1;
     const progress = Math.max(0, maxUpY - startUpY) + Math.max(0, endUpY - startUpY);
 
@@ -549,15 +560,25 @@ export class ActorCriticBrain {
       this._ensureDuckRightingLayers();
       const upDelta = endUpY - startUpY;
       const peakGain = Math.max(0, maxUpY - startUpY);
-      const uprightBonus = endUpY > 0.5 ? (endUpY - 0.5) * 0.8 : 0.0;
-      const attemptScore = upDelta + 0.65 * peakGain + uprightBonus + 0.015 * contactSteps;
-      if (peakGain > this.duckRightingBestProgress) {
-        this.duckRightingBestProgress = peakGain;
+      const topDelta = (endTopY - startTopY) * 2.5;
+      const peakTopGain = Math.max(0, maxTopY - startTopY) * 2.5;
+      const uprightBonus = (endUpY > 0.48 && endTopY > 0.28)
+        ? (endUpY - 0.48) * 0.85 + (endTopY - 0.28) * 1.8
+        : 0.0;
+      const attemptScore =
+        upDelta +
+        0.55 * peakGain +
+        0.65 * topDelta +
+        0.35 * peakTopGain +
+        uprightBonus;
+      const combinedPeak = Math.max(peakGain, 0.5 * (peakGain + peakTopGain));
+      if (combinedPeak > this.duckRightingBestProgress) {
+        this.duckRightingBestProgress = combinedPeak;
       }
 
-      // Reinforce neural perturbation if the attempt rocked/rolled the torso closer to upright,
-      // or nudge away if it rolled further upside down
-      const stepScale = attemptScore > 0.01
+      // Reinforce neural perturbation if the attempt lifted/rotated the body closer to upright level,
+      // or nudge away if the body dropped or rolled further down
+      const stepScale = attemptScore > 0.02
         ? Math.min(0.45, 0.25 * attemptScore)
         : (attemptScore < -0.05 ? Math.max(-0.12, 0.15 * attemptScore) : 0.0);
 
@@ -586,7 +607,8 @@ export class ActorCriticBrain {
         }
       }
 
-      if (lastObs && lastAct && progress > 0.01) {
+      const bodyProgress = Math.max(0, progress + Math.max(0, topDelta) + Math.max(0, peakTopGain) * 0.5);
+      if (lastObs && lastAct && bodyProgress > 0.02) {
         const lr = 0.012;
         const hR = this._duckRightingLastH;
         for (let a = 0; a < this.actDim; a++) {
@@ -594,7 +616,7 @@ export class ActorCriticBrain {
           for (let c = 6; c < this.obsDim; c++) {
             this.rightingLayer.W[row + c] = Math.max(
               -0.8,
-              Math.min(0.8, this.rightingLayer.W[row + c] + lr * progress * lastAct[a] * lastObs[c])
+              Math.min(0.8, this.rightingLayer.W[row + c] + lr * bodyProgress * lastAct[a] * lastObs[c])
             );
           }
           if (this.rightingOut && hR) {
@@ -602,7 +624,7 @@ export class ActorCriticBrain {
             for (let h = 0; h < this.rightingHiddenDim; h++) {
               this.rightingOut.W[outRow + h] = Math.max(
                 -0.8,
-                Math.min(0.8, this.rightingOut.W[outRow + h] + lr * progress * lastAct[a] * hR[h])
+                Math.min(0.8, this.rightingOut.W[outRow + h] + lr * bodyProgress * lastAct[a] * hR[h])
               );
             }
           }
@@ -610,10 +632,10 @@ export class ActorCriticBrain {
       }
 
       // IMPORTANT: Do NOT disrupt an ongoing successful stand-up!
-      // Only sample a brand-new random hypothesis when the attempt stalled or rolled backward;
-      // if the duck is actively rising (upDelta > 0.06) or already semi-upright (endUpY >= 0.25),
+      // Only sample a brand-new random hypothesis when the attempt stalled or dropped;
+      // if the body is actively rising (upDelta > 0.06 or topDelta > 0.06) or already elevated & semi-upright,
       // keep the current working weights and only decay the exploratory perturbation slightly!
-      if (upDelta > 0.06 || endUpY >= 0.25) {
+      if (upDelta > 0.06 || topDelta > 0.06 || (endUpY >= 0.42 && endTopY >= 0.27)) {
         for (let i = 0; i < this._duckRightingPerturbW.length; i++) this._duckRightingPerturbW[i] *= 0.65;
         for (let i = 0; i < this._duckRightingPerturbB.length; i++) this._duckRightingPerturbB[i] *= 0.65;
         for (let i = 0; i < this._duckRightingPerturbOutW.length; i++) this._duckRightingPerturbOutW[i] *= 0.65;
@@ -1216,11 +1238,11 @@ export class PPOTrainer {
       }
     }
 
+    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : c0.body.getCenterOfMass().y;
     if (this.wasOverturned && isDuck0) {
-      const anyFootContact = c0.footNodes.some(f => f.inContact);
-      if (upY0 >= 0.84 && !c0.hasInvertedLeg() && anyFootContact) {
+      if (upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg()) {
         this.uprightHoldSteps = (this.uprightHoldSteps || 0) + 1;
-      } else if (upY0 < 0.78) {
+      } else if (upY0 < 0.78 || topY0 < 0.28) {
         this.uprightHoldSteps = 0;
       }
     } else {
@@ -1228,7 +1250,7 @@ export class PPOTrainer {
     }
 
     const isRecoveredUpright = isDuck0
-      ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && !c0.hasInvertedLeg())
+      ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg())
       : (upY0 >= 0.65 && !c0.hasInvertedLeg());
 
     const isOverturned0 =
@@ -1247,6 +1269,8 @@ export class PPOTrainer {
         this.rightingStepCursor = 0;
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
+        this.rightingStartTopY = topY0;
+        this.rightingMaxTopY = topY0;
         this.rightingContactSteps = 0;
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
@@ -1360,6 +1384,7 @@ export class PPOTrainer {
 
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
+    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : c0.body.getCenterOfMass().y;
 
     if (this._pendingStep.isOverturnPause) {
       return null;
@@ -1369,7 +1394,7 @@ export class PPOTrainer {
     if (this._pendingStep.isRightingStep) {
       const isDuck0 = c0.morphologyKey === 'duck';
       const canCompleteNow = isDuck0
-        ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && !c0.hasInvertedLeg())
+        ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg())
         : (upY0 >= 0.65 && !c0.hasInvertedLeg());
       if (this.wasOverturned && canCompleteNow) {
         this._completeRightingRecovery();
@@ -1381,6 +1406,8 @@ export class PPOTrainer {
         if (this.rightingPauseStepsRemaining === 0) {
           this.rightingStartUpY = upY0;
           this.rightingMaxUpY = upY0;
+          this.rightingStartTopY = topY0;
+          this.rightingMaxTopY = topY0;
           this.rightingContactSteps = 0;
         }
         return null;
@@ -1388,6 +1415,7 @@ export class PPOTrainer {
 
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
+      if (topY0 > (this.rightingMaxTopY ?? topY0)) this.rightingMaxTopY = topY0;
       const anyContact = c0.footNodes.some(f => f.inContact) ||
         (c0.webbedFeet ? c0.webbedFeet.some(wf => wf.toeInner.inContact || wf.toeOuter.inContact) : false);
       if (anyContact) this.rightingContactSteps += 1;
@@ -1416,10 +1444,15 @@ export class PPOTrainer {
 
       const horizon = isDuck0 ? 24 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
+        const startTopY = this.rightingStartTopY ?? topY0;
+        const maxTopY = this.rightingMaxTopY ?? topY0;
         const skillPct = this.brain.updateRightingReflex({
           startUpY: this.rightingStartUpY,
           maxUpY: this.rightingMaxUpY,
           endUpY: upY0,
+          startTopY,
+          maxTopY,
+          endTopY: topY0,
           contactSteps: this.rightingContactSteps,
           lastObs: this._pendingStep.obs,
           lastAct: this._pendingStep.act
@@ -1431,6 +1464,9 @@ export class PPOTrainer {
           maxUpY: Number(this.rightingMaxUpY.toFixed(3)),
           endUpY: Number(upY0.toFixed(3)),
           deltaUpY: Number((upY0 - this.rightingStartUpY).toFixed(3)),
+          startTopY: Number(startTopY.toFixed(3)),
+          maxTopY: Number(maxTopY.toFixed(3)),
+          endTopY: Number(topY0.toFixed(3)),
           footContactSteps: this.rightingContactSteps,
           bottomContactSteps: this.rightingBottomContactSteps || 0,
           headContactSteps: this.rightingHeadContactSteps || 0,
@@ -1446,6 +1482,8 @@ export class PPOTrainer {
         this.rightingStepCursor = 0;
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
+        this.rightingStartTopY = topY0;
+        this.rightingMaxTopY = topY0;
         this.rightingContactSteps = 0;
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
@@ -2111,6 +2149,7 @@ export class NESTrainer {
     const c0 = creatures[0];
     const isDuck0 = c0.morphologyKey === 'duck';
     const upY0 = c0.getTorsoFrame().up.y;
+    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : c0.body.getCenterOfMass().y;
     const isPhysicallyTiltedOnBack = !c0.isGrabbed && !(c0.postThrowTimer > 0) && upY0 < (isDuck0 ? 0.25 : 0.22);
     const confirmDelay = isDuck0 ? 3 : 24;
 
@@ -2132,10 +2171,9 @@ export class NESTrainer {
     }
 
     if (this.wasOverturned && isDuck0) {
-      const anyFootContact = c0.footNodes.some(f => f.inContact);
-      if (upY0 >= 0.84 && !c0.hasInvertedLeg() && anyFootContact) {
+      if (upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg()) {
         this.uprightHoldSteps = (this.uprightHoldSteps || 0) + 1;
-      } else if (upY0 < 0.78) {
+      } else if (upY0 < 0.78 || topY0 < 0.28) {
         this.uprightHoldSteps = 0;
       }
     } else {
@@ -2143,7 +2181,7 @@ export class NESTrainer {
     }
 
     const isRecoveredUpright = isDuck0
-      ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && !c0.hasInvertedLeg())
+      ? ((this.uprightHoldSteps || 0) >= 8 && upY0 >= 0.84 && topY0 >= 0.34 && !c0.hasInvertedLeg())
       : (upY0 >= 0.65 && !c0.hasInvertedLeg());
 
     const isOverturned0 =
@@ -2161,6 +2199,8 @@ export class NESTrainer {
         this.rightingStepCursor = 0;
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
+        this.rightingStartTopY = topY0;
+        this.rightingMaxTopY = topY0;
         this.rightingContactSteps = 0;
       }
       this.metaState.mode = 'LEARNING_RIGHTING';
@@ -2227,6 +2267,7 @@ export class NESTrainer {
   recordStepOutcome(creatures, rewards, _dones) {
     const c0 = creatures[0];
     const upY0 = c0.getTorsoFrame().up.y;
+    const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : c0.body.getCenterOfMass().y;
     if (this._lastRightingStep) {
       if (this._lastRightingStep.isOverturnPause) {
         return null;
@@ -2236,12 +2277,15 @@ export class NESTrainer {
         if (this.rightingPauseStepsRemaining === 0) {
           this.rightingStartUpY = upY0;
           this.rightingMaxUpY = upY0;
+          this.rightingStartTopY = topY0;
+          this.rightingMaxTopY = topY0;
           this.rightingContactSteps = 0;
         }
         return null;
       }
       this.rightingStepCursor += 1;
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
+      if (topY0 > (this.rightingMaxTopY ?? topY0)) this.rightingMaxTopY = topY0;
       const anyContact = c0.footNodes.some(f => f.inContact) ||
         (c0.webbedFeet ? c0.webbedFeet.some(wf => wf.toeInner.inContact || wf.toeOuter.inContact) : false);
       if (anyContact) this.rightingContactSteps += 1;
@@ -2270,10 +2314,15 @@ export class NESTrainer {
       const isDuck0 = c0.morphologyKey === 'duck';
       const horizon = isDuck0 ? 24 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
+        const startTopY = this.rightingStartTopY ?? topY0;
+        const maxTopY = this.rightingMaxTopY ?? topY0;
         const skillPct = this.brain.updateRightingReflex({
           startUpY: this.rightingStartUpY,
           maxUpY: this.rightingMaxUpY,
           endUpY: upY0,
+          startTopY,
+          maxTopY,
+          endTopY: topY0,
           contactSteps: this.rightingContactSteps,
           lastObs: this._lastRightingStep.obs,
           lastAct: this._lastRightingStep.act
@@ -2286,6 +2335,9 @@ export class NESTrainer {
           maxUpY: Number(this.rightingMaxUpY.toFixed(3)),
           endUpY: Number(upY0.toFixed(3)),
           deltaUpY: Number((upY0 - this.rightingStartUpY).toFixed(3)),
+          startTopY: Number(startTopY.toFixed(3)),
+          maxTopY: Number(maxTopY.toFixed(3)),
+          endTopY: Number(topY0.toFixed(3)),
           footContactSteps: this.rightingContactSteps,
           bottomContactSteps: this.rightingBottomContactSteps || 0,
           headContactSteps: this.rightingHeadContactSteps || 0,
@@ -2300,6 +2352,8 @@ export class NESTrainer {
         this.rightingStepCursor = 0;
         this.rightingStartUpY = upY0;
         this.rightingMaxUpY = upY0;
+        this.rightingStartTopY = topY0;
+        this.rightingMaxTopY = topY0;
         this.rightingContactSteps = 0;
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
