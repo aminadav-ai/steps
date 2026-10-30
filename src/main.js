@@ -317,12 +317,35 @@ function applyRestoredUIState(ckpt) {
   }
 }
 
-async function startNewExperiment({ clearSaved = false } = {}) {
+async function startNewExperiment({ clearSaved = false, resetDefaults = clearSaved } = {}) {
   if (clearSaved) {
     try {
       localStorage.removeItem(CREATURE_STORAGE_KEY);
     } catch {
       // ignore
+    }
+  }
+  if (resetDefaults) {
+    currentAmbitionPreset = 'min';
+    if (rangeAmbition) {
+      rangeAmbition.value = '0.18';
+    }
+    if (labelAmbitionVal) {
+      labelAmbitionVal.textContent = formatAmbitionLabel(0.18, 'min');
+    }
+    if (ambitionButtons) {
+      for (const b of ambitionButtons.querySelectorAll('button')) {
+        b.classList.toggle('active', b.dataset.ambition === 'min');
+      }
+    }
+    if (rangeFriction) {
+      rangeFriction.value = '1.00';
+    }
+    if (labelFrictionVal) {
+      labelFrictionVal.textContent = formatFrictionLabel(1.0);
+    }
+    if (hudFriction) {
+      hudFriction.textContent = '1.00';
     }
   }
   const morphologyKey = selectMorphology.value;
@@ -435,7 +458,7 @@ selectAlgorithm.addEventListener('change', () => {
 });
 btnNewExperiment.addEventListener('click', () => {
   logger.recordUserEvent('btn_new_experiment', { reason: 'user_reset_ai' }, sim, renderer3D, getUIState());
-  startNewExperiment({ clearSaved: true });
+  startNewExperiment({ clearSaved: true, resetDefaults: true });
 });
 
 function setPausedState(nextPaused, source = 'ui') {

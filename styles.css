@@ -402,6 +402,9 @@ select {
   padding-inline: 10px;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
 }
@@ -545,6 +548,8 @@ select {
   padding-inline: 7px;
   border-radius: 999px;
   letter-spacing: 0.03em;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .meta-badge.learning {
@@ -568,10 +573,15 @@ select {
 .meta-mode-banner {
   font-size: 12px;
   font-weight: 700;
-  padding-block: 7px;
+  block-size: 34px;
+  display: flex;
+  align-items: center;
   padding-inline: 10px;
   border-radius: 7px;
   letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .meta-mode-banner.learning {
@@ -641,10 +651,15 @@ select {
   color: #e2e8f0;
   background: rgba(15, 23, 42, 0.72);
   border-inline-start: 3px solid #34d399;
+  block-size: 58px;
   padding-block: 6px;
   padding-inline: 8px;
   border-radius: 5px;
   line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
 }
 
 #ambitionButtons .btn {
