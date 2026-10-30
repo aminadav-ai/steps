@@ -274,7 +274,7 @@ if (selectLanguage) {
   });
 }
 
-const CREATURE_STORAGE_KEY = 'steps_saved_creature_v1';
+const CREATURE_STORAGE_KEY = 'steps_saved_creature_v2';
 
 function saveCreatureCheckpoint() {
   if (!sim || typeof sim.exportCheckpoint !== 'function') return null;

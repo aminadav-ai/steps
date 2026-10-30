@@ -23,7 +23,7 @@ const WORKER_PALETTE = [
 
 export class ArenaSimulation {
   constructor({
-    morphologyKey = 'tripod',
+    morphologyKey = 'quadruped',
     actuatorMode = 'servo',
     algorithm = 'ppo',
     populationSize = 1,
@@ -408,6 +408,19 @@ export class ArenaSimulation {
     }
 
     this.world.stepSingleSubstep(subDt);
+    // Enforce mechanical servo joint hard-stops at 200 Hz after each XPBD substep (conserving exact CoM momentum)
+    for (let i = 0; i < this.populationSize; i++) {
+      const c = this.creatures[i];
+      if (c && c.lastAction && !c.isGrabbed) {
+        const isActivelyRighting = Boolean(
+          this.trainer &&
+          this.trainer.wasOverturned &&
+          !(this.trainer.rightingPauseStepsRemaining > 0) &&
+          c.getTorsoFrame().up.y < 0.42
+        );
+        c.applyActionVector(c.lastAction, isActivelyRighting);
+      }
+    }
     // Keep any mouse-grabbed creature suspended at the user's cursor in mid-air
     for (let i = 0; i < this.populationSize; i++) {
       const c = this.creatures[i];

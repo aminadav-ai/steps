@@ -271,6 +271,14 @@ if (!leg0.isServo || typeof leg0.jointTorqueNm !== 'number' || maxBearingDeflect
   process.exit(1);
 }
 
+const defaultSim = new ArenaSimulation();
+const def0 = defaultSim.creatures[0];
+if (defaultSim.morphologyKey !== 'quadruped' || defaultSim.actuatorMode !== 'servo' || def0.kneeNodes.length !== 4 || def0.logicalDoFs.length !== 8) {
+  console.error('ОШИБКА: По умолчанию должен создаваться 4-ногий серво-шагоход (quadruped + servo, 8 DoF)!');
+  process.exit(1);
+}
+console.log(`Шагоход по умолчанию для новых пользователей: ${defaultSim.morphologyKey} + ${defaultSim.actuatorMode} (${def0.logicalDoFs.length} DoF, узлов коленей: ${def0.kneeNodes.length})`);
+
 const muscleSim = new ArenaSimulation({
   morphologyKey: 'tripod',
   actuatorMode: 'muscle',

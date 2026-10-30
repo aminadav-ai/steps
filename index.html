@@ -165,8 +165,8 @@
           <div class="control-field full">
             <label for="selectMorphology" data-i18n="labelMorphology">Морфология тела (Конструкция):</label>
             <select id="selectMorphology">
-              <option value="tripod" data-i18n="optTripod" selected>Конструкция №1: 3-лучевой шагоход («Трипод», 6 DoF)</option>
-              <option value="quadruped" data-i18n="optQuadruped">Конструкция №2: 4-лучевой шагоход («Квадрупод», 8 DoF)</option>
+              <option value="tripod" data-i18n="optTripod">Конструкция №1: 3-лучевой шагоход («Трипод», 6 DoF)</option>
+              <option value="quadruped" data-i18n="optQuadruped" selected>Конструкция №2: 4-лучевой шагоход («Квадрупод», 8 DoF)</option>
             </select>
           </div>
 
@@ -188,7 +188,7 @@
         </div>
 
         <div id="morphDescription" class="morph-desc">
-          Жёсткий 3D-каркас торса + 3 двухстепенные лапы (передняя левая, передняя правая и задняя толчковая). Каждая лапа управляется сгибом колена (подъём/опора) и продольным махом бедра (тяга вперёд/назад).
+          Симметричный 4-ногий шагоход (8 DoF). Четыре двухсуставные лапы по углам корпуса обеспечивают диагональную рысь (trot) и разворот на месте за счёт разности маха левого и правого бортов.
         </div>
 
         <div class="btn-row">
@@ -244,7 +244,7 @@
       <section class="card">
         <div class="card-title">
           <span data-i18n="nnCardTitle">Нейросеть Шагохода (Actor-Critic + Рефлекс жука)</span>
-          <span id="nnDimLabel" dir="ltr" style="color:#94a3b8;font-size:11px;">31 → 32 → 24 → 6</span>
+          <span id="nnDimLabel" dir="ltr" style="color:#94a3b8;font-size:11px;">31 → 32 → 24 → 8</span>
         </div>
         <div class="canvas-box" dir="ltr">
           <canvas id="nnCanvas"></canvas>
@@ -289,6 +289,6 @@
     </aside>
   </main>
 
-  <script type="module" src="./src/main.js?v=2.0.0"></script>
+  <script type="module" src="./src/main.js?v=2.0.1"></script>
 </body>
 </html>

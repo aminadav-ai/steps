@@ -1089,6 +1089,11 @@ export class PPOTrainer {
 
     // Handle Beetle Self-Righting Learning step when overturned on back:
     if (this._pendingStep.isRightingStep) {
+      if (this.wasOverturned && upY0 >= 0.65 && !c0.hasInvertedLeg()) {
+        this._completeRightingRecovery();
+        return null;
+      }
+
       if (this._pendingStep.isRestPause) {
         this.rightingPauseStepsRemaining = Math.max(0, (this.rightingPauseStepsRemaining || 0) - 1);
         if (this.rightingPauseStepsRemaining === 0) {
@@ -1103,11 +1108,6 @@ export class PPOTrainer {
       if (upY0 > this.rightingMaxUpY) this.rightingMaxUpY = upY0;
       const anyContact = c0.footNodes.some(f => f.inContact);
       if (anyContact) this.rightingContactSteps += 1;
-
-      if (this.wasOverturned && upY0 >= 0.65 && !c0.hasInvertedLeg()) {
-        this._completeRightingRecovery();
-        return null;
-      }
 
       if (this.rightingStepCursor >= this.rightingHorizon) {
         const skillPct = this.brain.updateRightingReflex({
