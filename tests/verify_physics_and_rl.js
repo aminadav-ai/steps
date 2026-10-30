@@ -293,7 +293,7 @@ if (tripodServoSim.actuatorMode !== 'servo' || m0.actuatorMode !== 'servo' || m0
 }
 console.log(`Трипод также работает исключительно на сервоприводах: ${m0.actuatorMode} (узлов коленей: ${m0.kneeNodes.length}, всего физических узлов: ${m0.body.nodes.length})`);
 
-console.log('\n=== 7. Проверка Конструкции №3: Двуногий серво-робот «Микро-Утка» (Open_Duck_Mini, Biped, 14 DoF) ===');
+console.log('\n=== 7. Проверка Конструкции №3: Двуногий серво-робот «Утка» (Duck, Biped, 14 DoF) ===');
 const duckIceSim = new ArenaSimulation({
   morphologyKey: 'duck',
   actuatorMode: 'muscle', // Должен принудительно переключиться в 'servo'
@@ -313,7 +313,7 @@ if (
   duckIceSim.brain.actDim !== 14 ||
   !d0.headNode
 ) {
-  console.error('ОШИБКА: Микро-Утка должна иметь ровно 14 сервоприводов (14 DoF, obsDim=46), 2 ноги (footNodes=2), 2 стопы-ласты и балансир головы (headNode)!');
+  console.error('ОШИБКА: Утка должна иметь ровно 14 сервоприводов (14 DoF, obsDim=46), 2 ноги (footNodes=2), 2 стопы-ласты и балансир головы (headNode)!');
   process.exit(1);
 }
 const dInitCom = d0.body.getCenterOfMass();
@@ -324,9 +324,9 @@ for (let step = 0; step < 50; step++) {
 }
 const dAfterCom = d0.body.getCenterOfMass();
 const duckDrift = Math.hypot(dAfterCom.x - dInitCom.x, dAfterCom.z - dInitCom.z);
-console.log(`Микро-Утка (Open_Duck_Mini): приводы=${d0.actuatorMode}, сервоприводов=${d0.logicalDoFs.length} DoF (obs=${duckIceSim.brain.obsDim}), стоп-ласт=${d0.webbedFeet.length}, всего узлов=${d0.body.nodes.length}, дрейф при mu=0: ${duckDrift.toExponential(4)} м`);
+console.log(`Утка (Duck): приводы=${d0.actuatorMode}, сервоприводов=${d0.logicalDoFs.length} DoF (obs=${duckIceSim.brain.obsDim}), стоп-ласт=${d0.webbedFeet.length}, всего узлов=${d0.body.nodes.length}, дрейф при mu=0: ${duckDrift.toExponential(4)} м`);
 if (duckDrift > 1e-6) {
-  console.error('ОШИБКА: Нарушен закон сохранения импульса у 14-DoF Микро-Утки!');
+  console.error('ОШИБКА: Нарушен закон сохранения импульса у 14-DoF Утки!');
   process.exit(1);
 }
 
@@ -355,9 +355,9 @@ for (let step = 0; step < 35; step++) {
 }
 const standBottomY = dp.torsoBottom.pos.y;
 const standHeadY = dp.headNode.pos.y;
-console.log(`Позы Микро-Утки: сидя на попе bottomY=${sitBottomY.toFixed(3)} м (headY=${sitHeadY.toFixed(3)} м) -> стоя во весь рост bottomY=${standBottomY.toFixed(3)} м (headY=${standHeadY.toFixed(3)} м), подъём корпуса +${((standBottomY - sitBottomY) * 100).toFixed(1)} см, up.y=${dp.getTorsoFrame().up.y.toFixed(3)}`);
+console.log(`Позы Утки: сидя на попе bottomY=${sitBottomY.toFixed(3)} м (headY=${sitHeadY.toFixed(3)} м) -> стоя во весь рост bottomY=${standBottomY.toFixed(3)} м (headY=${standHeadY.toFixed(3)} м), подъём корпуса +${((standBottomY - sitBottomY) * 100).toFixed(1)} см, up.y=${dp.getTorsoFrame().up.y.toFixed(3)}`);
 if (sitBottomY > 0.115 || standBottomY - sitBottomY < 0.04 || dp.getTorsoFrame().up.y < 0.70) {
-  console.error('ОШИБКА: Микро-Утка должна уметь садиться на попу (bottomY <= 0.115 м) и подниматься на лапах во весь рост без потери равновесия!');
+  console.error('ОШИБКА: Утка должна уметь садиться на попу (bottomY <= 0.115 м) и подниматься на лапах во весь рост без потери равновесия!');
   process.exit(1);
 }
 
@@ -371,12 +371,12 @@ for (let s = 0; s < 32 * 8; s++) {
   duckTrainSim.stepControl();
 }
 const dw = duckTrainSim.creatures[0];
-console.log(`Микро-Утка (14 DoF) после 8 эпох обучения: up.y=${dw.getTorsoFrame().up.y.toFixed(3)}, скорость=${duckTrainSim.trainer.metaState.competenceEMA.toFixed(3)} м/с, собрано целей=${dw.foodCollected}`);
+console.log(`Утка (14 DoF) после 8 эпох обучения: up.y=${dw.getTorsoFrame().up.y.toFixed(3)}, скорость=${duckTrainSim.trainer.metaState.competenceEMA.toFixed(3)} м/с, собрано целей=${dw.foodCollected}`);
 if (dw.getTorsoFrame().up.y < 0.65 || duckTrainSim.trainer.metaState.competenceEMA < 0.08) {
-  console.error('ОШИБКА: 14-DoF Микро-Утка должна устойчиво стоять на 2 стопах-ластах и уверенно идти вперёд!');
+  console.error('ОШИБКА: 14-DoF Утка должна устойчиво стоять на 2 стопах-ластах и уверенно идти вперёд!');
   process.exit(1);
 }
-console.log('ОК: 14-DoF Микро-Утка (Open_Duck_Mini) сохраняет импульс, умеет садиться на попу и вставать на лапах, и уверенно шагает к цели.');
+console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и вставать на лапах, и уверенно шагает к цели.');
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);

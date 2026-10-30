@@ -1364,7 +1364,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
 }
 
 /**
- * Morphology #3: Bipedal Servo Duck Walker ("Двуногий робот «Open Duck Mini / Микро-Утка»", 14 DoF, Revolute PD Servos)
+ * Morphology #3: Bipedal Servo Duck Walker ("Двуногий робот «Утка»", 14 DoF, Revolute PD Servos)
  * Full 14-Servo kinematic compatibility with Open_Duck_Mini (apirrone/Open_Duck_Mini, Apache 2.0):
  * - Left Leg  (5 DoF: a[0..4]):  left_hip_yaw, left_hip_roll, left_hip_pitch, left_knee_pitch, left_ankle_pitch
  * - Right Leg (5 DoF: a[5..9]):  right_hip_yaw, right_hip_roll, right_hip_pitch, right_knee_pitch, right_ankle_pitch
@@ -1372,7 +1372,7 @@ function buildQuadrupedWalker({ id, origin = new Vec3(0, 0, 0), color = '#a855f7
  * - Pure 2-legged bipedal stance on two wide 3-point flat duck feet (heel + inner toe + outer toe)
  * - Capable of rising tall on its legs (knee_pitch > 0) and squatting all the way down to sit on its bottom (torsoBottom)
  */
-function buildMicroDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) {
+function buildDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) {
   const duckActuatorMode = 'servo';
   const body = new ArticulatedBody();
 
@@ -1756,11 +1756,11 @@ export const MORPHOLOGY_REGISTRY = {
   },
   duck: {
     key: 'duck',
-    name: 'Конструкция №3: Двуногий робот «Микро-Утка / Open Duck Mini» (Biped, 14 DoF)',
-    shortName: 'Микро-Утка (Biped, 14 DoF)',
-    description: 'Двуногий робот на 14 жёстких сервоприводах (Revolute PD, Н·м) с полной по-суставной совместимостью со стандартом Open Duck Mini: по 5 сервоприводов в каждой лапе (hip_yaw, hip_roll, hip_pitch, knee, ankle) + 4 сервопривода в шее и голове-балансире (neck_pitch, head_pitch, head_yaw, head_roll). Способен ходить вразвалочку, высоко приподниматься на лапах и садиться на попу.',
+    name: 'Конструкция №3: Двуногий робот «Утка» (Biped, 14 DoF)',
+    shortName: 'Утка (Biped, 14 DoF)',
+    description: 'Двуногий робот на 14 жёстких сервоприводах (Revolute PD, Н·м): по 5 сервоприводов в каждой лапе (hip_yaw, hip_roll, hip_pitch, knee, ankle) + 4 сервопривода в шее и голове-балансире (neck_pitch, head_pitch, head_yaw, head_roll). Способен ходить вразвалочку, высоко приподниматься на лапах и садиться на попу.',
     obsDim: 46,
     actDim: 14,
-    build: buildMicroDuckWalker
+    build: buildDuckWalker
   }
 };
