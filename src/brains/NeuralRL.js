@@ -201,6 +201,7 @@ export class ActorCriticBrain {
     this.poseGoal = Float64Array.from(this.poseGoalPresets.stand.vec);
     this.poseGoalHoldVectors = {};
     this._prevPoseKey = null;
+    this._recentPoseKeys = [];
     this.poseCurrent = null;
     this.poseGen = 1;
     this.posePopSize = 4;
@@ -587,6 +588,7 @@ export class ActorCriticBrain {
     this.poseGoalKey = info.key;
     this.poseGoal = Float64Array.from(info.vec);
     this._prevPoseKey = null;
+    this._recentPoseKeys = [];
     if (this.poseUnreachableMemory) {
       this.poseUnreachableMemory.clear();
     }
@@ -878,21 +880,30 @@ export class ActorCriticBrain {
     this.gaCursor = 0;
     this.gaPopulation = [];
 
-    // Search transition memory for known transitions starting near curPose that move toward targetMutant / poseGoal
-    // without oscillating back into _prevPoseKey.
+    // Search transition memory for known transitions starting near curPose that genuinely shift away from curPose
+    // toward targetMutant / poseGoal without oscillating back into recently visited poses.
+    const curKey = this.getPoseKey6D(curPose);
     const curMutantMatch = this.computePoseMatchPct6D(curPose, targetMutant.pose);
     const curGoalMatch = this.computePoseMatchPct6D(curPose, this.poseGoal);
+    const recentKeys = this._recentPoseKeys || [];
     const matchingMemories = [];
     if (this.poseTransitionMemory && this.poseTransitionMemory.size > 0) {
       for (const item of this.poseTransitionMemory.values()) {
-        if (this._prevPoseKey && item.toKey === this._prevPoseKey) {
-          continue; // Prevent A <-> B <-> A ping-pong oscillation
+        if (
+          item.toKey === curKey ||
+          (this._prevPoseKey && item.toKey === this._prevPoseKey) ||
+          recentKeys.includes(item.toKey)
+        ) {
+          continue; // Prevent staying in the same posture or A <-> B <-> C ping-pong loops
         }
         const fromDist = this.computePoseDistance6D(item.pFrom, curPose);
-        if (fromDist <= 0.50) {
+        const shiftFromCur = this.computePoseDistance6D(item.pTo, curPose);
+        if (fromDist <= 0.45 && shiftFromCur >= 0.22) {
           const toMutantMatch = this.computePoseMatchPct6D(item.pTo, targetMutant.pose);
           const toGoalMatch = this.computePoseMatchPct6D(item.pTo, this.poseGoal);
-          if (toMutantMatch > curMutantMatch + 1.0 || toGoalMatch > curGoalMatch + 1.0) {
+          const approachesMutant = toMutantMatch >= curMutantMatch + 4.0 && toGoalMatch >= curGoalMatch - 2.0;
+          const approachesGoal = toGoalMatch >= curGoalMatch + 4.0 && toMutantMatch >= curMutantMatch - 2.0;
+          if (approachesMutant || approachesGoal) {
             const score = 0.60 * toMutantMatch + 0.40 * toGoalMatch - 18.0 * fromDist;
             matchingMemories.push({ item, score });
           }
@@ -922,7 +933,7 @@ export class ActorCriticBrain {
           this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.60, 0.60), 'мутация'));
         }
       }
-    } else if (this.gaArchive && this.gaArchive.length > 0) {
+    } else if (this.poseGoalKey === 'stand' && this.gaArchive && this.gaArchive.length > 0) {
       const archVec = this.gaArchive[0].vec;
       if (this.gaPopulation.length < this.gaPopSize) {
         this.gaPopulation.push(this._makeGACandidate(archVec, 'память'));
@@ -1219,7 +1230,14 @@ export class ActorCriticBrain {
       // 1. Save transition (pStart -> pAfter, cand.vec) into deduplicated memory
       if (poseChanged) {
         this.rememberPoseTransition(pStart, pAfter, cand.vec, maxComY);
-        this._prevPoseKey = this.getPoseKey6D(pStart);
+        const startKey = this.getPoseKey6D(pStart);
+        this._prevPoseKey = startKey;
+        if (!Array.isArray(this._recentPoseKeys)) this._recentPoseKeys = [];
+        if (!this._recentPoseKeys.includes(startKey)) {
+          this._recentPoseKeys.push(startKey);
+          if (this._recentPoseKeys.length > 3) this._recentPoseKeys.shift();
+        }
+        this.poseCurrent = this.quantizePose6D(pAfter);
       }
 
       this.lastRightingWaveMetrics = {
@@ -1255,9 +1273,12 @@ export class ActorCriticBrain {
         vec: Array.from(cand.vec, v => Number(v.toFixed(2)))
       };
 
-      // Live System Rule: if the Duck's pose genuinely changed during GA #2,
-      // immediately update P_current = pAfter, rebuild GA #1 pose mutants around pAfter, and strive toward P_goal from the new pose!
-      if (poseChanged) {
+      // Live System Rule: if the Duck's pose genuinely changed AND moved constructively toward the mutant or goal
+      // (not an accidental random recoil away from the goal), immediately re-anchor GA #1 around pAfter!
+      const isConstructivePoseShift =
+        poseChanged &&
+        (matchPct >= 66.0 || goalPct >= startGoalPct + 2.0);
+      if (isConstructivePoseShift) {
         this.poseGen += 1;
         this.gaGeneration += 1;
         this._initPoseGAPopulation(pAfter);
