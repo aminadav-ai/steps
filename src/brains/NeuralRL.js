@@ -169,32 +169,53 @@ export class ActorCriticBrain {
     this.rightingH1 = null;
     this.rightingOut = null;
 
-    // Two-Level Genetic Algorithm ("Language of Poses": GA #1 Poses + GA #2 Servo Commands + Quantized Memory) for the Duck:
-    // 6D Quantized Pose Vector P = [comY_norm, upY, pitchY, rollY, legExtL, legExtR], quantized with step 0.25
+    // Two-Level Genetic Algorithm ("Language of Poses": GA #1 Poses + GA #2 Servo Commands + Memory) for the Duck:
+    // 18D Pose Vector P = [comY_norm, upY, pitchY, rollY,  L_yaw, L_roll, L_pitch, L_knee, L_ankle,  R_yaw, R_roll, R_pitch, R_knee, R_ankle,  neck_pitch, head_pitch, head_yaw, head_roll]
+    this.poseDim = 18;
     this.poseGoalPresets = {
       stand: {
         key: 'stand',
         labelRu: 'СТОЯТЬ',
         labelShortRu: 'Стоять',
-        vec: [1.0, 1.0, 0.0, 0.0, 0.50, 0.50]
+        vec: [
+          0.85, 1.0, 0.0, 0.0,
+          0.0, 0.0, 0.0, 0.65, 0.0,
+          0.0, 0.0, 0.0, 0.65, 0.0,
+          0.0, 0.0, 0.0, 0.0
+        ]
       },
       sit: {
         key: 'sit',
         labelRu: 'СИДЕТЬ',
         labelShortRu: 'Сидеть',
-        vec: [-0.50, 1.0, 0.0, 0.0, -1.0, -1.0]
+        vec: [
+          -0.45, 0.90, 0.0, 0.0,
+          0.0, 0.0, 0.35, -0.85, 0.0,
+          0.0, 0.0, 0.35, -0.85, 0.0,
+          0.20, 0.15, 0.0, 0.0
+        ]
       },
       lie_back: {
         key: 'lie_back',
         labelRu: 'ЛЕЖАТЬ НА СПИНЕ',
         labelShortRu: 'На спине',
-        vec: [-0.50, 0.0, 1.0, 0.0, -0.50, -0.50]
+        vec: [
+          -0.50, 0.0, 0.92, 0.0,
+          0.0, 0.0, -0.35, -0.50, 0.0,
+          0.0, 0.0, -0.35, -0.50, 0.0,
+          -0.40, -0.35, 0.0, 0.0
+        ]
       },
       lie_belly: {
         key: 'lie_belly',
         labelRu: 'ЛЕЖАТЬ НА ЖИВОТЕ',
         labelShortRu: 'На животе',
-        vec: [-0.75, 0.25, -1.0, 0.0, -0.75, -0.75]
+        vec: [
+          -0.65, 0.20, -0.92, 0.0,
+          0.0, 0.0, -0.55, -0.75, 0.0,
+          0.0, 0.0, -0.55, -0.75, 0.0,
+          0.50, 0.40, 0.0, 0.0
+        ]
       }
     };
     this.poseGoalKey = 'stand';
@@ -347,7 +368,7 @@ export class ActorCriticBrain {
       }
     }
     if (typeof data.poseGen === 'number') this.poseGen = data.poseGen;
-    if (Array.isArray(data.poseCurrent) && data.poseCurrent.length === 6) {
+    if (Array.isArray(data.poseCurrent) && data.poseCurrent.length === (this.poseDim || 18)) {
       this.poseCurrent = Float64Array.from(data.poseCurrent);
     }
     if (Array.isArray(data.gaBestVector) && data.gaBestVector.length === this.actDim) {
@@ -370,15 +391,29 @@ export class ActorCriticBrain {
     }
     if (Array.isArray(data.poseTransitionMemory)) {
       this.poseTransitionMemory = new Map();
+      const pDim = this.poseDim || 18;
       for (const item of data.poseTransitionMemory) {
-        if (item && item.fromKey && item.toKey && Array.isArray(item.cmdVec) && item.cmdVec.length === this.actDim) {
+        if (
+          item &&
+          item.fromKey &&
+          item.toKey &&
+          Array.isArray(item.pFrom) &&
+          item.pFrom.length === pDim &&
+          Array.isArray(item.pTo) &&
+          item.pTo.length === pDim &&
+          Array.isArray(item.cmdVec) &&
+          item.cmdVec.length === this.actDim
+        ) {
           this.poseTransitionMemory.set(`${item.fromKey}->${item.toKey}`, {
             fromKey: item.fromKey,
             toKey: item.toKey,
-            pFrom: Float64Array.from(item.pFrom || [0, 0, 0, 0, 0, 0]),
-            pTo: Float64Array.from(item.pTo || [0, 0, 0, 0, 0, 0]),
+            pFrom: Float64Array.from(item.pFrom),
+            pTo: Float64Array.from(item.pTo),
+            pTarget: Array.isArray(item.pTarget) && item.pTarget.length === pDim
+              ? Float64Array.from(item.pTarget)
+              : Float64Array.from(item.pTo),
             cmdVec: Float64Array.from(item.cmdVec),
-            matchPct: Number(item.matchPct) || 100,
+            matchPct: Number(item.matchPct) || 90,
             goalPct: Number(item.goalPct) || 50,
             maxComY: Number(item.maxComY) || 0.18
           });
@@ -495,83 +530,109 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Quantizes a single normalized coordinate v in [-1, +1] to a coarse grid with step 0.25
-   * ({-1.0, -0.75, -0.5, -0.25, 0.0, +0.25, +0.5, +0.75, +1.0}) so memory never bloats with micro-jitter noise.
+   * Quantizes a single normalized coordinate v in [-1, +1] to a fine grid with step 0.02
+   * so single-gene ±5% mutations land in distinct keys while micro-jitter (< 0.01) is deduplicated.
    */
   _quantizePoseCoord(v) {
     const clamped = Math.max(-1.0, Math.min(1.0, Number(v) || 0));
-    const q = Math.round(clamped * 4) / 4;
+    const q = Math.round(clamped * 50) / 50;
     return Object.is(q, -0) ? 0 : q;
   }
 
   /**
-   * Clamps a 6D pose vector to [-1, +1]^6 without coarse grid rounding so 5% single-gene mutations are preserved.
+   * Clamps an 18D pose vector to [-1, +1]^18 (and keeps torso orientation axes [upY, pitchY, rollY] inside the unit sphere).
    */
   _clampPose6D(poseVec) {
-    const out = new Float64Array(6);
-    for (let i = 0; i < 6; i++) {
-      const v = Number.isFinite(poseVec ? poseVec[i] : 0) ? poseVec[i] : 0;
+    const dim = this.poseDim || 18;
+    const out = new Float64Array(dim);
+    for (let i = 0; i < dim; i++) {
+      const v = Number.isFinite(poseVec && i < poseVec.length ? poseVec[i] : 0) ? poseVec[i] : 0;
       out[i] = Math.max(-1.0, Math.min(1.0, Number(v.toFixed(4))));
     }
-    return out;
-  }
-
-  /**
-   * Quantizes a 6D pose vector to the 0.25 grid (used ONLY for memory cell keys / deduplication).
-   */
-  quantizePose6D(poseVec) {
-    const out = new Float64Array(6);
-    for (let i = 0; i < 6; i++) {
-      out[i] = this._quantizePoseCoord(poseVec ? poseVec[i] : 0);
+    const orientSq = out[1] * out[1] + out[2] * out[2] + out[3] * out[3];
+    if (orientSq > 1.0001) {
+      const invNorm = 1.0 / Math.sqrt(orientSq);
+      out[1] = Number((out[1] * invNorm).toFixed(4));
+      out[2] = Number((out[2] * invNorm).toFixed(4));
+      out[3] = Number((out[3] * invNorm).toFixed(4));
     }
     return out;
   }
 
   /**
-   * Extracts the continuous 6-dimensional Pose Vector P in [-1, +1]^6 from the Duck's sensors:
-   *   [0] comY_norm : normalized Center of Mass height (0.12 m -> -1.0, 0.20 m -> 0.0, 0.28 m -> +1.0)
-   *   [1] upY       : torso vertical projection (+1 = upright, -1 = inverted)
-   *   [2] pitchY    : sagittal tilt (+1 = on back/nose up, -1 = on belly/nose down)
-   *   [3] rollY     : lateral tilt (+1 = right side down, -1 = left side down)
-   *   [4] legExtL   : left leg extension (-1 = tucked, +1 = extended)
-   *   [5] legExtR   : right leg extension (-1 = tucked, +1 = extended)
+   * Quantizes an 18D pose vector to the 0.02 grid (used ONLY for memory deduplication keys).
    */
-  extractDuckPose6D(obs, comY = 0.15) {
-    const comNorm = (comY - 0.20) / 0.08;
-    const upY = obs && obs.length > 6 ? obs[6] : 0.0;
-    const pitchY = obs && obs.length > 7 ? obs[7] : 0.0;
-    const rollY = obs && obs.length > 8 ? obs[8] : 0.0;
-    const legExtL = obs && obs.length > 22 ? obs[22] * 2.4 : 0.0;
-    const legExtR = obs && obs.length > 32 ? obs[32] * 2.4 : 0.0;
-    return this._clampPose6D([comNorm, upY, pitchY, rollY, legExtL, legExtR]);
+  quantizePose6D(poseVec) {
+    const dim = this.poseDim || 18;
+    const out = new Float64Array(dim);
+    for (let i = 0; i < dim; i++) {
+      out[i] = this._quantizePoseCoord(poseVec && i < poseVec.length ? poseVec[i] : 0);
+    }
+    return out;
   }
 
   /**
-   * Returns the canonical cell key string for a quantized 6D pose vector (for O(1) memory deduplication).
+   * Extracts the full 18-dimensional Pose Vector P in [-1, +1]^18 (Option B: Torso Orientation + All 14 Physical Joint Angles):
+   *   [0] comY_norm     : normalized Center of Mass height (0.12 m -> -1.0, 0.20 m -> 0.0, 0.28 m -> +1.0)
+   *   [1] upY           : torso vertical projection (+1 = upright, -1 = inverted)
+   *   [2] pitchY        : sagittal tilt (+1 = on back/nose up, -1 = on belly/nose down)
+   *   [3] rollY         : lateral tilt (+1 = right side down, -1 = left side down)
+   *   [4..8]  Left Leg  : L_hip_yaw, L_hip_roll, L_hip_pitch, L_knee_pitch, L_ankle_pitch
+   *   [9..13] Right Leg : R_hip_yaw, R_hip_roll, R_hip_pitch, R_knee_pitch, R_ankle_pitch
+   *   [14..17] Neck/Head: neck_pitch, head_pitch, head_yaw, head_roll
+   */
+  extractDuckPose6D(obs, comY = 0.15) {
+    const raw = new Float64Array(18);
+    raw[0] = (comY - 0.20) / 0.08;
+    raw[1] = obs && obs.length > 6 ? obs[6] : 0.0;
+    raw[2] = obs && obs.length > 7 ? obs[7] : 0.0;
+    raw[3] = obs && obs.length > 8 ? obs[8] : 0.0;
+    for (let j = 0; j < 14; j++) {
+      const obsIdx = 16 + j * 2;
+      raw[4 + j] = obs && obs.length > obsIdx ? obs[obsIdx] : 0.0;
+    }
+    return this._clampPose6D(raw);
+  }
+
+  /**
+   * Returns the canonical key string for an 18D pose vector (at 0.02 resolution).
    */
   getPoseKey6D(poseVec) {
     const q = this.quantizePose6D(poseVec);
-    return `${q[0].toFixed(2)}|${q[1].toFixed(2)}|${q[2].toFixed(2)}|${q[3].toFixed(2)}|${q[4].toFixed(2)}|${q[5].toFixed(2)}`;
+    let key = '';
+    for (let i = 0; i < q.length; i++) {
+      if (i > 0) key += '|';
+      key += q[i].toFixed(2);
+    }
+    return key;
   }
 
   /**
-   * Weighted Euclidean distance D(P_A, P_B) in [0, 2] between two 6D pose vectors.
-   * Weights prioritize Center of Mass height (comY) and torso uprightness (upY).
+   * Weighted Euclidean distance D(P_A, P_B) in [0, 2] between two 18D pose vectors.
+   * 50% weight (8.0) on torso posture [comY, upY, pitchY, rollY], 50% weight (8.0) on all 14 physical joints.
    */
   computePoseDistance6D(pA, pB) {
     if (!pA || !pB) return 2.0;
-    const weights = [2.2, 2.0, 1.2, 1.2, 0.7, 0.7]; // sum = 8.0
+    const weights = [
+      2.5, 2.5, 1.5, 1.5,                // [0..3] Torso: comY, upY, pitchY, rollY (sum = 8.0)
+      0.40, 0.55, 0.85, 0.85, 0.55,      // [4..8] Left leg: yaw, roll, pitch, knee, ankle (sum = 3.20)
+      0.40, 0.55, 0.85, 0.85, 0.55,      // [9..13] Right leg: yaw, roll, pitch, knee, ankle (sum = 3.20)
+      0.40, 0.40, 0.40, 0.40             // [14..17] Neck & head: neck_pitch, head_pitch, head_yaw, head_roll (sum = 1.60)
+    ];
     let sumSq = 0;
-    for (let i = 0; i < 6; i++) {
+    let wSum = 0;
+    const len = Math.min(weights.length, Math.max(pA.length, pB.length));
+    for (let i = 0; i < len; i++) {
       const diff = (pA[i] || 0) - (pB[i] || 0);
-      sumSq += weights[i] * diff * diff;
+      const w = weights[i] || 0.4;
+      sumSq += w * diff * diff;
+      wSum += w;
     }
-    return Math.sqrt(sumSq / 8.0);
+    return Math.sqrt(sumSq / Math.max(1.0, wSum));
   }
 
   /**
    * Weighted Euclidean distance across the 4 torso coordinates [comY, upY, pitchY, rollY] (indices 0..3).
-   * Used to distinguish real torso posture transitions from mere leg waving in the air.
    */
   computeTorsoDistance4D(pA, pB) {
     if (!pA || !pB) return 2.0;
@@ -585,7 +646,7 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Computes percentage similarity (0..100%) between an achieved pose and a target pose.
+   * Computes percentage similarity (0..100%) between an achieved 18D pose and a target 18D pose.
    */
   computePoseMatchPct6D(pActual, pTarget) {
     const dist = this.computePoseDistance6D(pActual, pTarget);
@@ -597,18 +658,13 @@ export class ActorCriticBrain {
    */
   getDuckPoseGoalInfo(goalKey = this.poseGoalKey) {
     const presets = this.poseGoalPresets || {};
-    return presets[goalKey] || presets.stand || {
-      key: 'stand',
-      labelRu: 'СТОЯТЬ',
-      labelShortRu: 'Стоять',
-      vec: [1.0, 1.0, 0.0, 0.0, 0.50, 0.50]
-    };
+    return presets[goalKey] || presets.stand;
   }
 
   /**
    * Switches the Duck's target pose ('stand' | 'sit' | 'lie_back' | 'lie_belly').
-   * Preserves all discovered transitions in poseTransitionMemory while resetting unreachable mutant flags
-   * and re-anchoring GA #1 around the current pose toward the new goal.
+   * Preserves all discovered transitions in poseTransitionMemory (since body knowledge is goal-independent!)
+   * while resetting unreachable mutant flags and re-anchoring GA #1 around the current pose toward the new goal.
    */
   setDuckPoseGoal(goalKey, currentPose6D = null) {
     const info = this.getDuckPoseGoalInfo(goalKey);
@@ -654,8 +710,8 @@ export class ActorCriticBrain {
     const rollY = tf.right.y;
     const bottomY = creature.torsoBottom ? creature.torsoBottom.pos.y : comY - 0.08;
     const topY = creature.torsoTop ? creature.torsoTop.pos.y : comY + 0.08;
-    const pose6D = this.extractDuckPose6D(obs || creature.getObservation(), comY);
-    const goalMatchPct = this.computePoseMatchPct6D(pose6D, this.poseGoal);
+    const pose18D = this.extractDuckPose6D(obs || creature.getObservation(), comY);
+    const goalMatchPct = this.computePoseMatchPct6D(pose18D, this.poseGoal);
 
     switch (this.poseGoalKey) {
       case 'sit':
@@ -663,8 +719,8 @@ export class ActorCriticBrain {
           upY >= 0.65 &&
           bottomY <= 0.135 &&
           comY <= 0.215 &&
-          pose6D[4] <= -0.20 &&
-          pose6D[5] <= -0.20 &&
+          pose18D[7] <= -0.20 &&
+          pose18D[12] <= -0.20 &&
           goalMatchPct >= 60
         );
       case 'lie_back':
@@ -718,25 +774,29 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Mutates a 6D pose vector by changing ONE coordinate by [-5%, +5%] of its value (without coarse 0.25 rounding).
+   * Mutates an 18D pose vector by changing ONE coordinate by [-5%, +5%] of its value
+   * (while keeping torso orientation [upY, pitchY, rollY] inside the unit sphere).
    */
   _mutatePose6D(basePose, goalPose, stepBias = 0.5) {
-    return this._mutateSingleGene5Pct(basePose, 6, goalPose, stepBias);
+    const dim = this.poseDim || 18;
+    const mutated = this._mutateSingleGene5Pct(basePose, dim, goalPose, stepBias);
+    return this._clampPose6D(mutated);
   }
 
   /**
-   * Crosses over two 6D continuous poses (without coarse 0.25 rounding).
+   * Crosses over two 18D continuous poses (without coarse 0.25 rounding).
    */
   _crossoverPose6D(poseA, poseB) {
-    const child = new Float64Array(6);
-    for (let i = 0; i < 6; i++) {
-      const a = Number(poseA[i]) || 0;
-      const b = Number(poseB[i]) || 0;
+    const dim = this.poseDim || 18;
+    const child = new Float64Array(dim);
+    for (let i = 0; i < dim; i++) {
+      const a = Number(poseA && i < poseA.length ? poseA[i] : 0) || 0;
+      const b = Number(poseB && i < poseB.length ? poseB[i] : 0) || 0;
       const blend = 0.5 * (a + b);
       const val = Math.random() < 0.5 ? blend : (Math.random() < 0.5 ? a : b);
       child[i] = Math.max(-1.0, Math.min(1.0, Number(val.toFixed(4))));
     }
-    return child;
+    return this._clampPose6D(child);
   }
 
   /**
@@ -824,46 +884,65 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Records a verified transition (pFrom -> pTo via cmdVec) in the deduplicated cell memory.
-   * Uses quantized keys only for memory deduplication so close poses do not bloat memory.
+   * Records a verified transition (pFrom -> pTo via cmdVec, with actual transition successPct to pTarget)
+   * into poseTransitionMemory. Goal-independent: eviction and updates depend on transition successPct, NOT goalPct!
    */
-  rememberPoseTransition(pFrom, pTo, cmdVec, maxComY = 0.20) {
+  rememberPoseTransition(pFrom, pTo, cmdVec, maxComY = 0.20, pTarget = null, successPct = null) {
     if (!pFrom || !pTo || !cmdVec || cmdVec.length !== this.actDim) return false;
     const cFrom = this._clampPose6D(pFrom);
     const cTo = this._clampPose6D(pTo);
+    const cTarget = pTarget ? this._clampPose6D(pTarget) : cTo;
     const fromKey = this.getPoseKey6D(cFrom);
     const toKey = this.getPoseKey6D(cTo);
     const shiftDist = this.computePoseDistance6D(cFrom, cTo);
-    const torsoShiftDist = this.computeTorsoDistance4D(cFrom, cTo);
-    if (shiftDist < 0.02 || torsoShiftDist < 0.015) {
-      return false; // Ignore zero-movement or leg-only micro-jitter
+    if (shiftDist < 0.008) {
+      return false; // Ignore zero-movement micro-jitter
     }
 
     if (!this.poseTransitionMemory) this.poseTransitionMemory = new Map();
-    const transKey = `${fromKey}->${toKey}`;
+    const actualSuccessPct = Number.isFinite(successPct)
+      ? Math.max(0, Math.min(100, successPct))
+      : this.computePoseMatchPct6D(cTo, cTarget);
     const goalPct = this.computePoseMatchPct6D(cTo, this.poseGoal);
-    const existing = this.poseTransitionMemory.get(transKey);
 
-    if (!existing || maxComY >= existing.maxComY - 0.005 || goalPct >= existing.goalPct) {
-      this.poseTransitionMemory.set(transKey, {
+    // Check if a very close transition (pFrom ~ cFrom, pTo ~ cTo) already exists in memory
+    let matchedKey = `${fromKey}->${toKey}`;
+    let existing = this.poseTransitionMemory.get(matchedKey);
+    if (!existing) {
+      for (const [k, item] of this.poseTransitionMemory.entries()) {
+        if (
+          this.computePoseDistance6D(item.pFrom, cFrom) < 0.018 &&
+          this.computePoseDistance6D(item.pTo, cTo) < 0.018
+        ) {
+          matchedKey = k;
+          existing = item;
+          break;
+        }
+      }
+    }
+
+    if (!existing || actualSuccessPct >= existing.matchPct - 0.5 || maxComY >= existing.maxComY) {
+      this.poseTransitionMemory.set(matchedKey, {
         fromKey,
         toKey,
         pFrom: cFrom,
         pTo: cTo,
+        pTarget: cTarget,
         cmdVec: Float64Array.from(cmdVec),
-        matchPct: 100,
+        matchPct: Number(actualSuccessPct.toFixed(1)),
         goalPct: Number(goalPct.toFixed(1)),
         maxComY: Number(maxComY.toFixed(3))
       });
     }
 
-    // Cap transition memory at 80 unique cell-to-cell transitions (evict lowest goalPct if full)
+    // Cap transition memory at 80 entries (evict lowest transition success matchPct — goal-independent!)
     if (this.poseTransitionMemory.size > 80) {
       let worstKey = null;
       let worstScore = Infinity;
       for (const [k, val] of this.poseTransitionMemory.entries()) {
-        if (val.goalPct < worstScore) {
-          worstScore = val.goalPct;
+        const score = Number.isFinite(val.matchPct) ? val.matchPct : 0;
+        if (score < worstScore) {
+          worstScore = score;
           worstKey = k;
         }
       }
@@ -873,13 +952,14 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Initializes GA #1 (2-Pose Melody Population) anchored at the Duck's current continuous pose P_current.
+   * Initializes GA #1 (2-Pose Melody Population) anchored at the Duck's current continuous 18D pose P_current.
    * Each candidate is a 2-beat phrase [P_1, P_2]:
    *   - Note 1 (P_1): preparatory pose (free single-gene ±5% mutation without requiring closeness to P_goal).
    *   - Note 2 (P_2): exit pose toward P_goal.
    */
   _initPoseGAPopulation(basePose = null) {
-    const startPose = this._clampPose6D(basePose || this.poseCurrent || [-0.75, -0.25, 0.50, 0.0, 0.0, 0.0]);
+    const defaultStart = [-0.75, -0.25, 0.50, 0.0,  0, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 0];
+    const startPose = this._clampPose6D(basePose || this.poseCurrent || defaultStart);
     this.poseCurrent = startPose;
     const fromKey = this.getPoseKey6D(startPose);
     const startGoalPct = this.computePoseMatchPct6D(startPose, this.poseGoal);
@@ -936,7 +1016,10 @@ export class ActorCriticBrain {
         fitness: null,
         reachable: null,
         matchPct: 0,
-        bestServoVec: null
+        bestServoVec: null,
+        bestFromPose: null,
+        bestToPose: null,
+        bestMaxComY: 0
       });
     }
 
@@ -945,7 +1028,8 @@ export class ActorCriticBrain {
 
   /**
    * Initializes GA #2 (Personal Servo Command Vector GA) for the active note (Note 1 or Note 2) of the current Melody in GA #1.
-   * Uses elitism + single-gene ±5% mutations ('мутация') + crossover ('кроссовер') so 5% steps accumulate smoothly.
+   * If a matching transition (pFrom ~ curPose -> pTo ~ targetMutant.pose) is already in poseTransitionMemory,
+   * takes the remembered command vector directly (1-candidate direct execution) without full GA #2 search!
    */
   _initServoGAForCurrentPoseMutant() {
     if (!this.posePop || this.posePop.length === 0) {
@@ -959,7 +1043,8 @@ export class ActorCriticBrain {
       targetMutant.pose = targetMutant.notes[activeNoteIdx];
       targetMutant.poseKey = this.getPoseKey6D(targetMutant.pose);
     }
-    const curPose = this.poseCurrent || Float64Array.from([-0.75, -0.25, 0.50, 0.0, 0.0, 0.0]);
+    const defaultStart = [-0.75, -0.25, 0.50, 0.0,  0, 0, 0, 0, 0,  0, 0, 0, 0, 0,  0, 0, 0, 0];
+    const curPose = this.poseCurrent || Float64Array.from(defaultStart);
 
     this.gaPopSize = 4;
     this.gaCursor = 0;
@@ -967,35 +1052,41 @@ export class ActorCriticBrain {
 
     const curMutantMatch = this.computePoseMatchPct6D(curPose, targetMutant.pose);
     const curGoalMatch = this.computePoseMatchPct6D(curPose, this.poseGoal);
-    const recentKeys = this._recentPoseKeys || [];
     const matchingMemories = [];
+    let directMemoryHit = null;
+
     if (this.poseTransitionMemory && this.poseTransitionMemory.size > 0) {
       for (const item of this.poseTransitionMemory.values()) {
-        if (
-          (this._prevPoseKey && item.toKey === this._prevPoseKey) ||
-          recentKeys.includes(item.toKey)
-        ) {
-          continue;
-        }
-        const fromDist = this.computePoseDistance6D(item.pFrom, curPose);
+        const fromMatch = this.computePoseMatchPct6D(item.pFrom, curPose);
         const shiftFromCur = this.computePoseDistance6D(item.pTo, curPose);
-        if (fromDist <= 0.45 && shiftFromCur >= 0.02) {
+        if (fromMatch >= 78.0 && shiftFromCur >= 0.008) {
           const toMutantMatch = this.computePoseMatchPct6D(item.pTo, targetMutant.pose);
-          const toGoalMatch = this.computePoseMatchPct6D(item.pTo, this.poseGoal);
-          // On Note 1 (activeNoteIdx === 0), allow any transition that approaches Note 1 even if goalMatch temporarily dips!
-          const approachesMutant = activeNoteIdx === 0
-            ? (toMutantMatch >= curMutantMatch + 0.3)
-            : (toMutantMatch >= curMutantMatch + 0.5 && toGoalMatch >= curGoalMatch - 2.0);
-          const approachesGoal = activeNoteIdx === 1 && toGoalMatch >= curGoalMatch + 0.5 && toMutantMatch >= curMutantMatch - 2.0;
-          if (approachesMutant || approachesGoal) {
-            const score = activeNoteIdx === 0
-              ? (0.90 * toMutantMatch + 0.10 * toGoalMatch - 18.0 * fromDist)
-              : (0.55 * toMutantMatch + 0.45 * toGoalMatch - 18.0 * fromDist);
+          const targetMutantMatch = item.pTarget
+            ? this.computePoseMatchPct6D(item.pTarget, targetMutant.pose)
+            : toMutantMatch;
+          const bestMatchToNote = Math.max(toMutantMatch, targetMutantMatch);
+
+          // Direct memory hit: if we already know how to transition from ~curPose to ~targetMutant.pose
+          if (fromMatch >= 93.0 && bestMatchToNote >= 93.0 && (item.matchPct || 0) >= 75.0) {
+            if (!directMemoryHit || bestMatchToNote > directMemoryHit.score) {
+              directMemoryHit = { item, score: bestMatchToNote };
+            }
+          }
+
+          if (toMutantMatch >= curMutantMatch + 0.15) {
+            const score = 0.70 * toMutantMatch + 0.30 * fromMatch;
             matchingMemories.push({ item, score });
           }
         }
       }
       matchingMemories.sort((a, b) => b.score - a.score);
+    }
+
+    // Phrase #117: "Если для перехода есть вариант в памяти, то мы его просто берем без работы второго ГА"
+    if (directMemoryHit) {
+      this.gaPopSize = 1;
+      this.gaPopulation.push(this._makeGACandidate(directMemoryHit.item.cmdVec, 'память (прямой переход)'));
+      return;
     }
 
     const holdVecForGoal = this.poseGoalHoldVectors && this.poseGoalHoldVectors[this.poseGoalKey];
@@ -1266,11 +1357,11 @@ export class ActorCriticBrain {
 
       const poseShiftDist = this.computePoseDistance6D(pStart, pAfter);
       const torsoShiftDist = this.computeTorsoDistance4D(pStart, pAfter);
-      // A physical pose transition requires torso shift >= 0.015 and 6D shift >= 0.02
-      // (matching the scale of single-gene ±5% mutations while ignoring pure leg-waving)
-      const poseChanged =
-        poseShiftDist >= 0.02 &&
-        torsoShiftDist >= 0.015;
+      // On Note 1 (preparatory note), any real 18D limb/torso shift (>= 0.008) is valid;
+      // on Note 2 (exit note toward goal), require torso posture shift >= 0.010 as well.
+      const poseChanged = activeNoteIdx === 0
+        ? (poseShiftDist >= 0.008)
+        : (poseShiftDist >= 0.008 && torsoShiftDist >= 0.010);
 
       const rawMatchPct = this.computePoseMatchPct6D(pAfter, targetMutant.pose);
       const startMutantDist = this.computePoseDistance6D(pStart, targetMutant.pose);
@@ -1278,10 +1369,10 @@ export class ActorCriticBrain {
       const startTorsoMutantDist = this.computeTorsoDistance4D(pStart, targetMutant.pose);
       const afterTorsoMutantDist = this.computeTorsoDistance4D(pAfter, targetMutant.pose);
       const didApproachMutant =
-        torsoShiftDist >= 0.015 &&
-        (afterMutantDist < startMutantDist - 0.002 || afterTorsoMutantDist < startTorsoMutantDist - 0.002);
+        poseChanged &&
+        (afterMutantDist < startMutantDist - 0.001 || afterTorsoMutantDist < startTorsoMutantDist - 0.001);
       // Require actual physical approach toward targetMutant (D(P_after, P_mutant) < D(P_start, P_mutant))
-      // so standing still near a mutant never falsely scores >= 68% reachable!
+      // so standing still near a mutant never falsely scores reachable!
       const matchPct = didApproachMutant ? rawMatchPct : Math.min(rawMatchPct, 52.0);
       const startGoalPct = this.computePoseMatchPct6D(pStart, this.poseGoal);
       const goalPct = this.computePoseMatchPct6D(pAfter, this.poseGoal);
@@ -1319,6 +1410,9 @@ export class ActorCriticBrain {
       if (matchPct > (targetMutant.matchPct || 0)) {
         targetMutant.matchPct = matchPct;
         targetMutant.bestServoVec = Float64Array.from(cand.vec);
+        targetMutant.bestFromPose = this._clampPose6D(pStart);
+        targetMutant.bestToPose = this._clampPose6D(pAfter);
+        targetMutant.bestMaxComY = maxComY;
       }
 
       if (fitness > this.gaBestFitness) {
@@ -1340,19 +1434,22 @@ export class ActorCriticBrain {
         this.duckRightingBestProgress = normProgress;
       }
 
-      // If the Duck's physical pose actually shifted:
-      // 1. Save transition (pStart -> pAfter, cand.vec) into deduplicated memory
       if (poseChanged) {
-        this.rememberPoseTransition(pStart, pAfter, cand.vec, maxComY);
-        const startKey = this.getPoseKey6D(pStart);
-        this._prevPoseKey = startKey;
-        if (!Array.isArray(this._recentPoseKeys)) this._recentPoseKeys = [];
-        if (!this._recentPoseKeys.includes(startKey)) {
-          this._recentPoseKeys.push(startKey);
-          if (this._recentPoseKeys.length > 3) this._recentPoseKeys.shift();
-        }
         this.poseCurrent = this._clampPose6D(pAfter);
       }
+
+      const saveBestTransitionForActiveNote = () => {
+        if (targetMutant.bestServoVec && targetMutant.bestFromPose && targetMutant.bestToPose) {
+          this.rememberPoseTransition(
+            targetMutant.bestFromPose,
+            targetMutant.bestToPose,
+            targetMutant.bestServoVec,
+            targetMutant.bestMaxComY || maxComY,
+            targetMutant.pose,
+            targetMutant.matchPct || matchPct
+          );
+        }
+      };
 
       this.lastRightingWaveMetrics = {
         poseGoalKey: this.poseGoalKey,
@@ -1418,14 +1515,18 @@ export class ActorCriticBrain {
       };
 
       // Two-Beat Melody Execution Rule:
-      // - Beat 1 (activeNoteIdx === 0): as soon as the Duck's torso shifts toward Note 1 (P_1),
-      //   advance this melody to Beat 2 (Note 2 = P_2) from pAfter without requiring Note 1 to be closer to P_goal!
+      // - Beat 1 (activeNoteIdx === 0): as soon as the Duck's 18D pose shifts toward Note 1 (P_1),
+      //   save the best command vector in memory and advance this melody to Beat 2 (Note 2 = P_2)!
       if (activeNoteIdx === 0 && poseChanged && (didApproachMutant || matchPct >= 66.0)) {
+        saveBestTransitionForActiveNote();
         targetMutant.note1ReachedPose = this._clampPose6D(pAfter);
         targetMutant.noteIndex = 1;
         targetMutant.pose = targetMutant.notes[1];
         targetMutant.poseKey = this.getPoseKey6D(targetMutant.notes[1]);
         targetMutant.matchPct = 0;
+        targetMutant.bestServoVec = null;
+        targetMutant.bestFromPose = null;
+        targetMutant.bestToPose = null;
         this.gaGeneration += 1;
         this._initServoGAForCurrentPoseMutant();
         this._resetRightingWindow(endComY, 0);
@@ -1433,12 +1534,13 @@ export class ActorCriticBrain {
       }
 
       // - Beat 2 (activeNoteIdx === 1): if the second beat constructively approaches P_2 or improves goalPct
-      //   over the start of the melody, evaluate the full 2-note phrase and re-anchor GA #1 at pAfter!
+      //   over the start of the melody, save the best transition in memory, evaluate the 2-note phrase, and re-anchor GA #1 at pAfter!
       const isConstructiveSecondBeat =
         activeNoteIdx === 1 &&
         poseChanged &&
         (matchPct >= 66.0 || goalPct >= melodyStartGoalPct + 0.3 || goalPct >= startGoalPct + 0.3);
       if (isConstructiveSecondBeat) {
+        saveBestTransitionForActiveNote();
         targetMutant.reachable = true;
         recordMelodyFitness(goalPct, Math.max(68.0, matchPct));
         this.poseGen += 1;
@@ -1453,17 +1555,21 @@ export class ActorCriticBrain {
       if (this.gaCursor >= this.gaPopulation.length) {
         this.gaGeneration += 1;
         const bestMatch = targetMutant.matchPct || 0;
-        const fromKey = this.getPoseKey6D(this.poseCurrent || pStart);
+        const fromKey = this.getPoseKey6D(targetMutant.bestFromPose || this.poseCurrent || pStart);
 
         if (activeNoteIdx === 0) {
           // Finished all GA #2 attempts on Note 1 (P_1):
-          // If Note 1 was reachable (bestMatch >= 60% or torso shifted), move to Note 2 (P_2)!
+          // If Note 1 was reachable (bestMatch >= 60% or pose shifted), save best transition in memory and move to Note 2 (P_2)!
           if (bestMatch >= 60.0 || poseChanged) {
+            saveBestTransitionForActiveNote();
             targetMutant.note1ReachedPose = this._clampPose6D(pAfter);
             targetMutant.noteIndex = 1;
             targetMutant.pose = targetMutant.notes[1];
             targetMutant.poseKey = this.getPoseKey6D(targetMutant.notes[1]);
             targetMutant.matchPct = 0;
+            targetMutant.bestServoVec = null;
+            targetMutant.bestFromPose = null;
+            targetMutant.bestToPose = null;
             this._initServoGAForCurrentPoseMutant();
             this._resetRightingWindow(endComY, 0);
             return this.getRightingSkillPct();
@@ -1489,6 +1595,7 @@ export class ActorCriticBrain {
               this.poseUnreachableMemory.delete(firstKey);
             }
           } else {
+            saveBestTransitionForActiveNote();
             targetMutant.reachable = true;
             recordMelodyFitness(goalPct, Math.max(60.0, bestMatch));
           }

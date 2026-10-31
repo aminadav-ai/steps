@@ -183,9 +183,13 @@ export class CreatureInstance {
     ];
 
     const dofList = this.logicalDoFs;
+    const duckJoints14 = typeof this.getDuckJointAngles14D === 'function' ? this.getDuckJointAngles14D(up, forward, right) : null;
     for (let i = 0; i < dofList.length; i++) {
       const primaryMuscle = dofList[i].primary;
-      obs.push(Math.max(-1, Math.min(1, primaryMuscle.currentAngleNorm)));
+      const angleNorm = duckJoints14 && i < duckJoints14.length
+        ? duckJoints14[i]
+        : primaryMuscle.currentAngleNorm;
+      obs.push(Math.max(-1, Math.min(1, angleNorm)));
       obs.push(Math.max(-1, Math.min(1, primaryMuscle.angularVelNorm)));
     }
 
@@ -1663,6 +1667,78 @@ function buildDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) 
   creature.webbedFeet = webbedFeet;
   creature.headNode = headNode;
   creature.isDuck = true;
+
+  /**
+   * Computes the actual physical 14-DoF joint angles in [-1, +1]^14 from the 3D limb & head nodes
+   * projected into the Duck's torso coordinate frame (up, forward, right):
+   *   [0..4]  = Left Leg  (hip_yaw, hip_roll, hip_pitch, knee_pitch, ankle_pitch)
+   *   [5..9]  = Right Leg (hip_yaw, hip_roll, hip_pitch, knee_pitch, ankle_pitch)
+   *   [10..13]= Neck/Head (neck_pitch, head_pitch, head_yaw, head_roll)
+   */
+  creature.getDuckJointAngles14D = (upArg = null, fwdArg = null, rightArg = null) => {
+    const clamp1 = v => Math.max(-1.0, Math.min(1.0, Number.isFinite(v) ? v : 0.0));
+    const tf = (upArg && fwdArg && rightArg)
+      ? { up: upArg, forward: fwdArg, right: rightArg }
+      : creature.getTorsoFrame();
+    const { up, forward, right } = tf;
+    const out = new Float64Array(14);
+
+    for (let legIdx = 0; legIdx < 2; legIdx++) {
+      const base = legIdx * 5;
+      const hip = hips[legIdx];
+      const foot = feet[legIdx];
+      const wf = webbedFeet[legIdx];
+
+      const rx = foot.pos.x - hip.pos.x;
+      const ry = foot.pos.y - hip.pos.y;
+      const rz = foot.pos.z - hip.pos.z;
+
+      const footFwd = rx * forward.x + ry * forward.y + rz * forward.z;
+      const footUp = rx * up.x + ry * up.y + rz * up.z;
+      const footLat = rx * right.x + ry * right.y + rz * right.z;
+
+      let shoeUp = 0.0;
+      let shoeLat = 0.0;
+      if (wf && wf.toeInner && wf.toeOuter) {
+        const sx = wf.toeInner.pos.x - wf.toeOuter.pos.x;
+        const sy = wf.toeInner.pos.y - wf.toeOuter.pos.y;
+        const sz = wf.toeInner.pos.z - wf.toeOuter.pos.z;
+        shoeUp = sx * up.x + sy * up.y + sz * up.z;
+        shoeLat = sx * right.x + sy * right.y + sz * right.z;
+      }
+
+      const hipYawNorm = clamp1(shoeLat / 0.095);
+      const hipRollNorm = clamp1(footLat / 0.062);
+      const hipPitchNorm = clamp1((footFwd + 0.02) / 0.165);
+      // At rest footUp is -0.24; extended down (-0.345) -> +1.0; tucked up (-0.135) -> -1.0
+      const kneePitchNorm = clamp1((-0.24 - footUp) / 0.105);
+      const anklePitchNorm = clamp1(-shoeUp / 0.042);
+
+      out[base + 0] = hipYawNorm;
+      out[base + 1] = hipRollNorm;
+      out[base + 2] = hipPitchNorm;
+      out[base + 3] = kneePitchNorm;
+      out[base + 4] = anklePitchNorm;
+    }
+
+    // Neck & Head 4 DoFs (indices 10..13) from 3D headNode displacement relative to torsoTop
+    const hx = headNode.pos.x - torsoTop.pos.x;
+    const hy = headNode.pos.y - torsoTop.pos.y;
+    const hz = headNode.pos.z - torsoTop.pos.z;
+    const headFwd = (hx * forward.x + hy * forward.y + hz * forward.z) / L_neck;
+    const headUp = (hx * up.x + hy * up.y + hz * up.z) / L_neck;
+    const headLat = (hx * right.x + hy * right.y + hz * right.z) / L_neck;
+
+    const pitchDev = Math.atan2(headFwd, Math.max(0.05, headUp)) - baseNeckPitchRad;
+    const rollDev = Math.asin(Math.max(-1.0, Math.min(1.0, headLat)));
+
+    out[10] = clamp1(0.65 * (pitchDev / 0.50) + 0.35 * (neckPitchServo.targetAction || 0));
+    out[11] = clamp1(0.65 * (pitchDev / 0.50) + 0.35 * (headPitchServo.targetAction || 0));
+    out[12] = clamp1(0.65 * (rollDev / 0.42) + 0.35 * (headYawServo.targetAction || 0));
+    out[13] = clamp1(0.65 * (rollDev / 0.42) + 0.35 * (headRollServo.targetAction || 0));
+
+    return out;
+  };
 
   // Custom 14-DoF Action Dispatcher for Open_Duck_Mini (100% pure XPBD physics — zero artificial coordinate rotations!):
   // a[0..4]  = Left Leg  (hip_yaw, hip_roll, hip_pitch, knee_pitch, ankle_pitch)

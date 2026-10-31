@@ -439,9 +439,12 @@ const hasPoseEvolution =
 const bestGAFitness = duckSideSim.brain.gaBestFitness;
 const samplePose = Array.from(duckSideSim.brain.extractDuckPose6D(ds.getObservation(), ds.body.getCenterOfMass().y));
 const quantizedKeyPose = Array.from(duckSideSim.brain.quantizePose6D(samplePose));
-const isQuantizedOnGrid = quantizedKeyPose.length === 6 && quantizedKeyPose.every(v => Math.abs(Math.round(v * 4) / 4 - v) < 1e-6);
+const isQuantizedOnGrid =
+  samplePose.length === 18 &&
+  quantizedKeyPose.length === 18 &&
+  quantizedKeyPose.every(v => Math.abs(Math.round(v * 50) / 50 - v) < 1e-6);
 
-// Проверим точечную мутацию 1 числа в пределах [-5%, +5%] для вектора сервоприводов (14D) и вектора позы (6D):
+// Проверим точечную мутацию 1 числа в пределах [-5%, +5%] для вектора сервоприводов (14D) и вектора позы (18D):
 const testParent14 = new Float64Array([0.6, -0.5, 0.4, -0.3, 0.2, 0.5, -0.4, 0.3, -0.6, 0.2, 0.4, -0.4, 0.2, -0.2]);
 const testMut14 = duckSideSim.brain._mutateDuckVector(testParent14);
 const changedIndices14 = [];
@@ -454,14 +457,14 @@ const singleGeneOk14 =
     Math.max(0.05, Math.abs(testParent14[changedIndices14[0]])) * 0.0505;
 
 const hasTwoNoteMelodies =
-  duckSideSim.brain.posePop.every(m => Array.isArray(m.notes) && m.notes.length === 2 && m.notes[0].length === 6 && m.notes[1].length === 6) &&
+  duckSideSim.brain.posePop.every(m => Array.isArray(m.notes) && m.notes.length === 2 && m.notes[0].length === 18 && m.notes[1].length === 18) &&
   gaHist.some(h => h.noteIdx === 2);
 
 const transMemLen = duckSideSim.brain.poseTransitionMemory.size;
 console.log(
   `Двухуровневый ГА Утки (180 шагов = ${gaHist.length} векторов ГА2, пок. ГА1: ${duckSideSim.brain.poseGen}, пок. ГА2: ${duckSideSim.brain.gaGeneration}): ` +
   `maxComY=${maxDuckSideComY.toFixed(3)} м, bestFitness=${bestGAFitness.toFixed(3)}, ` +
-  `памятьПереходов=${transMemLen}, поза6D=${JSON.stringify(samplePose)}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`
+  `памятьПереходов=${transMemLen}, поза18D=${JSON.stringify(samplePose)}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`
 );
 if (
   maxDuckSideComY > 0.85 ||
