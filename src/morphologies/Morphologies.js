@@ -890,7 +890,7 @@ function attachOrthogonalLeg({
           );
           rawTargetPos = this._smoothTargetPos.clone();
         } else {
-          const alpha = 0.035 + 0.020 * duckOverturnBlend;
+          const alpha = 0.18 + 0.08 * duckOverturnBlend;
           this._smoothTargetPos.x += (rawTargetPos.x - this._smoothTargetPos.x) * alpha;
           this._smoothTargetPos.y += (rawTargetPos.y - this._smoothTargetPos.y) * alpha;
           this._smoothTargetPos.z += (rawTargetPos.z - this._smoothTargetPos.z) * alpha;
@@ -1729,7 +1729,7 @@ function buildDuckWalker({ id, origin = new Vec3(0, 0, 0), color = '#fbbf24' }) 
       restTorsoTop.y + L_neck * Math.cos(thetaPitch) * Math.cos(thetaRoll),
       restTorsoTop.z + L_neck * Math.sin(thetaRoll)
     );
-    const headAlpha = 0.040 + 0.020 * headOverturnBlend;
+    const headAlpha = 0.20 + 0.08 * headOverturnBlend;
     smoothHeadPos.x += headAlpha * (rawTargetHeadPos.x - smoothHeadPos.x);
     smoothHeadPos.y += headAlpha * (rawTargetHeadPos.y - smoothHeadPos.y);
     smoothHeadPos.z += headAlpha * (rawTargetHeadPos.z - smoothHeadPos.z);

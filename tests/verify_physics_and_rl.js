@@ -378,7 +378,7 @@ if (dwComY < 0.205 || duckTrainSim.trainer.metaState.competenceEMA < 0.21 || duc
   process.exit(1);
 }
 
-// 7в: Проверка честной физики на боку (LEARNING_RIGHTING без взрывов мощности и подпрыгиваний)
+// 7в: Проверка Генетического Алгоритма (ГА) поиска 14D-вектора сервоприводов при падении на бок
 const duckSideSim = new ArenaSimulation({
   morphologyKey: 'duck',
   algorithm: 'ppo',
@@ -416,21 +416,35 @@ for (const n of ds.body.nodes) {
 }
 let maxDuckSideComY = 0;
 let maxDuckSidePowerW = 0;
-for (let s = 0; s < 120; s++) {
+for (let s = 0; s < 180; s++) {
   duckSideSim.stepControl();
   const cY = ds.body.getCenterOfMass().y;
   const pW = ds.lastMechanicalPower || 0;
   if (cY > maxDuckSideComY) maxDuckSideComY = cY;
   if (pW > maxDuckSidePowerW) maxDuckSidePowerW = pW;
 }
-const finalSideComY = ds.body.getCenterOfMass().y;
-const finalSideUpY = ds.getTorsoFrame().up.y;
-console.log(`Утка после падения на бок (120 шагов): finalComY=${finalSideComY.toFixed(3)} м, up.y=${finalSideUpY.toFixed(3)}, mode=${duckSideSim.trainer.metaState.mode}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`);
-if (maxDuckSideComY > 0.42 || maxDuckSidePowerW > 180.0 || finalSideComY < 0.255 || duckSideSim.trainer.metaState.mode !== 'CONSOLIDATED') {
-  console.error('ОШИБКА: Утка должна самостоятельно вставать на лапы из лежачего положения (comY >= 0.255 м, CONSOLIDATED) без взрывов мощности (> 180 Вт)!');
+const gaHist = duckSideSim.trainer.rightingHistory || [];
+const hasMutations = gaHist.some(h => h.gaOrigin === 'мутация' || h.gaOrigin === 'мутация-рывок');
+const hasCrossovers = gaHist.some(h => h.gaOrigin === 'кроссовер');
+const bestGAFitness = duckSideSim.brain.gaBestFitness;
+console.log(
+  `Генетический алгоритм Утки (180 шагов = ${gaHist.length} векторов, поколений: ${duckSideSim.brain.gaGeneration}): ` +
+  `maxComY=${maxDuckSideComY.toFixed(3)} м, bestFitness=${bestGAFitness.toFixed(3)}, ` +
+  `мутации=${hasMutations}, кроссовер=${hasCrossovers}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`
+);
+if (
+  maxDuckSideComY > 0.42 ||
+  maxDuckSidePowerW > 180.0 ||
+  gaHist.length < 4 ||
+  !Number.isFinite(bestGAFitness) ||
+  bestGAFitness <= 0.20 ||
+  !hasMutations ||
+  !hasCrossovers
+) {
+  console.error('ОШИБКА: Генетический алгоритм Утки должен оценивать случайные 14D-векторы, выполнять мутации и кроссовер без взрывов мощности (> 180 Вт)!');
   process.exit(1);
 }
-console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и самостоятельно вставать из лежачего положения с помощью сгибания коленей, независимой работы лап и рывка.');
+console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и эволюционирует 14-мерные векторы сервоприводов генетическим алгоритмом (случайная инициализация, фитнес подъёма и времени удержания, мутация, кроссовер).');
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);

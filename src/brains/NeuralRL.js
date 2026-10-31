@@ -168,17 +168,18 @@ export class ActorCriticBrain {
     this.rightingHiddenDim = 16;
     this.rightingH1 = null;
     this.rightingOut = null;
-    this._duckRightingPerturbW = new Float64Array(obsDim * actDim);
-    this._duckRightingPerturbB = new Float64Array(actDim);
-    this._duckRightingPerturbOutW = new Float64Array(16 * actDim);
-    this._duckRightingLastH = new Float64Array(16);
-    this._duckRightingPerturbReady = false;
 
-    // Wave-envelope & trajectory eligibility-trace state for oscillatory self-righting
-    this._eligW = new Float64Array(obsDim * actDim);
-    this._eligOutW = new Float64Array(16 * actDim);
-    this._traceW = new Float64Array(obsDim * actDim);
-    this._traceOutW = new Float64Array(16 * actDim);
+    // Genetic Algorithm (GA) population over 14-dimensional servo vectors v in [-1, +1]^14 for the Duck:
+    // Each individual has { vec: Float64Array(actDim), steps: [Float64Array(actDim)], origin, fitness, maxComY, endComY, holdSec }
+    this.gaPopSize = 8;
+    this.gaGeneration = 1;
+    this.gaCursor = 0;
+    this.gaPopulation = [];
+    this.gaBestVector = null;
+    this.gaBestFitness = -Infinity;
+    this.gaBestOrigin = 'случайный';
+    this.gaArchive = [];
+
     this._waveBaseCrestUpY = null;
     this._waveBaseMeanUpY = null;
     this._waveBaseSpanUpY = 0;
@@ -187,6 +188,9 @@ export class ActorCriticBrain {
     this._waveBaseSpanTopY = 0;
     this._waveStagnantCount = 0;
     this._resetRightingWindow(0, 0.18);
+    if (this.morphologyKey === 'duck') {
+      this._initDuckGAPopulation();
+    }
 
     this.adamStepCount = 0;
     this.maxSkipRowNorm = 1.80;
@@ -224,6 +228,18 @@ export class ActorCriticBrain {
       rightingAttempts: this.rightingAttempts,
       rightingSuccesses: this.rightingSuccesses,
       rightingPhase: this.rightingPhase,
+      gaGeneration: this.gaGeneration,
+      gaCursor: this.gaCursor,
+      gaBestVector: this.gaBestVector ? Array.from(this.gaBestVector) : null,
+      gaBestFitness: Number.isFinite(this.gaBestFitness) ? this.gaBestFitness : null,
+      gaBestOrigin: this.gaBestOrigin,
+      gaArchive: Array.isArray(this.gaArchive)
+        ? this.gaArchive.map(item => ({
+            vec: Array.from(item.vec),
+            fitness: item.fitness,
+            maxComY: item.maxComY
+          }))
+        : [],
       adamStepCount: this.adamStepCount,
       maxSkipRowNorm: this.maxSkipRowNorm
     };
@@ -239,11 +255,6 @@ export class ActorCriticBrain {
     this.criticL2.fromJSON(data.criticL2);
     this.criticOut.fromJSON(data.criticOut);
     this.rightingLayer.fromJSON(data.rightingLayer);
-    if (data.rightingH1 && data.rightingOut) {
-      this._ensureDuckRightingLayers();
-      this.rightingH1.fromJSON(data.rightingH1);
-      this.rightingOut.fromJSON(data.rightingOut);
-    }
     if (Array.isArray(data.cpgTemplate) && this.cpgTemplate && data.cpgTemplate.length === this.cpgTemplate.length) {
       this.cpgTemplate.set(data.cpgTemplate);
     }
@@ -257,6 +268,28 @@ export class ActorCriticBrain {
     if (typeof data.rightingAttempts === 'number') this.rightingAttempts = data.rightingAttempts;
     if (typeof data.rightingSuccesses === 'number') this.rightingSuccesses = data.rightingSuccesses;
     if (typeof data.rightingPhase === 'number') this.rightingPhase = data.rightingPhase;
+    if (typeof data.gaGeneration === 'number') this.gaGeneration = data.gaGeneration;
+    if (Array.isArray(data.gaBestVector) && data.gaBestVector.length === this.actDim) {
+      this.gaBestVector = Float64Array.from(data.gaBestVector);
+    }
+    if (typeof data.gaBestFitness === 'number' && Number.isFinite(data.gaBestFitness)) {
+      this.gaBestFitness = data.gaBestFitness;
+    }
+    if (typeof data.gaBestOrigin === 'string') {
+      this.gaBestOrigin = data.gaBestOrigin;
+    }
+    if (Array.isArray(data.gaArchive)) {
+      this.gaArchive = data.gaArchive
+        .filter(item => item && Array.isArray(item.vec) && item.vec.length === this.actDim)
+        .map(item => ({
+          vec: Float64Array.from(item.vec),
+          fitness: Number(item.fitness) || 0,
+          maxComY: Number(item.maxComY) || 0
+        }));
+    }
+    if (this.morphologyKey === 'duck') {
+      this._initDuckGAPopulation();
+    }
     if (typeof data.adamStepCount === 'number') this.adamStepCount = data.adamStepCount;
     if (typeof data.maxSkipRowNorm === 'number') this.maxSkipRowNorm = data.maxSkipRowNorm;
     return true;
@@ -360,22 +393,176 @@ export class ActorCriticBrain {
     this.cpgTemplate = Float64Array.from(this.actorSkip.W);
   }
 
-  _ensureDuckRightingLayers() {
-    if (!this.rightingH1) {
-      this.rightingH1 = new DenseLayer(this.obsDim, this.rightingHiddenDim, 0.14);
-      // Zero food inputs (0..2) in hidden righting layer; keep body velocities (3..5), posture & CPG (6..)
-      for (let h = 0; h < this.rightingHiddenDim; h++) {
-        const row = h * this.obsDim;
-        for (let c = 0; c < 3; c++) this.rightingH1.W[row + c] = 0.0;
+  /**
+   * Generates a random 14-dimensional servo command vector v in [-1.0, +1.0]^14 for the Duck.
+   */
+  _randomDuckVector() {
+    const v = new Float64Array(this.actDim);
+    for (let a = 0; a < this.actDim; a++) {
+      v[a] = Math.random() * 2.0 - 1.0;
+    }
+    return v;
+  }
+
+  /**
+   * Mutates a 14D servo vector by perturbing genes with Gaussian noise N(0, sigma) or occasional full gene replacement.
+   */
+  _mutateDuckVector(parentVec, mutationRate = 0.45, sigma = 0.45) {
+    const child = Float64Array.from(parentVec);
+    let mutatedCount = 0;
+    for (let a = 0; a < this.actDim; a++) {
+      if (Math.random() < mutationRate) {
+        mutatedCount += 1;
+        if (Math.random() < 0.25) {
+          child[a] = Math.random() * 2.0 - 1.0;
+        } else {
+          child[a] = Math.max(-1.0, Math.min(1.0, child[a] + randn() * sigma));
+        }
       }
     }
-    if (!this.rightingOut) {
-      this.rightingOut = new DenseLayer(this.rightingHiddenDim, this.actDim, 0.08);
+    // Guarantee at least 2 servo channels mutate so the child vector is always distinct
+    while (mutatedCount < 2) {
+      const idx = Math.floor(Math.random() * this.actDim);
+      child[idx] = Math.max(-1.0, Math.min(1.0, child[idx] + (Math.random() * 1.4 - 0.7)));
+      mutatedCount += 1;
     }
+    return child;
+  }
+
+  /**
+   * Crosses over two 14D parent vectors (either by functional limb blocks: Left Leg [0..4], Right Leg [5..9],
+   * Neck/Head [10..13], or by uniform gene-wise crossover) with a small mutation tweak.
+   */
+  _crossoverDuckVectors(vecA, vecB) {
+    const child = new Float64Array(this.actDim);
+    if (Math.random() < 0.55) {
+      // Block crossover across Left Leg (0..4), Right Leg (5..9), and Neck/Head (10..13)
+      const useALeft = Math.random() < 0.5;
+      const useARight = Math.random() < 0.5;
+      const useANeck = (useALeft === useARight) ? !useALeft : (Math.random() < 0.5);
+      for (let a = 0; a < 5; a++) child[a] = useALeft ? vecA[a] : vecB[a];
+      for (let a = 5; a < 10; a++) child[a] = useARight ? vecA[a] : vecB[a];
+      for (let a = 10; a < this.actDim; a++) child[a] = useANeck ? vecA[a] : vecB[a];
+    } else {
+      // Uniform crossover per servo channel
+      for (let a = 0; a < this.actDim; a++) {
+        child[a] = Math.random() < 0.5 ? vecA[a] : vecB[a];
+      }
+    }
+    // Apply light mutation to 2 genes so crossover offspring explore around the recombined point
+    const tweakIdx = Math.floor(Math.random() * this.actDim);
+    child[tweakIdx] = Math.max(-1.0, Math.min(1.0, child[tweakIdx] + randn() * 0.22));
+    return child;
+  }
+
+  _makeGACandidate(vec, origin = 'случайный') {
+    const v = Float64Array.from(vec);
+    return {
+      vec: v,
+      steps: [v], // Ready for multi-vector "melodies" (Stage 2)
+      origin,
+      fitness: null,
+      maxComY: 0,
+      endComY: 0,
+      holdSec: 0
+    };
+  }
+
+  /**
+   * Initializes the Genetic Algorithm population of 14D servo vectors for the Duck.
+   * Seeds from past successful vectors (gaArchive) if available; otherwise starts with pure random vectors in [-1, +1]^14.
+   */
+  _initDuckGAPopulation() {
+    this.gaPopSize = 8;
+    this.gaGeneration = 1;
+    this.gaCursor = 0;
+    this.gaPopulation = [];
+
+    if (this.gaArchive && this.gaArchive.length > 0) {
+      const bestMem = this.gaArchive[0].vec;
+      this.gaPopulation.push(this._makeGACandidate(bestMem, 'память'));
+      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMem, 0.40, 0.38), 'мутация'));
+    } else if (this.gaBestVector && this.gaBestVector.length === this.actDim) {
+      this.gaPopulation.push(this._makeGACandidate(this.gaBestVector, 'элита'));
+      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector, 0.45, 0.42), 'мутация'));
+    }
+
+    while (this.gaPopulation.length < this.gaPopSize) {
+      this.gaPopulation.push(this._makeGACandidate(this._randomDuckVector(), 'случайный'));
+    }
+  }
+
+  /**
+   * Saves a successful 14D vector into the long-term GA archive so future tasks/falls can reuse it.
+   */
+  rememberDuckGAVector(vec, fitness = 1.0, maxComY = 0.25) {
+    if (!vec || vec.length !== this.actDim) return;
+    if (!Array.isArray(this.gaArchive)) this.gaArchive = [];
+    this.gaArchive.push({
+      vec: Float64Array.from(vec),
+      fitness: Number(fitness) || 0,
+      maxComY: Number(maxComY) || 0
+    });
+    this.gaArchive.sort((a, b) => b.fitness - a.fitness);
+    if (this.gaArchive.length > 8) {
+      this.gaArchive.length = 8;
+    }
+  }
+
+  /**
+   * Evolves the next generation of 14D vectors via Elitism + Mutation + Crossover + Random Immigrant.
+   */
+  _evolveDuckNextGeneration() {
+    const evaluated = this.gaPopulation
+      .filter(ind => typeof ind.fitness === 'number' && Number.isFinite(ind.fitness))
+      .sort((a, b) => b.fitness - a.fitness);
+
+    if (evaluated.length === 0) {
+      this._initDuckGAPopulation();
+      return;
+    }
+
+    const p1 = evaluated[0].vec;
+    const p2 = (evaluated[1] || evaluated[0]).vec;
+    const p3 = (evaluated[2] || evaluated[0]).vec;
+    const bestEver = (this.gaBestVector && this.gaBestVector.length === this.actDim) ? this.gaBestVector : p1;
+
+    this.gaGeneration += 1;
+    this.gaCursor = 0;
+    this.gaPopulation = [
+      this._makeGACandidate(bestEver, 'элита'),
+      this._makeGACandidate(this._mutateDuckVector(p1, 0.35, 0.35), 'мутация'),
+      this._makeGACandidate(this._mutateDuckVector(p1, 0.55, 0.52), 'мутация'),
+      this._makeGACandidate(this._mutateDuckVector(p2, 0.45, 0.45), 'мутация'),
+      this._makeGACandidate(this._crossoverDuckVectors(p1, p2), 'кроссовер'),
+      this._makeGACandidate(this._crossoverDuckVectors(p1, p3), 'кроссовер'),
+      this._makeGACandidate(this._mutateDuckVector(bestEver, 0.65, 0.78), 'мутация-рывок'),
+      this._makeGACandidate(this._randomDuckVector(), 'случайный')
+    ];
+  }
+
+  /**
+   * Returns the currently active 14D vector candidate in the GA population.
+   */
+  getCurrentDuckGACandidate() {
+    if (!this.gaPopulation || this.gaPopulation.length === 0) {
+      this._initDuckGAPopulation();
+    }
+    const idx = Math.max(0, Math.min(this.gaPopulation.length - 1, this.gaCursor || 0));
+    const cand = this.gaPopulation[idx];
+    return {
+      vec: cand.vec,
+      steps: cand.steps,
+      origin: cand.origin || 'случайный',
+      gen: this.gaGeneration || 1,
+      idx: idx + 1,
+      popSize: this.gaPopulation.length
+    };
   }
 
   _resetRightingWindow(upY = 0, topY = 0.18) {
     this._winSteps = 0;
+    this._winHoldSteps = 0;
     this._winStartUpY = upY;
     this._winMinUpY = upY;
     this._winMaxUpY = upY;
@@ -386,8 +573,6 @@ export class ActorCriticBrain {
     this._winMaxTopY = topY;
     this._winSumTopY = 0;
     this._winPrevTopY = topY;
-    if (this._traceW) this._traceW.fill(0);
-    if (this._traceOutW) this._traceOutW.fill(0);
   }
 
   resetRightingWaveState(upY = 0, topY = 0.18) {
@@ -398,199 +583,43 @@ export class ActorCriticBrain {
     this._waveBaseMeanTopY = topY;
     this._waveBaseSpanTopY = 0;
     this._waveStagnantCount = 0;
-    if (this._eligW) this._eligW.fill(0);
-    if (this._eligOutW) this._eligOutW.fill(0);
     this._resetRightingWindow(upY, topY);
   }
 
   /**
-   * Accumulates wave-envelope statistics (for Duck: Center of Mass height comY; for radial walkers: up.y)
-   * and a causal decaying trajectory eligibility trace across all steps of the oscillation window.
+   * Accumulates evaluation window statistics for the current vector:
+   * for the Duck, tracks Center of Mass height (comY) and how many steps (time) it stayed elevated.
    */
-  recordRightingStepTrace(obs, act, metricY) {
+  recordRightingStepTrace(_obs, _act, metricY) {
     if (this._waveBaseCrestUpY === null) {
       this.resetRightingWaveState(metricY, 0);
     }
     this._winSteps += 1;
-    const isNewCrest = metricY > this._winMaxUpY;
     if (metricY < this._winMinUpY) this._winMinUpY = metricY;
     if (metricY > this._winMaxUpY) this._winMaxUpY = metricY;
     this._winSumUpY += metricY;
-
-    const dMetric = metricY - this._winPrevUpY;
     this._winPrevUpY = metricY;
 
-    if (this.morphologyKey === 'duck' && this.actDim === 14 && obs && act) {
-      const lam = 0.82;
-      const oneMinusLam = 1.0 - lam;
-      // Weight steps purely by upward Center-of-Mass velocity (dComY * 5.0) + wave-crest breakthrough
-      const vCom = dMetric * 5.0;
-      const wStep = 0.035 + 2.2 * Math.max(0, vCom) + (isNewCrest ? 0.20 : 0.0);
-      const hR = this._duckRightingLastH;
-
-      for (let a = 0; a < this.actDim; a++) {
-        const actA = act[a];
-        const row = a * this.obsDim;
-        for (let c = 3; c < this.obsDim; c++) {
-          const idx = row + c;
-          const e = lam * this._eligW[idx] + oneMinusLam * actA * obs[c];
-          this._eligW[idx] = e;
-          this._traceW[idx] += wStep * e;
-        }
-        if (hR && this._eligOutW && this._traceOutW) {
-          const outRow = a * this.rightingHiddenDim;
-          for (let h = 0; h < this.rightingHiddenDim; h++) {
-            const idx = outRow + h;
-            const eOut = lam * this._eligOutW[idx] + oneMinusLam * actA * hR[h];
-            this._eligOutW[idx] = eOut;
-            this._traceOutW[idx] += wStep * eOut;
-          }
-        }
-      }
-    }
-  }
-
-  _sampleDuckRightingPerturb(scale = 1.0) {
-    if (!this._duckRightingPerturbW || !this._duckRightingPerturbB) return;
-    this._ensureDuckRightingLayers();
-    this._duckRightingPerturbReady = true;
-
-    // Sample independent left/right leg coordination phase & jerk gains:
-    // Allows the two legs to work independently (one knee deeply tucking while the other kicks out, or alternating/pulsed jerks)!
-    const phaseModes = [Math.PI, Math.PI * 0.5, -Math.PI * 0.5, 0.0, Math.PI * 0.75];
-    this._duckLegPhaseDiff = phaseModes[this.rightingAttempts % phaseModes.length] + (Math.random() - 0.5) * 0.45;
-    this._duckJerkGainL = (0.55 + Math.random() * 0.40) * scale;
-    this._duckJerkGainR = (0.55 + Math.random() * 0.40) * scale;
-    this._duckKneeTuckBiasL = (Math.random() * 0.9 - 0.45) * scale;
-    this._duckKneeTuckBiasR = (Math.random() * 0.9 - 0.45) * scale;
-
-    for (let a = 0; a < this.actDim; a++) {
-      const isKnee = a === 3 || a === 8;
-      this._duckRightingPerturbB[a] = isKnee
-        ? (a === 3 ? this._duckKneeTuckBiasL : this._duckKneeTuckBiasR)
-        : randn() * 0.22 * scale;
-      const row = a * this.obsDim;
-      for (let c = 0; c < this.obsDim; c++) {
-        if (c < 3) {
-          this._duckRightingPerturbW[row + c] = 0.0; // Ignore food position
-        } else if (c <= 9) {
-          this._duckRightingPerturbW[row + c] = randn() * 0.36 * scale; // Strong 3D body velocity & posture/CoM feedback
-        } else if (c <= 11) {
-          this._duckRightingPerturbW[row + c] = randn() * 0.58 * scale; // High-amplitude CPG wave drive for full-stroke knee tuck & kick
-        } else if (c <= 15) {
-          this._duckRightingPerturbW[row + c] = 0.0; // Food gates are 0
-        } else {
-          this._duckRightingPerturbW[row + c] = randn() * 0.16 * scale; // Joint proprioception & foot contacts
-        }
-      }
-      if (this._duckRightingPerturbOutW) {
-        const outRow = a * this.rightingHiddenDim;
-        for (let h = 0; h < this.rightingHiddenDim; h++) {
-          this._duckRightingPerturbOutW[outRow + h] = randn() * 0.28 * scale;
-        }
-      }
+    // Count hold steps: how long the Duck kept its CoM raised above startComY + 0.8 cm or >= 0.20 m
+    if (metricY >= this._winStartUpY + 0.008 || metricY >= 0.20) {
+      this._winHoldSteps = (this._winHoldSteps || 0) + 1;
     }
   }
 
   /**
-   * Forward pass of the Self-Righting Sub-Network.
-   * For the 14-DoF Duck, optimizes purely Center of Mass height (comY):
-   * uses full-range non-linear wave + sharp impulse ("рывок") + independent left/right leg knee-tuck & kick when comY is low,
-   * and smoothly blends into the standing CoM policy only once comY rises above 0.220 m!
+   * Applies the active 14-dimensional servo command vector from the Genetic Algorithm population
+   * directly to the Duck's 14 servos (zero hand-crafted waves, zero neural network complexity).
    */
-  forwardRightingReflex(obs, dt = 0.05, recordVis = true, currentComY = 0.15) {
+  forwardRightingReflex(obs, dt = 0.05, recordVis = true, _currentComY = 0.15) {
     this.rightingPhase = (this.rightingPhase + dt * 8.4) % (Math.PI * 2);
-    const zRight = new Float64Array(this.actDim);
-    this.rightingLayer.forward(obs, zRight);
-
     const mu = new Float64Array(this.actDim);
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
-      if (!this._duckRightingPerturbReady || !this.rightingH1 || !this.rightingOut) {
-        this._sampleDuckRightingPerturb(1.0);
-      }
-
-      // Compute non-linear hidden representation hR = tanh(rightingH1 * obs) (ignoring food cols 0..2)
-      const hR = this._duckRightingLastH;
-      for (let h = 0; h < this.rightingHiddenDim; h++) {
-        const row = h * this.obsDim;
-        let sum = this.rightingH1.b[h];
-        for (let c = 3; c < this.obsDim; c++) {
-          sum += this.rightingH1.W[row + c] * obs[c];
-        }
-        hR[h] = Math.tanh(sum);
-      }
-
-      const zOut = new Float64Array(this.actDim);
-      this.rightingOut.forward(hR, zOut);
-
-      // Keep 100% independent leg & jerk freedom while overturned or low-CoM;
-      // only blend in symmetrical standing posture once rolled upright (upY >= 0.58) and comY >= 0.285 m!
-      const upY = obs[6];
-      const pitchTilt = obs[7];
-      const rollTilt = obs[8];
-      const isUprightEnough = upY >= 0.58 && currentComY >= 0.285;
-      const waveWeight = !isUprightEnough
-        ? 1.0
-        : Math.max(0.0, Math.min(1.0, (0.300 - currentComY) / 0.015));
-      const { mu: standMu } = this.forwardActor(obs, false, null);
-
-      const rightDown = rollTilt >= -0.05;
-      const rollDir = rightDown ? 1.0 : -1.0;
-
-      // Hysteresis for inverted sagittal headstand (165°..180°):
-      // enter when steeply inverted in the sagittal plane (upY < -0.50 && |rollTilt| < 0.35),
-      // and hold until the bottom drops to the floor (upY >= -0.25 or |rollTilt| >= 0.72),
-      // anchoring rightingPhase = 3.78 so upon exit it immediately executes a full forward neck-whip & knee-rock!
-      if (!this._duckInHighHeadstand && upY < -0.50 && Math.abs(rollTilt) < 0.35) {
-        this._duckInHighHeadstand = true;
-      } else if (this._duckInHighHeadstand && (upY >= -0.25 || Math.abs(rollTilt) >= 0.72)) {
-        this._duckInHighHeadstand = false;
-      }
-      const isHighHeadstand = Boolean(this._duckInHighHeadstand);
-      if (isHighHeadstand) {
-        this.rightingPhase = 3.78;
-      }
-
-      // Sharp non-sinusoidal impulse/jerk waves ("рывок") with independent left/right leg operation
-      const phi = this.rightingPhase;
-      const wave = Math.sin(phi);
-      const cosW = Math.cos(phi);
-      const upperPulse = Math.tanh(2.4 * (wave + 0.25));
-
-      const knee0 = isHighHeadstand ? -0.95 : (rightDown ? upperPulse : -0.95);
-      const knee1 = isHighHeadstand ? -0.95 : (rightDown ? -0.95 : upperPulse);
-      const roll0 = -0.85;
-      const roll1 = +0.85;
-      const stride0 = isHighHeadstand ? +0.90 : (pitchTilt > 0.15 ? -0.80 : (+0.45 + 0.35 * cosW));
-      const stride1 = isHighHeadstand ? +0.90 : (pitchTilt > 0.15 ? -0.80 : (+0.45 - 0.35 * cosW));
-      const neckWhip = isHighHeadstand ? +0.95 : Math.tanh(2.2 * wave);
-      const headRoll = -0.90 * rollDir;
-
-      const coordTargets = upY < 0.58
-        ? [0.0, roll0, stride0, knee0, 0.5 * wave,   0.0, roll1, stride1, knee1, -0.5 * wave,   neckWhip, neckWhip, 0.0, headRoll]
-        : [0.0, 0.0, 0.0, +0.85, 0.0,                0.0, 0.0, 0.0, +0.85, 0.0,                 0.10, 0.0, 0.0, 0.0];
-
-      for (let a = 0; a < this.actDim; a++) {
-        const row = a * this.obsDim;
-        let pSum = this._duckRightingPerturbB ? this._duckRightingPerturbB[a] : 0.0;
-        if (this._duckRightingPerturbW) {
-          for (let c = 3; c < this.obsDim; c++) {
-            pSum += this._duckRightingPerturbW[row + c] * obs[c];
-          }
-        }
-        if (this._duckRightingPerturbOutW) {
-          const outRow = a * this.rightingHiddenDim;
-          for (let h = 0; h < this.rightingHiddenDim; h++) {
-            pSum += this._duckRightingPerturbOutW[outRow + h] * hR[h];
-          }
-        }
-
-        const learnedTerm = (isHighHeadstand || upY >= 0.58) ? 0.0 : 0.02 * Math.tanh(zRight[a] + zOut[a] + pSum);
-        const waveAct = Math.max(-1.0, Math.min(1.0, coordTargets[a] + learnedTerm));
-        mu[a] = waveWeight * waveAct + (1.0 - waveWeight) * standMu[a];
-      }
+      const cand = this.getCurrentDuckGACandidate();
+      mu.set(cand.vec);
     } else {
+      const zRight = new Float64Array(this.actDim);
+      this.rightingLayer.forward(obs, zRight);
       // Keep roll direction consistent throughout the attempt for radial Tripod/Quadruped walkers
       const upY = obs[6];
       const rollTilt = obs[8];
@@ -608,25 +637,20 @@ export class ActorCriticBrain {
         let liftCmd = 0;
         let strideCmd = 0;
 
-        // Stage 2: Once the torso has rolled past upY >= 0.42,
-        // settle legs to neutral ventral standing pose (+0.12) so dorsalMuscle unfolds any dorsal leg without stilt-propping!
         if (upY >= 0.42) {
           liftCmd = +0.12;
           strideCmd = 0.15 * this.rightingSweep * (leg === 0 ? s : leg === 1 ? -s : c);
         } else if (leg === 0) {
-          // Stage 1 (upY < 0.42, overturned): Front-Left leg (at +right) is on the floor when right.y < 0 (side > 0)
           liftCmd = side >= 0
             ? -this.rightingGain * (0.85 + 0.15 * Math.max(0, s))
             : +0.15 * this.rightingAsym;
           strideCmd = this.rightingSweep * s;
         } else if (leg === 1) {
-          // Front-Right leg (at -right) is on the floor when right.y >= 0 (side < 0)
           liftCmd = side >= 0
             ? +0.15 * this.rightingAsym
             : -this.rightingGain * (0.85 + 0.15 * Math.max(0, s));
           strideCmd = -this.rightingSweep * s;
         } else {
-          // Rear leg(s): rhythmic dorsal rocking lever
           liftCmd = -this.rightingGain * (0.70 + 0.30 * Math.max(0, c));
           strideCmd = this.rightingSweep * c;
         }
@@ -655,9 +679,9 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Updates the Self-Righting Sub-Network parameters at the end of a 24-step window.
-   * For the Duck, evaluates ONLY the Center of Mass height (comY) wave envelope
-   * (crestGainCom, meanGainCom, waveSpanCom) — torso tilt (up.y) and torsoTop.y are completely ignored!
+   * Evaluates the fitness of the active 14D vector at the end of the evaluation window:
+   * measures how much the Duck rose (maxComY - startComY, endComY - startComY, meanComY)
+   * and for how much time (holdSteps / holdSec), then advances to the next GA candidate or evolves the next generation.
    */
   updateRightingReflex({
     startUpY,
@@ -674,151 +698,107 @@ export class ActorCriticBrain {
     const progress = Math.max(0, maxUpY - startUpY) + Math.max(0, endUpY - startUpY);
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
-      this._ensureDuckRightingLayers();
+      if (!this.gaPopulation || this.gaPopulation.length === 0) {
+        this._initDuckGAPopulation();
+      }
+      const idx = Math.max(0, Math.min(this.gaPopulation.length - 1, this.gaCursor || 0));
+      const cand = this.gaPopulation[idx];
 
       const steps = Math.max(1, this._winSteps || 1);
       const minComY = Number.isFinite(this._winMinUpY) ? Math.min(this._winMinUpY, startComY, endComY) : Math.min(startComY, endComY);
       const meanComY = this._winSteps > 0 ? (this._winSumUpY / steps) : 0.5 * (startComY + endComY);
+      const holdSteps = this._winHoldSteps || 0;
+      const holdRatio = holdSteps / steps;
+      const holdSec = holdSteps * 0.05;
 
-      const waveSpanCom = Math.max(0, maxComY - minComY) * 5.0;
-      const baseCrestCom = this._waveBaseCrestUpY !== null ? this._waveBaseCrestUpY : startComY;
-      const baseMeanCom = this._waveBaseMeanUpY !== null ? this._waveBaseMeanUpY : startComY;
-      const baseSpanCom = this._waveBaseSpanUpY || 0;
+      const risePeak = Math.max(0, maxComY - startComY);
+      const riseNet = Math.max(0, endComY - startComY);
+      const waveSpanCom = Math.max(0, maxComY - minComY);
 
-      // 1. Wave-Envelope Gains purely on Center of Mass height (comY):
-      const crestGainCom = (maxComY - baseCrestCom) * 5.0;
-      const meanGainCom = (meanComY - baseMeanCom) * 5.0;
-      const spanGainCom = waveSpanCom - baseSpanCom;
+      // Genetic Algorithm Fitness Function:
+      // Evaluates how much the Duck rose (risePeak, riseNet, meanComY) and for how long (holdRatio * maxComY)
+      const fitness =
+        4.0 * risePeak +
+        3.0 * riseNet +
+        2.0 * meanComY +
+        1.5 * holdRatio * maxComY +
+        0.8 * waveSpanCom;
 
-      // Reward expanding CoM wave amplitude when still low on the floor (maxComY < 0.20 m)
-      const rockingBonus = maxComY < 0.20
-        ? 0.45 * Math.max(0, spanGainCom) + (crestGainCom > 0.01 ? 0.25 * Math.min(0.45, waveSpanCom) : 0.0)
-        : 0.0;
+      cand.fitness = fitness;
+      cand.maxComY = maxComY;
+      cand.endComY = endComY;
+      cand.holdSec = holdSec;
 
-      const highComBonus = maxComY > 0.195
-        ? (maxComY - 0.195) * 4.5
-        : 0.0;
-
-      const attemptScore =
-        1.35 * crestGainCom +
-        0.85 * meanGainCom +
-        rockingBonus +
-        highComBonus;
-
-      // Update CoM wave-envelope baselines
-      const alphaCrestCom = maxComY >= baseCrestCom ? 0.65 : 0.22;
-      this._waveBaseCrestUpY = (1 - alphaCrestCom) * baseCrestCom + alphaCrestCom * maxComY;
-      this._waveBaseMeanUpY = 0.60 * baseMeanCom + 0.40 * meanComY;
-      this._waveBaseSpanUpY = 0.55 * baseSpanCom + 0.45 * waveSpanCom;
-
-      const combinedPeak = Math.max(0, (maxComY - 0.145) * 8.0) + Math.max(0, crestGainCom);
-      if (combinedPeak > this.duckRightingBestProgress) {
-        this.duckRightingBestProgress = combinedPeak;
+      if (fitness > this.gaBestFitness) {
+        this.gaBestFitness = fitness;
+        this.gaBestVector = Float64Array.from(cand.vec);
+        this.gaBestOrigin = cand.origin;
+      }
+      if (maxComY >= 0.235) {
+        this.rememberDuckGAVector(cand.vec, fitness, maxComY);
       }
 
-      // 2. Reinforce neural perturbation & trajectory eligibility trace when the CoM wave envelope grew
-      const stepScale = attemptScore > 0.015
-        ? Math.min(0.45, 0.28 * attemptScore)
-        : (attemptScore < -0.05 ? Math.max(-0.12, 0.14 * attemptScore) : 0.0);
-
-      if (stepScale !== 0.0 && this._duckRightingPerturbW && this._duckRightingPerturbB) {
-        for (let a = 0; a < this.actDim; a++) {
-          this.rightingLayer.b[a] = Math.max(
-            -0.35,
-            Math.min(0.35, this.rightingLayer.b[a] * 0.96 + stepScale * this._duckRightingPerturbB[a])
-          );
-          const row = a * this.obsDim;
-          for (let c = 3; c < this.obsDim; c++) {
-            this.rightingLayer.W[row + c] = Math.max(
-              -0.85,
-              Math.min(0.85, this.rightingLayer.W[row + c] + stepScale * this._duckRightingPerturbW[row + c])
-            );
-          }
-          if (this.rightingOut && this._duckRightingPerturbOutW) {
-            const outRow = a * this.rightingHiddenDim;
-            for (let h = 0; h < this.rightingHiddenDim; h++) {
-              this.rightingOut.W[outRow + h] = Math.max(
-                -0.85,
-                Math.min(0.85, this.rightingOut.W[outRow + h] + stepScale * this._duckRightingPerturbOutW[outRow + h])
-              );
-            }
-          }
-        }
-      }
-
-      // 3. Apply Trajectory Eligibility Trace (_traceW, _traceOutW) accumulated over the CoM wave
-      const waveProgress = Math.max(0, attemptScore);
-      if (waveProgress > 0.012 && this._traceW) {
-        const lrTrace = 0.028 * Math.min(1.5, waveProgress);
-        for (let a = 0; a < this.actDim; a++) {
-          const row = a * this.obsDim;
-          for (let c = 3; c < this.obsDim; c++) {
-            const idx = row + c;
-            this.rightingLayer.W[idx] = Math.max(
-              -0.85,
-              Math.min(0.85, this.rightingLayer.W[idx] + lrTrace * this._traceW[idx])
-            );
-          }
-          if (this.rightingOut && this._traceOutW) {
-            const outRow = a * this.rightingHiddenDim;
-            for (let h = 0; h < this.rightingHiddenDim; h++) {
-              const idx = outRow + h;
-              this.rightingOut.W[idx] = Math.max(
-                -0.85,
-                Math.min(0.85, this.rightingOut.W[idx] + lrTrace * this._traceOutW[idx])
-              );
-            }
-          }
-        }
+      const normProgress = Math.max(0, (maxComY - 0.145) * 6.0) + risePeak * 4.0;
+      if (normProgress > this.duckRightingBestProgress) {
+        this.duckRightingBestProgress = normProgress;
       }
 
       this.lastRightingWaveMetrics = {
+        gaGen: this.gaGeneration,
+        gaIdx: idx + 1,
+        gaPopSize: this.gaPopulation.length,
+        gaOrigin: cand.origin,
+        fitness: Number(fitness.toFixed(3)),
+        bestFitness: Number(this.gaBestFitness.toFixed(3)),
+        riseCm: Number((risePeak * 100).toFixed(1)),
+        holdSec: Number(holdSec.toFixed(2)),
         startComY: Number(startComY.toFixed(3)),
         minComY: Number(minComY.toFixed(3)),
         maxComY: Number(maxComY.toFixed(3)),
         meanComY: Number(meanComY.toFixed(3)),
         endComY: Number(endComY.toFixed(3)),
-        waveSpanCom: Number(waveSpanCom.toFixed(3)),
-        crestGainCom: Number(crestGainCom.toFixed(3)),
-        attemptScore: Number(attemptScore.toFixed(3))
+        vec: Array.from(cand.vec, v => Number(v.toFixed(2)))
       };
 
-      const isWaveGrowing =
-        crestGainCom > 0.02 ||
-        (spanGainCom > 0.04 && waveSpanCom > 0.06) ||
-        maxComY >= 0.205;
+      this.gaCursor = idx + 1;
 
-      if (isWaveGrowing) {
-        this._waveStagnantCount = 0;
-        for (let i = 0; i < this._duckRightingPerturbW.length; i++) this._duckRightingPerturbW[i] *= 0.72;
-        for (let i = 0; i < this._duckRightingPerturbB.length; i++) this._duckRightingPerturbB[i] *= 0.60;
-        for (let i = 0; i < this._duckRightingPerturbOutW.length; i++) this._duckRightingPerturbOutW[i] *= 0.72;
-      } else {
-        this._waveStagnantCount = (this._waveStagnantCount || 0) + 1;
-        if (this._waveStagnantCount >= 2 || attemptScore < -0.04) {
-          this._waveStagnantCount = 0;
-          this._sampleDuckRightingPerturb(1.0);
+      // In Generation 1, once the first 4 random vectors (#1..#4) are evaluated,
+      // immediately synthesize #5 (mutation of best) and #6 (crossover of top 2) so evolution starts right away!
+      if (this.gaGeneration === 1 && this.gaCursor === 4 && this.gaPopulation.length >= 6) {
+        const earlyEval = this.gaPopulation
+          .slice(0, 4)
+          .filter(it => typeof it.fitness === 'number')
+          .sort((a, b) => b.fitness - a.fitness);
+        if (earlyEval.length >= 2) {
+          this.gaPopulation[4] = this._makeGACandidate(
+            this._mutateDuckVector(earlyEval[0].vec, 0.45, 0.42),
+            'мутация'
+          );
+          this.gaPopulation[5] = this._makeGACandidate(
+            this._crossoverDuckVectors(earlyEval[0].vec, earlyEval[1].vec),
+            'кроссовер'
+          );
         }
+      }
+
+      if (this.gaCursor >= this.gaPopulation.length) {
+        this._evolveDuckNextGeneration();
       }
 
       this._resetRightingWindow(endComY, 0);
       return this.getRightingSkillPct();
     }
 
-    // Policy gradient / biomechanical reinforcement step on dorsal leverage gains:
-    // Each attempt on its back teaches the beetle reflex that stronger dorsal push + opposite leg tuck
-    // increases torso roll angular momentum and lifts up.y toward +1!
+    // Policy gradient / biomechanical reinforcement step on dorsal leverage gains for radial walkers:
     const gainStep = 0.28 + 0.15 * Math.min(1.0, progress + contactSteps * 0.05);
     this.rightingGain = Math.min(1.0, this.rightingGain + gainStep * (1.0 - this.rightingGain * 0.65));
     this.rightingAsym = Math.min(1.0, this.rightingAsym + gainStep * (1.0 - this.rightingAsym * 0.65));
     this.rightingSweep = Math.min(0.95, this.rightingSweep + 0.22 * (1.0 - this.rightingSweep * 0.7));
 
-    // Only switch roll side if we made near-zero upward progress (< 0.08) during the attempt
     if (endUpY < -0.35 && (maxUpY - startUpY) < 0.08 && this.rightingAttempts >= 3) {
       this.rightingSideSign *= -1.0;
     }
 
-    // Hebbian / policy-gradient update on rightingLayer from posture sensors (6,7,8)
     if (lastObs && lastAct) {
       const lr = 0.015;
       for (let a = 0; a < this.actDim; a++) {
@@ -1521,11 +1501,11 @@ export class PPOTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = isDuck0
-        ? '🔄 ОБУЧЕНИЕ: ПОДЪЁМ ЦЕНТРА МАСС (ЦМ)'
+        ? '🧬 ГЕНЕТИЧЕСКИЙ АЛГОРИТМ: ПОИСК 14D-ВЕКТОРА'
         : '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
-      // Rest pause between righting attempts (only for radial spiders; disabled for the Duck so we never interrupt its neural network!)
+      // Rest pause between righting attempts (only for radial spiders; disabled for the Duck so we never interrupt its GA vectors!)
       if (!isDuck0 && this.rightingPauseStepsRemaining > 0) {
         const calmAct = new Float64Array(this.brain.actDim);
         c0.lastState = obs;
@@ -1536,9 +1516,13 @@ export class PPOTrainer {
         return;
       }
 
-      this.metaState.reasonText = isDuck0
-        ? `Максимизация высоты центра масс (ЦМ=${comY0.toFixed(3)} м → цель ${targetCom0.toFixed(3)} м) — эпоха подъёма #${this.metaState.rightingAttempts}`
-        : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка подняться #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+      if (isDuck0) {
+        const cand = this.brain.getCurrentDuckGACandidate();
+        const bestFitStr = Number.isFinite(this.brain.gaBestFitness) ? this.brain.gaBestFitness.toFixed(2) : '—';
+        this.metaState.reasonText = `Поколение #${cand.gen}, вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | ЦМ=${comY0.toFixed(3)} м → цель ${targetCom0.toFixed(3)} м | рекорд фитнеса: ${bestFitStr}`;
+      } else {
+        this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка подняться #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
+      }
 
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true, comY0);
       c0.lastState = obs;
@@ -1607,6 +1591,10 @@ export class PPOTrainer {
     this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
 
     if (this.brain.morphologyKey === 'duck') {
+      const cand = this.brain.getCurrentDuckGACandidate();
+      if (cand && cand.vec) {
+        this.brain.rememberDuckGAVector(cand.vec, 2.5, recoveredComY || 0.26);
+      }
       const target = this.metaState.targetCompetence || 0.215;
       if (typeof recoveredComY === 'number') {
         this.metaState.competenceEMA = Number(Math.max(this.metaState.competenceEMA, recoveredComY).toFixed(3));
@@ -1616,7 +1604,7 @@ export class PPOTrainer {
         this.metaState.isLearningActive = false;
         this.metaState.needToLearnPct = 0;
         this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
-        this.metaState.reasonText = `Утка подняла центр масс выше ${target.toFixed(2)} м (подъёмов: ${this.metaState.rightingSuccesses}) — обучение остановлено`;
+        this.metaState.reasonText = `Утка подняла центр масс выше ${target.toFixed(2)} м (подъёмов: ${this.metaState.rightingSuccesses}) — вектор сохранён в память ГА`;
       } else {
         this.metaState.mode = 'LEARNING_WALK';
         this.metaState.isLearningActive = true;
@@ -1710,7 +1698,7 @@ export class PPOTrainer {
         this.rightingMinFootClearanceY = stepMinFootClearance;
       }
 
-      const horizon = isDuck0 ? 24 : this.rightingHorizon;
+      const horizon = isDuck0 ? 20 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
         const startTopY = this.rightingStartTopY ?? topY0;
         const maxTopY = this.rightingMaxTopY ?? topY0;
@@ -2594,7 +2582,7 @@ export class NESTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = isDuck0
-        ? '🔄 ОБУЧЕНИЕ (NES): ПОДЪЁМ ЦЕНТРА МАСС'
+        ? '🧬 ГЕНЕТИЧЕСКИЙ АЛГОРИТМ: ПОИСК 14D-ВЕКТОРА'
         : '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
@@ -2608,9 +2596,13 @@ export class NESTrainer {
         return;
       }
 
-      this.metaState.reasonText = isDuck0
-        ? `Максимизация высоты центра масс (ЦМ=${comY0.toFixed(3)} м → цель ${targetCom0.toFixed(3)} м) — эпоха #${this.metaState.rightingAttempts}`
-        : `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка подняться #${this.metaState.rightingAttempts}`;
+      if (isDuck0) {
+        const cand = this.brain.getCurrentDuckGACandidate();
+        const bestFitStr = Number.isFinite(this.brain.gaBestFitness) ? this.brain.gaBestFitness.toFixed(2) : '—';
+        this.metaState.reasonText = `Поколение #${cand.gen}, вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | ЦМ=${comY0.toFixed(3)} м → цель ${targetCom0.toFixed(3)} м | рекорд фитнеса: ${bestFitStr}`;
+      } else {
+        this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка подняться #${this.metaState.rightingAttempts}`;
+      }
 
       const muRight = this.brain.forwardRightingReflex(obs, 0.05, true, comY0);
       c0.lastState = obs;
@@ -2715,7 +2707,7 @@ export class NESTrainer {
       if (stepMinFootClearance < (this.rightingMinFootClearanceY ?? Infinity)) {
         this.rightingMinFootClearanceY = stepMinFootClearance;
       }
-      const horizon = isDuck0 ? 24 : this.rightingHorizon;
+      const horizon = isDuck0 ? 20 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
         const startTopY = this.rightingStartTopY ?? topY0;
         const maxTopY = this.rightingMaxTopY ?? topY0;
