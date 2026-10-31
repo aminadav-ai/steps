@@ -536,6 +536,18 @@ if (memAfterSwitch < memBeforeSwitch) {
   console.error('ОШИБКА: При смене целевой позы память переходов poseTransitionMemory должна сохраняться!');
   process.exit(1);
 }
+const legOnlyTorsoDist = duckSideSim.brain.computeTorsoDistance4D(
+  [-0.75, -0.25, 1, 0, 1, 1],
+  [-0.75, -0.25, 1, 0, -1, -1]
+);
+const realTorsoDist = duckSideSim.brain.computeTorsoDistance4D(
+  [-0.75, -0.25, 1, 0, 1, 1],
+  [-0.5, 0.25, 0.5, 0.5, 1, 1]
+);
+if (legOnlyTorsoDist > 1e-6 || realTorsoDist < 0.4) {
+  console.error(`ОШИБКА: computeTorsoDistance4D некорректно отделяет махание лапами от сдвига корпуса (${legOnlyTorsoDist}, ${realTorsoDist})!`);
+  process.exit(1);
+}
 console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу, переключает 4 целевые позы («Стоять», «Сидеть», «На спине», «На животе») и работает на двухуровневом ГА «Язык поз».');
 
 console.log('\nИтог проверки обучения:');

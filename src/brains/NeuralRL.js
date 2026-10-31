@@ -558,6 +558,21 @@ export class ActorCriticBrain {
   }
 
   /**
+   * Weighted Euclidean distance across the 4 torso coordinates [comY, upY, pitchY, rollY] (indices 0..3).
+   * Used to distinguish real torso posture transitions from mere leg waving in the air.
+   */
+  computeTorsoDistance4D(pA, pB) {
+    if (!pA || !pB) return 2.0;
+    const weights = [2.2, 2.0, 1.4, 1.4]; // sum = 7.0
+    let sumSq = 0;
+    for (let i = 0; i < 4; i++) {
+      const diff = (pA[i] || 0) - (pB[i] || 0);
+      sumSq += weights[i] * diff * diff;
+    }
+    return Math.sqrt(sumSq / 7.0);
+  }
+
+  /**
    * Computes percentage similarity (0..100%) between an achieved pose and a target pose.
    */
   computePoseMatchPct6D(pActual, pTarget) {
@@ -657,28 +672,38 @@ export class ActorCriticBrain {
 
   /**
    * Mutates a 6D quantized pose vector toward the goal pose P_goal by discrete 0.25 grid steps.
+   * Guarantees at least one torso coordinate [comY, upY, pitchY, rollY] (0..3) shifts so pose mutants
+   * never represent mere leg-twitching in place.
    */
   _mutatePose6D(basePose, goalPose, stepBias = 0.5) {
     const child = Float64Array.from(basePose);
-    let changed = 0;
+    let torsoChanged = 0;
     for (let i = 0; i < 6; i++) {
       if (Math.random() < 0.65) {
         const diff = goalPose[i] - basePose[i];
         let delta = 0;
         if (Math.abs(diff) >= 0.25 && Math.random() < stepBias) {
-          delta = Math.sign(diff) * (Math.random() < 0.5 ? 0.25 : 0.50);
+          delta = Math.sign(diff) * (Math.random() < 0.45 ? 0.25 : 0.50);
         } else {
           delta = (Math.floor(Math.random() * 5) - 2) * 0.25;
         }
         const nextVal = this._quantizePoseCoord(child[i] + delta);
-        if (nextVal !== child[i]) changed += 1;
+        if (i < 4 && nextVal !== child[i]) torsoChanged += 1;
         child[i] = nextVal;
       }
     }
-    if (changed === 0) {
-      const idx = Math.floor(Math.random() * 6);
-      const dir = goalPose[idx] >= child[idx] ? 0.25 : -0.25;
-      child[idx] = this._quantizePoseCoord(child[idx] + (child[idx] + dir <= 1.0 && child[idx] + dir >= -1.0 ? dir : -dir));
+    if (torsoChanged === 0) {
+      // Force at least one torso coordinate (0..3) to step toward goalPose (or explore roll/pitch)
+      const torsoDiffs = [0, 1, 2, 3].filter(idx => Math.abs(goalPose[idx] - child[idx]) >= 0.25);
+      const idx = torsoDiffs.length > 0
+        ? torsoDiffs[Math.floor(Math.random() * torsoDiffs.length)]
+        : Math.floor(Math.random() * 4);
+      const rawDiff = goalPose[idx] - child[idx];
+      const stepMag = Math.random() < 0.6 ? 0.50 : 0.25;
+      const dir = Math.abs(rawDiff) >= 0.25 ? Math.sign(rawDiff) * stepMag : (Math.random() < 0.5 ? 0.50 : -0.50);
+      child[idx] = this._quantizePoseCoord(
+        child[idx] + (child[idx] + dir <= 1.0 && child[idx] + dir >= -1.0 ? dir : -dir)
+      );
     }
     return child;
   }
@@ -702,6 +727,36 @@ export class ActorCriticBrain {
     const v = new Float64Array(this.actDim);
     for (let a = 0; a < this.actDim; a++) {
       v[a] = Math.random() * 2.0 - 1.0;
+    }
+    return v;
+  }
+
+  /**
+   * Generates a coordinated, biomechanically contrastive 14D servo vector (asymmetric roll push,
+   * deep leg tuck + neck lever, or symmetric extension) to help GA #2 break out of dead postures.
+   */
+  _contrastiveDuckVector() {
+    const v = new Float64Array(this.actDim);
+    const mode = Math.floor(Math.random() * 3);
+    if (mode === 0) {
+      // Asymmetric lateral roll + neck swing (helps roll from back -> side -> belly/feet)
+      const side = Math.random() < 0.5 ? 1.0 : -1.0;
+      for (let a = 0; a < 5; a++) v[a] = Math.max(-1, Math.min(1, side * (0.35 + 0.35 * Math.random()) * (a % 2 === 0 ? 1 : -0.5)));
+      for (let a = 5; a < 10; a++) v[a] = Math.max(-1, Math.min(1, -side * (0.35 + 0.35 * Math.random()) * (a % 2 === 0 ? 1 : -0.5)));
+      for (let a = 10; a < this.actDim; a++) v[a] = Math.max(-1, Math.min(1, side * (a % 2 === 0 ? 0.55 : -0.45) + randn() * 0.15));
+    } else if (mode === 1) {
+      // Coordinated forward/backward pitch lever using both legs + neck column
+      const pitchDir = this.poseGoalKey === 'lie_belly' ? -1.0 : (this.poseGoalKey === 'lie_back' ? 1.0 : (Math.random() < 0.5 ? 1.0 : -1.0));
+      for (let a = 0; a < 5; a++) {
+        const val = pitchDir * (a === 1 || a === 2 ? 0.55 : -0.40) + randn() * 0.15;
+        v[a] = Math.max(-1, Math.min(1, val));
+        v[a + 5] = Math.max(-1, Math.min(1, val + randn() * 0.12));
+      }
+      for (let a = 10; a < this.actDim; a++) {
+        v[a] = Math.max(-1, Math.min(1, pitchDir * 0.60 + randn() * 0.15));
+      }
+    } else {
+      return this._randomDuckVector();
     }
     return v;
   }
@@ -769,7 +824,7 @@ export class ActorCriticBrain {
 
   /**
    * Records a verified transition (pFrom -> pTo via cmdVec) in the deduplicated cell memory.
-   * Only transitions between distinct quantized pose cells (D >= 0.22) are stored, preventing memory bloat.
+   * Requires a genuine 4D torso posture shift (computeTorsoDistance4D >= 0.18), preventing memory bloat from leg waving.
    */
   rememberPoseTransition(pFrom, pTo, cmdVec, maxComY = 0.20) {
     if (!pFrom || !pTo || !cmdVec || cmdVec.length !== this.actDim) return false;
@@ -778,8 +833,9 @@ export class ActorCriticBrain {
     const fromKey = this.getPoseKey6D(qFrom);
     const toKey = this.getPoseKey6D(qTo);
     const shiftDist = this.computePoseDistance6D(qFrom, qTo);
-    if (fromKey === toKey || shiftDist < 0.22) {
-      return false; // Ignore micro-jitter within the same quantized pose cell
+    const torsoShiftDist = this.computeTorsoDistance4D(qFrom, qTo);
+    if (fromKey === toKey || shiftDist < 0.22 || torsoShiftDist < 0.18) {
+      return false; // Ignore micro-jitter or leg-only waving that did not move the torso
     }
 
     if (!this.poseTransitionMemory) this.poseTransitionMemory = new Map();
@@ -843,7 +899,10 @@ export class ActorCriticBrain {
           candidatePose = this._mutatePose6D(this._crossoverPose6D(startPose, this.poseGoal), this.poseGoal, 0.85);
         }
         const candKey = this.getPoseKey6D(candidatePose);
-        const isDistinct = candKey !== fromKey && this.computePoseDistance6D(startPose, candidatePose) >= 0.22;
+        const isDistinct =
+          candKey !== fromKey &&
+          this.computePoseDistance6D(startPose, candidatePose) >= 0.22 &&
+          this.computeTorsoDistance4D(startPose, candidatePose) >= 0.18;
         const isKnownUnreachable = this.poseUnreachableMemory && this.poseUnreachableMemory.has(`${fromKey}->${candKey}`);
         if (isDistinct && !isKnownUnreachable) {
           break;
@@ -898,7 +957,8 @@ export class ActorCriticBrain {
         }
         const fromDist = this.computePoseDistance6D(item.pFrom, curPose);
         const shiftFromCur = this.computePoseDistance6D(item.pTo, curPose);
-        if (fromDist <= 0.45 && shiftFromCur >= 0.22) {
+        const torsoShiftFromCur = this.computeTorsoDistance4D(item.pTo, curPose);
+        if (fromDist <= 0.45 && shiftFromCur >= 0.22 && torsoShiftFromCur >= 0.18) {
           const toMutantMatch = this.computePoseMatchPct6D(item.pTo, targetMutant.pose);
           const toGoalMatch = this.computePoseMatchPct6D(item.pTo, this.poseGoal);
           const approachesMutant = toMutantMatch >= curMutantMatch + 4.0 && toGoalMatch >= curGoalMatch - 2.0;
@@ -946,16 +1006,22 @@ export class ActorCriticBrain {
       }
     } else if (this.gaBestVector && this.gaBestVector.length === this.actDim) {
       if (this.gaPopulation.length < this.gaPopSize) {
-        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector, 0.40, 0.40), 'мутация'));
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector, 0.45, 0.48), 'мутация'));
       }
       if (this.gaPopulation.length < this.gaPopSize) {
-        const randPartner = this._randomDuckVector();
+        const randPartner = this._contrastiveDuckVector();
         this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(this.gaBestVector, randPartner), 'кроссовер'));
       }
     }
 
     while (this.gaPopulation.length < this.gaPopSize) {
-      this.gaPopulation.push(this._makeGACandidate(this._randomDuckVector(), 'случайный'));
+      const useContrast = this.gaPopulation.length === this.gaPopSize - 2;
+      this.gaPopulation.push(
+        this._makeGACandidate(
+          useContrast ? this._contrastiveDuckVector() : this._randomDuckVector(),
+          useContrast ? 'мутация-рывок' : 'случайный'
+        )
+      );
     }
   }
 
@@ -1174,9 +1240,25 @@ export class ActorCriticBrain {
       const pAfter = this.extractDuckPose6D(lastObs, endComY);
 
       const poseShiftDist = this.computePoseDistance6D(pStart, pAfter);
-      const poseChanged = (this.getPoseKey6D(pStart) !== this.getPoseKey6D(pAfter)) && (poseShiftDist >= 0.22);
+      const torsoShiftDist = this.computeTorsoDistance4D(pStart, pAfter);
+      // A physical pose transition requires both 6D shift >= 0.22 AND 4D torso shift >= 0.18
+      // so waving legs in the air while lying on the back does not count as a pose transition!
+      const poseChanged =
+        this.getPoseKey6D(pStart) !== this.getPoseKey6D(pAfter) &&
+        poseShiftDist >= 0.22 &&
+        torsoShiftDist >= 0.18;
 
-      const matchPct = this.computePoseMatchPct6D(pAfter, targetMutant.pose);
+      const rawMatchPct = this.computePoseMatchPct6D(pAfter, targetMutant.pose);
+      const startMutantDist = this.computePoseDistance6D(pStart, targetMutant.pose);
+      const afterMutantDist = this.computePoseDistance6D(pAfter, targetMutant.pose);
+      const startTorsoMutantDist = this.computeTorsoDistance4D(pStart, targetMutant.pose);
+      const afterTorsoMutantDist = this.computeTorsoDistance4D(pAfter, targetMutant.pose);
+      const didApproachMutant =
+        torsoShiftDist >= 0.18 &&
+        (afterMutantDist < startMutantDist - 0.04 || afterTorsoMutantDist < startTorsoMutantDist - 0.04);
+      // Require actual physical approach toward targetMutant (D(P_after, P_mutant) < D(P_start, P_mutant))
+      // so standing still near a mutant never falsely scores >= 68% reachable!
+      const matchPct = didApproachMutant ? rawMatchPct : Math.min(rawMatchPct, 52.0);
       const startGoalPct = this.computePoseMatchPct6D(pStart, this.poseGoal);
       const goalPct = this.computePoseMatchPct6D(pAfter, this.poseGoal);
       const goalGain = Math.max(0, goalPct - startGoalPct);
