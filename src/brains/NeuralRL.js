@@ -618,10 +618,13 @@ export class ActorCriticBrain {
     this._prevPoseKey = null;
     this._recentPoseKeys = [];
     if (prevKey !== this.poseGoalKey) {
-      // Clear goal-specific elite vector so a vector for a previous goal doesn't pull away from the new goal
+      // Clear goal-specific elite vector and melody so a previous goal doesn't pull away from the new goal
       this.gaBestFitness = 0;
       this.gaBestVector = null;
       this.gaSecondBestVector = null;
+      this.bestMelodyFitness = 0;
+      this.bestMelodyNotes = null;
+      this.secondBestMelodyNotes = null;
     }
     if (this.poseUnreachableMemory) {
       this.poseUnreachableMemory.clear();
@@ -737,12 +740,43 @@ export class ActorCriticBrain {
   }
 
   /**
+   * Mutates a 2-pose melody [P_1, P_2] by picking ONE of the two notes and changing ONE coordinate in [-5%, +5%].
+   */
+  _mutateMelody(notes, goalPose = this.poseGoal) {
+    const p1 = Float64Array.from(notes[0]);
+    const p2 = Float64Array.from(notes[1]);
+    if (Math.random() < 0.5) {
+      // Mutate Note 1 freely (preparatory swing / grouping without goal bias)
+      return [this._mutatePose6D(p1, goalPose, 0.0), p2];
+    }
+    // Mutate Note 2 toward goalPose
+    return [p1, this._mutatePose6D(p2, goalPose, 0.65)];
+  }
+
+  /**
+   * Crosses over two 2-pose melodies M_A = [P_1A, P_2A] and M_B = [P_1B, P_2B],
+   * either by swapping Note 1 and Note 2 or by coordinate-wise crossover of each note.
+   */
+  _crossoverMelodies(notesA, notesB) {
+    if (Math.random() < 0.55) {
+      return [
+        Float64Array.from(notesA[0]),
+        Float64Array.from(notesB[1])
+      ];
+    }
+    return [
+      this._crossoverPose6D(notesA[0], notesB[0]),
+      this._crossoverPose6D(notesA[1], notesB[1])
+    ];
+  }
+
+  /**
    * Generates a random 14-dimensional servo command vector v in [-1.0, +1.0]^14 for the Duck.
    */
   _randomDuckVector() {
     const v = new Float64Array(this.actDim);
     for (let a = 0; a < this.actDim; a++) {
-      v[a] = Math.random() * 2.0 - 1.0;
+      v[a] = Number(((Math.random() * 1.6 - 0.8)).toFixed(4));
     }
     return v;
   }
@@ -839,13 +873,16 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Initializes GA #1 (Pose Population) anchored at the Duck's current continuous pose P_current.
-   * Uses single-gene ±5% mutations (_mutatePose6D) and crossover (_crossoverPose6D).
+   * Initializes GA #1 (2-Pose Melody Population) anchored at the Duck's current continuous pose P_current.
+   * Each candidate is a 2-beat phrase [P_1, P_2]:
+   *   - Note 1 (P_1): preparatory pose (free single-gene ±5% mutation without requiring closeness to P_goal).
+   *   - Note 2 (P_2): exit pose toward P_goal.
    */
   _initPoseGAPopulation(basePose = null) {
     const startPose = this._clampPose6D(basePose || this.poseCurrent || [-0.75, -0.25, 0.50, 0.0, 0.0, 0.0]);
     this.poseCurrent = startPose;
     const fromKey = this.getPoseKey6D(startPose);
+    const startGoalPct = this.computePoseMatchPct6D(startPose, this.poseGoal);
 
     this.posePopSize = 4;
     this.poseCursor = 0;
@@ -853,31 +890,49 @@ export class ActorCriticBrain {
 
     const origins = ['шаг к цели', 'мутация позы', 'кроссовер к цели', 'прямой шаг к цели'];
     for (let m = 0; m < this.posePopSize; m++) {
-      let candidatePose = null;
+      let note1 = null;
+      let note2 = null;
       for (let attempt = 0; attempt < 8; attempt++) {
-        if (m === 0) {
-          candidatePose = this._mutatePose6D(startPose, this.poseGoal, 0.70);
+        if (m === 0 && this.bestMelodyNotes && this.bestMelodyNotes.length === 2) {
+          const mutated = this._mutateMelody(this.bestMelodyNotes, this.poseGoal);
+          note1 = mutated[0];
+          note2 = mutated[1];
         } else if (m === 1) {
-          candidatePose = this._mutatePose6D(startPose, this.poseGoal, 0.0);
+          // Preparatory Note 1 (free ±5% single-gene exploration) -> Note 2 (step toward goal)
+          note1 = this._mutatePose6D(startPose, this.poseGoal, 0.0);
+          note2 = this._mutatePose6D(note1, this.poseGoal, 0.75);
         } else if (m === 2) {
-          candidatePose = this._crossoverPose6D(startPose, this.poseGoal);
+          if (this.bestMelodyNotes && this.secondBestMelodyNotes) {
+            const crossed = this._crossoverMelodies(this.bestMelodyNotes, this.secondBestMelodyNotes);
+            note1 = crossed[0];
+            note2 = crossed[1];
+          } else {
+            note1 = this._mutatePose6D(startPose, this.poseGoal, 0.0);
+            note2 = this._crossoverPose6D(note1, this.poseGoal);
+          }
         } else {
-          candidatePose = this._mutatePose6D(this._crossoverPose6D(startPose, this.poseGoal), this.poseGoal, 0.85);
+          note1 = this._mutatePose6D(startPose, this.poseGoal, 0.35);
+          note2 = this._mutatePose6D(this._crossoverPose6D(note1, this.poseGoal), this.poseGoal, 0.85);
         }
-        const candKey = this.getPoseKey6D(candidatePose);
-        const isDistinct = this.computePoseDistance6D(startPose, candidatePose) >= 1e-4;
+        const candKey1 = this.getPoseKey6D(note1);
+        const isDistinct = this.computePoseDistance6D(startPose, note1) >= 1e-4;
         const isKnownUnreachable =
-          candKey !== fromKey &&
+          candKey1 !== fromKey &&
           this.poseUnreachableMemory &&
-          this.poseUnreachableMemory.has(`${fromKey}->${candKey}`);
+          this.poseUnreachableMemory.has(`${fromKey}->${candKey1}`);
         if (isDistinct && !isKnownUnreachable) {
           break;
         }
       }
       this.posePop.push({
-        pose: candidatePose,
-        poseKey: this.getPoseKey6D(candidatePose),
+        notes: [note1, note2],
+        noteIndex: 0,
+        pose: note1,
+        poseKey: this.getPoseKey6D(note1),
         origin: origins[m],
+        melodyStartPose: Float64Array.from(startPose),
+        melodyStartGoalPct: startGoalPct,
+        note1ReachedPose: null,
         fitness: null,
         reachable: null,
         matchPct: 0,
@@ -889,7 +944,7 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Initializes GA #2 (Personal Servo Command Vector GA) for the active Pose Mutant in GA #1.
+   * Initializes GA #2 (Personal Servo Command Vector GA) for the active note (Note 1 or Note 2) of the current Melody in GA #1.
    * Uses elitism + single-gene ±5% mutations ('мутация') + crossover ('кроссовер') so 5% steps accumulate smoothly.
    */
   _initServoGAForCurrentPoseMutant() {
@@ -899,13 +954,17 @@ export class ActorCriticBrain {
     }
     const pIdx = Math.max(0, Math.min(this.posePop.length - 1, this.poseCursor || 0));
     const targetMutant = this.posePop[pIdx];
+    const activeNoteIdx = targetMutant.noteIndex || 0;
+    if (targetMutant.notes && targetMutant.notes[activeNoteIdx]) {
+      targetMutant.pose = targetMutant.notes[activeNoteIdx];
+      targetMutant.poseKey = this.getPoseKey6D(targetMutant.pose);
+    }
     const curPose = this.poseCurrent || Float64Array.from([-0.75, -0.25, 0.50, 0.0, 0.0, 0.0]);
 
     this.gaPopSize = 4;
     this.gaCursor = 0;
     this.gaPopulation = [];
 
-    const curKey = this.getPoseKey6D(curPose);
     const curMutantMatch = this.computePoseMatchPct6D(curPose, targetMutant.pose);
     const curGoalMatch = this.computePoseMatchPct6D(curPose, this.poseGoal);
     const recentKeys = this._recentPoseKeys || [];
@@ -923,10 +982,15 @@ export class ActorCriticBrain {
         if (fromDist <= 0.45 && shiftFromCur >= 0.02) {
           const toMutantMatch = this.computePoseMatchPct6D(item.pTo, targetMutant.pose);
           const toGoalMatch = this.computePoseMatchPct6D(item.pTo, this.poseGoal);
-          const approachesMutant = toMutantMatch >= curMutantMatch + 0.5 && toGoalMatch >= curGoalMatch - 2.0;
-          const approachesGoal = toGoalMatch >= curGoalMatch + 0.5 && toMutantMatch >= curMutantMatch - 2.0;
+          // On Note 1 (activeNoteIdx === 0), allow any transition that approaches Note 1 even if goalMatch temporarily dips!
+          const approachesMutant = activeNoteIdx === 0
+            ? (toMutantMatch >= curMutantMatch + 0.3)
+            : (toMutantMatch >= curMutantMatch + 0.5 && toGoalMatch >= curGoalMatch - 2.0);
+          const approachesGoal = activeNoteIdx === 1 && toGoalMatch >= curGoalMatch + 0.5 && toMutantMatch >= curMutantMatch - 2.0;
           if (approachesMutant || approachesGoal) {
-            const score = 0.60 * toMutantMatch + 0.40 * toGoalMatch - 18.0 * fromDist;
+            const score = activeNoteIdx === 0
+              ? (0.90 * toMutantMatch + 0.10 * toGoalMatch - 18.0 * fromDist)
+              : (0.55 * toMutantMatch + 0.45 * toGoalMatch - 18.0 * fromDist);
             matchingMemories.push({ item, score });
           }
         }
@@ -1001,7 +1065,7 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Returns the currently active GA #2 servo vector candidate and GA #1 pose mutant metadata.
+   * Returns the currently active GA #2 servo vector candidate and GA #1 2-pose melody metadata.
    */
   getCurrentDuckGACandidate() {
     if (!this.posePop || this.posePop.length === 0 || !this.gaPopulation || this.gaPopulation.length === 0) {
@@ -1012,6 +1076,8 @@ export class ActorCriticBrain {
     const sIdx = Math.max(0, Math.min(this.gaPopulation.length - 1, this.gaCursor || 0));
     const servoCand = this.gaPopulation[sIdx];
     const curGoalPct = this.poseCurrent ? Math.round(this.computePoseMatchPct6D(this.poseCurrent, this.poseGoal)) : 35;
+    const noteIdx = poseMutant ? (poseMutant.noteIndex || 0) + 1 : 1;
+    const noteCount = poseMutant && poseMutant.notes ? poseMutant.notes.length : 2;
 
     return {
       vec: servoCand.vec,
@@ -1024,6 +1090,8 @@ export class ActorCriticBrain {
       poseIdx: pIdx + 1,
       posePopSize: this.posePop.length,
       poseOrigin: poseMutant ? poseMutant.origin : 'шаг к цели',
+      noteIdx,
+      noteCount,
       curGoalPct,
       memSize: this.poseTransitionMemory ? this.poseTransitionMemory.size : 0
     };
@@ -1185,6 +1253,11 @@ export class ActorCriticBrain {
       }
       const pIdx = Math.max(0, Math.min(this.posePop.length - 1, this.poseCursor || 0));
       const targetMutant = this.posePop[pIdx];
+      const activeNoteIdx = targetMutant.noteIndex || 0;
+      if (targetMutant.notes && targetMutant.notes[activeNoteIdx]) {
+        targetMutant.pose = targetMutant.notes[activeNoteIdx];
+        targetMutant.poseKey = this.getPoseKey6D(targetMutant.pose);
+      }
       const sIdx = Math.max(0, Math.min(this.gaPopulation.length - 1, this.gaCursor || 0));
       const cand = this.gaPopulation[sIdx];
 
@@ -1212,7 +1285,11 @@ export class ActorCriticBrain {
       const matchPct = didApproachMutant ? rawMatchPct : Math.min(rawMatchPct, 52.0);
       const startGoalPct = this.computePoseMatchPct6D(pStart, this.poseGoal);
       const goalPct = this.computePoseMatchPct6D(pAfter, this.poseGoal);
+      const melodyStartGoalPct = Number.isFinite(targetMutant.melodyStartGoalPct)
+        ? targetMutant.melodyStartGoalPct
+        : startGoalPct;
       const goalGain = Math.max(0, goalPct - startGoalPct);
+      const melodyGoalGain = Math.max(0, goalPct - melodyStartGoalPct);
 
       const steps = Math.max(1, this._winSteps || 1);
       const minComY = Number.isFinite(this._winMinUpY) ? Math.min(this._winMinUpY, startComY, endComY) : Math.min(startComY, endComY);
@@ -1223,16 +1300,15 @@ export class ActorCriticBrain {
       const risePeak = Math.max(0, maxComY - startComY);
       const riseNet = Math.max(0, endComY - startComY);
 
-      // GA #2 fitness: rewards closeness to target pose mutant + closeness & progress toward active goal pose
-      // (plus CoM lift bonus when goal pose is 'stand')
+      // GA #2 fitness:
+      // - On Note 1 (activeNoteIdx === 0): prioritizes reaching the preparatory pose P_1 (matchPct) without requiring immediate goal gain!
+      // - On Note 2 (activeNoteIdx === 1): rewards reaching P_2 and achieving net progress toward P_goal across the 2-note melody!
       const standLiftBonus = this.poseGoalKey === 'stand'
         ? (2.5 * risePeak + 1.8 * riseNet + 1.0 * holdRatio * maxComY)
-        : (0.018 * goalGain);
-      const fitness =
-        0.012 * matchPct +
-        0.016 * goalPct +
-        0.014 * goalGain +
-        standLiftBonus;
+        : (0.018 * (activeNoteIdx === 0 ? goalGain : melodyGoalGain));
+      const fitness = activeNoteIdx === 0
+        ? (0.022 * matchPct + 0.006 * goalPct + 0.5 * standLiftBonus)
+        : (0.010 * matchPct + 0.018 * goalPct + 0.018 * melodyGoalGain + standLiftBonus);
 
       cand.fitness = fitness;
       cand.maxComY = maxComY;
@@ -1288,17 +1364,21 @@ export class ActorCriticBrain {
         poseGen: this.poseGen,
         poseIdx: pIdx + 1,
         poseMutantIdx: pIdx + 1,
+        noteIdx: activeNoteIdx + 1,
+        noteCount: targetMutant.notes ? targetMutant.notes.length : 2,
         poseOrigin: targetMutant.origin,
         poseMutantOrigin: targetMutant.origin,
         poseChanged,
         poseShiftDist: Number(poseShiftDist.toFixed(3)),
         poseMatchPct: Number(matchPct.toFixed(1)),
         goalMatchPct: Number(goalPct.toFixed(1)),
+        melodyStartGoalPct: Number(melodyStartGoalPct.toFixed(1)),
         memTransitions: this.poseTransitionMemory ? this.poseTransitionMemory.size : 0,
         memUnreachable: this.poseUnreachableMemory ? this.poseUnreachableMemory.size : 0,
         pStart: Array.from(pStart),
         pAfter: Array.from(pAfter),
         pMutant: Array.from(targetMutant.pose),
+        pNotes: targetMutant.notes ? targetMutant.notes.map(n => Array.from(n)) : [Array.from(targetMutant.pose)],
         fitness: Number(fitness.toFixed(3)),
         bestFitness: Number(this.gaBestFitness.toFixed(3)),
         riseCm: Number((risePeak * 100).toFixed(1)),
@@ -1311,12 +1391,56 @@ export class ActorCriticBrain {
         vec: Array.from(cand.vec, v => Number(v.toFixed(2)))
       };
 
-      // Live System Rule: if the Duck's pose genuinely changed AND moved constructively toward the mutant or goal
-      // (not an accidental recoil away from the goal), immediately re-anchor GA #1 around pAfter!
-      const isConstructivePoseShift =
+      const recordMelodyFitness = (finalGoalPct, reachPct) => {
+        const netMelodyGain = Math.max(0, finalGoalPct - melodyStartGoalPct);
+        const mFitness = finalGoalPct * Math.pow(Math.max(0.5, reachPct / 100.0), 2) + 1.5 * netMelodyGain;
+        targetMutant.fitness = mFitness;
+        if (targetMutant.notes && targetMutant.notes.length === 2) {
+          if (mFitness > (this.bestMelodyFitness || 0)) {
+            if (this.bestMelodyNotes) {
+              this.secondBestMelodyNotes = [
+                Float64Array.from(this.bestMelodyNotes[0]),
+                Float64Array.from(this.bestMelodyNotes[1])
+              ];
+            }
+            this.bestMelodyFitness = mFitness;
+            this.bestMelodyNotes = [
+              Float64Array.from(targetMutant.notes[0]),
+              Float64Array.from(targetMutant.notes[1])
+            ];
+          } else if (!this.secondBestMelodyNotes) {
+            this.secondBestMelodyNotes = [
+              Float64Array.from(targetMutant.notes[0]),
+              Float64Array.from(targetMutant.notes[1])
+            ];
+          }
+        }
+      };
+
+      // Two-Beat Melody Execution Rule:
+      // - Beat 1 (activeNoteIdx === 0): as soon as the Duck's torso shifts toward Note 1 (P_1),
+      //   advance this melody to Beat 2 (Note 2 = P_2) from pAfter without requiring Note 1 to be closer to P_goal!
+      if (activeNoteIdx === 0 && poseChanged && (didApproachMutant || matchPct >= 66.0)) {
+        targetMutant.note1ReachedPose = this._clampPose6D(pAfter);
+        targetMutant.noteIndex = 1;
+        targetMutant.pose = targetMutant.notes[1];
+        targetMutant.poseKey = this.getPoseKey6D(targetMutant.notes[1]);
+        targetMutant.matchPct = 0;
+        this.gaGeneration += 1;
+        this._initServoGAForCurrentPoseMutant();
+        this._resetRightingWindow(endComY, 0);
+        return this.getRightingSkillPct();
+      }
+
+      // - Beat 2 (activeNoteIdx === 1): if the second beat constructively approaches P_2 or improves goalPct
+      //   over the start of the melody, evaluate the full 2-note phrase and re-anchor GA #1 at pAfter!
+      const isConstructiveSecondBeat =
+        activeNoteIdx === 1 &&
         poseChanged &&
-        (matchPct >= 66.0 || goalPct >= startGoalPct + 0.3);
-      if (isConstructivePoseShift) {
+        (matchPct >= 66.0 || goalPct >= melodyStartGoalPct + 0.3 || goalPct >= startGoalPct + 0.3);
+      if (isConstructiveSecondBeat) {
+        targetMutant.reachable = true;
+        recordMelodyFitness(goalPct, Math.max(68.0, matchPct));
         this.poseGen += 1;
         this.gaGeneration += 1;
         this._initPoseGAPopulation(pAfter);
@@ -1324,15 +1448,27 @@ export class ActorCriticBrain {
         return this.getRightingSkillPct();
       }
 
-      // Otherwise (Duck remained in the same quantized pose cell), advance GA #2 cursor
+      // Otherwise advance GA #2 cursor for the current note
       this.gaCursor = sIdx + 1;
       if (this.gaCursor >= this.gaPopulation.length) {
         this.gaGeneration += 1;
         const bestMatch = targetMutant.matchPct || 0;
         const fromKey = this.getPoseKey6D(this.poseCurrent || pStart);
-        // Filter #2 (Physical trial outcome): if GA #2 could not reach targetMutant (bestMatch < 68%),
-        // reject this pose mutant as unreachable and record in poseUnreachableMemory!
-        if (bestMatch < 68.0) {
+
+        if (activeNoteIdx === 0) {
+          // Finished all GA #2 attempts on Note 1 (P_1):
+          // If Note 1 was reachable (bestMatch >= 60% or torso shifted), move to Note 2 (P_2)!
+          if (bestMatch >= 60.0 || poseChanged) {
+            targetMutant.note1ReachedPose = this._clampPose6D(pAfter);
+            targetMutant.noteIndex = 1;
+            targetMutant.pose = targetMutant.notes[1];
+            targetMutant.poseKey = this.getPoseKey6D(targetMutant.notes[1]);
+            targetMutant.matchPct = 0;
+            this._initServoGAForCurrentPoseMutant();
+            this._resetRightingWindow(endComY, 0);
+            return this.getRightingSkillPct();
+          }
+          // Filter #2: Note 1 was unreachable -> record in poseUnreachableMemory and reject this melody
           targetMutant.reachable = false;
           targetMutant.fitness = 0;
           if (!this.poseUnreachableMemory) this.poseUnreachableMemory = new Set();
@@ -1342,12 +1478,23 @@ export class ActorCriticBrain {
             this.poseUnreachableMemory.delete(firstKey);
           }
         } else {
-          targetMutant.reachable = true;
-          const mGoalPct = this.computePoseMatchPct6D(targetMutant.pose, this.poseGoal);
-          targetMutant.fitness = mGoalPct * Math.pow(bestMatch / 100.0, 2);
+          // Finished all GA #2 attempts on Note 2 (P_2): evaluate the completed 2-note melody [P_1 -> P_2]
+          if (bestMatch < 60.0 && goalPct < melodyStartGoalPct) {
+            targetMutant.reachable = false;
+            targetMutant.fitness = 0;
+            if (!this.poseUnreachableMemory) this.poseUnreachableMemory = new Set();
+            this.poseUnreachableMemory.add(`${fromKey}->${targetMutant.poseKey}`);
+            if (this.poseUnreachableMemory.size > 120) {
+              const firstKey = this.poseUnreachableMemory.values().next().value;
+              this.poseUnreachableMemory.delete(firstKey);
+            }
+          } else {
+            targetMutant.reachable = true;
+            recordMelodyFitness(goalPct, Math.max(60.0, bestMatch));
+          }
         }
 
-        // Advance to next Pose Mutant in GA #1
+        // Advance to next 2-Pose Melody in GA #1
         this.poseCursor = pIdx + 1;
         if (this.poseCursor >= this.posePop.length) {
           this.poseGen += 1;
@@ -2091,7 +2238,7 @@ export class PPOTrainer {
 
       if (isDuck0) {
         const cand = this.brain.getCurrentDuckGACandidate();
-        this.metaState.reasonText = `Цель: «${goalInfo.labelShortRu}» (${cand.curGoalPct}%) | ГА1 Поза #${cand.poseGen}.${cand.poseIdx} (${cand.poseOrigin}) | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех.`;
+        this.metaState.reasonText = `Цель: «${goalInfo.labelShortRu}» (${cand.curGoalPct}%) | ГА1 Мелодия #${cand.poseGen}.${cand.poseIdx} [Нота ${cand.noteIdx}/${cand.noteCount}, ${cand.poseOrigin}] | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех.`;
       } else {
         this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка подняться #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
       }
@@ -3184,7 +3331,7 @@ export class NESTrainer {
 
       if (isDuck0) {
         const cand = this.brain.getCurrentDuckGACandidate();
-        this.metaState.reasonText = `Цель: «${goalInfo.labelShortRu}» (${cand.curGoalPct}%) | ГА1 Поза #${cand.poseGen}.${cand.poseIdx} (${cand.poseOrigin}) | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех.`;
+        this.metaState.reasonText = `Цель: «${goalInfo.labelShortRu}» (${cand.curGoalPct}%) | ГА1 Мелодия #${cand.poseGen}.${cand.poseIdx} [Нота ${cand.noteIdx}/${cand.noteCount}, ${cand.poseOrigin}] | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех.`;
       } else {
         this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка подняться #${this.metaState.rightingAttempts}`;
       }

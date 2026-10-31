@@ -453,6 +453,10 @@ const singleGeneOk14 =
   Math.abs(testMut14[changedIndices14[0]] - testParent14[changedIndices14[0]]) <=
     Math.max(0.05, Math.abs(testParent14[changedIndices14[0]])) * 0.0505;
 
+const hasTwoNoteMelodies =
+  duckSideSim.brain.posePop.every(m => Array.isArray(m.notes) && m.notes.length === 2 && m.notes[0].length === 6 && m.notes[1].length === 6) &&
+  gaHist.some(h => h.noteIdx === 2);
+
 const transMemLen = duckSideSim.brain.poseTransitionMemory.size;
 console.log(
   `Двухуровневый ГА Утки (180 шагов = ${gaHist.length} векторов ГА2, пок. ГА1: ${duckSideSim.brain.poseGen}, пок. ГА2: ${duckSideSim.brain.gaGeneration}): ` +
@@ -465,13 +469,14 @@ if (
   gaHist.length < 4 ||
   !isQuantizedOnGrid ||
   !singleGeneOk14 ||
+  !hasTwoNoteMelodies ||
   duckSideSim.brain.posePop.length !== 4 ||
   !Number.isFinite(bestGAFitness) ||
   bestGAFitness <= 0.15 ||
   !hasMutations ||
   !hasPoseEvolution
 ) {
-  console.error('ОШИБКА: Двухуровневый ГА Утки (ГА №1 Поз + ГА №2 Серво) должен мутировать по 1 числу на ±5%, эволюционировать позы и 14D-векторы без взрывов мощности (> 180 Вт)!');
+  console.error('ОШИБКА: Двухуровневый ГА Утки (ГА №1 Двухтактных Мелодий Поз + ГА №2 Серво) должен мутировать по 1 числу на ±5%, проходить Ноту 1 -> Ноту 2 и эволюционировать без взрывов мощности (> 180 Вт)!');
   process.exit(1);
 }
 
