@@ -157,14 +157,23 @@ const labelAmbitionVal = document.getElementById('labelAmbitionVal');
 const btnToggleFreeze = document.getElementById('btnToggleFreeze');
 const duckPoseGoalField = document.getElementById('duckPoseGoalField');
 const duckPoseGoalButtons = document.getElementById('duckPoseGoalButtons');
+const ambitionControlField = document.getElementById('ambitionControlField');
+const ambitionRangeField = document.getElementById('ambitionRangeField');
 
 let currentAmbitionPreset = 'min';
 let currentDuckPoseGoal = 'stand';
 
 function syncDuckPoseGoalUI(morphKey, poseGoalKey = currentDuckPoseGoal) {
   currentDuckPoseGoal = poseGoalKey || 'stand';
+  const isDuck = morphKey === 'duck';
   if (duckPoseGoalField) {
-    duckPoseGoalField.hidden = morphKey !== 'duck';
+    duckPoseGoalField.hidden = !isDuck;
+  }
+  if (ambitionControlField) {
+    ambitionControlField.hidden = isDuck;
+  }
+  if (ambitionRangeField) {
+    ambitionRangeField.hidden = isDuck;
   }
   if (duckPoseGoalButtons) {
     for (const b of duckPoseGoalButtons.querySelectorAll('button[data-pose-goal]')) {

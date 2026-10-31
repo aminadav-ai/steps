@@ -1619,27 +1619,28 @@ export class PPOTrainer {
 
     // Homeostatic Meta-Plasticity Sense ("Чутьё нейросети: нужно ли дообучаться или нет")
     const isDuckBrain = brain.morphologyKey === 'duck';
+    const initGoalInfo = isDuckBrain ? brain.getDuckPoseGoalInfo() : null;
     this.maxCpgGain = 1.95;
     this.minFoodsToConsolidate = isDuckBrain ? 0 : 2;
     this.alwaysLearn = false;
     this.manualFreeze = false;
 
     this.metaState = {
-      mode: 'LEARNING_WALK', // 'LEARNING_WALK' | 'CONSOLIDATED' | 'LEARNING_RIGHTING'
+      mode: isDuckBrain ? 'LEARNING_RIGHTING' : 'LEARNING_WALK', // 'LEARNING_WALK' | 'CONSOLIDATED' | 'LEARNING_RIGHTING'
       ambitionPreset: 'min',
-      poseGoalKey: isDuckBrain ? (brain.poseGoalKey || 'stand') : undefined,
+      poseGoalKey: isDuckBrain ? initGoalInfo.key : undefined,
       isLearningActive: true,
       modeTitle: isDuckBrain
-        ? '🟢 АКТИВНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ'
+        ? `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${initGoalInfo.labelRu}»`
         : '🟢 АКТИВНОЕ ОБУЧЕНИЕ: БАЗОВЫЙ ШАГ К ЦЕЛИ',
       reasonText: isDuckBrain
-        ? 'Единая задача: максимизация высоты центра масс (ЦМ)'
+        ? `Задана целевая поза «${initGoalInfo.labelShortRu}» — ГА №1 ищет цепочку поз, ГА №2 подбирает команды сервоприводов`
         : 'Формирование стабильного базового навыка ходьбы и наведения на цель',
       competenceEMA: isDuckBrain ? 0.265 : 0.04,
       targetCompetence: isDuckBrain ? 0.235 : 0.18,
       relearnThreshold: isDuckBrain ? 0.205 : 0.125,
       surpriseEMA: 0.25,
-      needToLearnPct: isDuckBrain ? 35 : 88,
+      needToLearnPct: isDuckBrain ? 100 : 88,
       stableEpochsCount: 0,
       lowVelEpochsCount: 0,
       stallStepsCount: 0,
@@ -1707,50 +1708,21 @@ export class PPOTrainer {
 
     if (isDuckBrain) {
       this.minFoodsToConsolidate = 0;
-      if (presetOrTarget === 'min') {
-        this.metaState.ambitionPreset = 'min';
-        this.metaState.targetCompetence = 0.235;
-        this.metaState.relearnThreshold = 0.205;
-        this.alwaysLearn = false;
-      } else if (presetOrTarget === 'bound') {
-        this.metaState.ambitionPreset = 'bound';
-        this.metaState.targetCompetence = 0.268;
-        this.metaState.relearnThreshold = 0.245;
-        this.alwaysLearn = false;
-      } else if (presetOrTarget === 'turbo') {
-        this.metaState.ambitionPreset = 'turbo';
-        this.metaState.targetCompetence = 0.280;
-        this.metaState.relearnThreshold = 0.252;
-        this.alwaysLearn = false;
-      } else if (presetOrTarget === 'infinite') {
+      const goalInfo = this.brain.getDuckPoseGoalInfo();
+      this.metaState.poseGoalKey = goalInfo.key;
+      if (presetOrTarget === 'infinite' || (typeof presetOrTarget === 'number' && presetOrTarget >= 0.355)) {
         this.metaState.ambitionPreset = 'infinite';
-        this.metaState.targetCompetence = 0.360;
-        this.metaState.relearnThreshold = 0.280;
         this.alwaysLearn = true;
-      } else if (typeof presetOrTarget === 'number') {
-        const t = Math.max(0.22, Math.min(0.36, presetOrTarget));
-        this.metaState.ambitionPreset = 'custom';
-        this.metaState.targetCompetence = Number(t.toFixed(3));
-        this.metaState.relearnThreshold = Number((t - 0.030).toFixed(3));
-        this.alwaysLearn = t >= 0.355;
+      } else {
+        this.metaState.ambitionPreset = typeof presetOrTarget === 'string' ? presetOrTarget : 'min';
+        this.alwaysLearn = false;
       }
-      if (this.metaState.mode !== 'LEARNING_RIGHTING') {
-        if (this.alwaysLearn || this.metaState.competenceEMA < this.metaState.targetCompetence) {
-          this.metaState.mode = 'LEARNING_WALK';
-          this.metaState.isLearningActive = true;
-          this.metaState.stableEpochsCount = 0;
-          this.metaState.needToLearnPct = this.alwaysLearn ? 100 : 65;
-          this.metaState.modeTitle = this.alwaysLearn
-            ? '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ'
-            : '🟢 АКТИВНОЕ ОБУЧЕНИЕ: ПОДЪЁМ ЦЕНТРА МАСС';
-          this.metaState.reasonText = `Утка стремится поднять и удерживать ЦМ ≥ ${this.metaState.targetCompetence.toFixed(2)} м`;
-        } else {
-          this.metaState.mode = 'CONSOLIDATED';
-          this.metaState.isLearningActive = false;
-          this.metaState.needToLearnPct = 0;
-          this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
-          this.metaState.reasonText = `Высота ЦМ (${this.metaState.competenceEMA.toFixed(2)} м) ≥ порога ${this.metaState.targetCompetence.toFixed(2)} м — обучение остановлено`;
-        }
+      if (this.metaState.mode !== 'LEARNING_RIGHTING' && this.metaState.mode !== 'CONSOLIDATED') {
+        this.metaState.mode = 'LEARNING_RIGHTING';
+        this.metaState.isLearningActive = true;
+        this.metaState.needToLearnPct = 100;
+        this.metaState.modeTitle = `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${goalInfo.labelRu}»`;
+        this.metaState.reasonText = `Задана целевая поза «${goalInfo.labelShortRu}» — ГА №1 ищет цепочку поз, ГА №2 подбирает команды сервоприводов`;
       }
       return;
     }
@@ -1962,23 +1934,14 @@ export class PPOTrainer {
 
     let inDuckGoalPose = false;
     if (isDuck0) {
-      if (this.brain.poseGoalKey === 'stand') {
-        inDuckGoalPose =
-          comY0 >= targetCom0 &&
-          upY0 >= 0.70 &&
-          (!c0.torsoTop || !c0.torsoBottom || c0.torsoTop.pos.y > c0.torsoBottom.pos.y + 0.14);
-      } else {
-        inDuckGoalPose = this.brain.isDuckInGoalPose(c0, comY0);
-      }
+      inDuckGoalPose = this.brain.isDuckInGoalPose(c0, comY0);
     }
 
     const isPhysicallyTiltedOnBack =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
       (isDuck0
-        ? (this.brain.poseGoalKey === 'stand'
-            ? (((comY0 < (this.alwaysLearn ? (this.metaState.relearnThreshold || 0.238) : 0.205)) || upY0 < 0.45) && !this.manualFreeze)
-            : (!inDuckGoalPose && !this.manualFreeze))
+        ? (!inDuckGoalPose && !this.manualFreeze)
         : (upY0 < 0.22));
     const confirmDelay = isDuck0 ? 1 : (this.overturnConfirmDelay || 20);
 
@@ -2083,9 +2046,9 @@ export class PPOTrainer {
       return;
     }
 
-    // 2. If walker just recovered its target Center of Mass / upright posture!
-    if (this.wasOverturned && isRecoveredUpright) {
-      this._completeRightingRecovery(comY0);
+    // 2. If walker just recovered its target pose / upright posture!
+    if ((this.wasOverturned || (isDuck0 && this.metaState.mode !== 'CONSOLIDATED')) && isRecoveredUpright) {
+      this._completeRightingRecovery(comY0, this.wasOverturned ? null : (c0.lastAction || new Float64Array(this.brain.actDim)));
     }
 
     const isTrainingWalk = this.metaState.mode === 'LEARNING_WALK';
@@ -2095,10 +2058,15 @@ export class PPOTrainer {
       const obs = c.getObservation();
       const isLeader = w === 0;
 
-      // If the Duck achieved a non-standing target pose ('sit', 'lie_back', 'lie_belly'), hold it with the learned GA servo vector!
-      const holdPoseVec = (isDuck0 && this.brain.poseGoalKey !== 'stand' && this.brain.poseGoalHoldVectors)
+      // If the Duck achieved its target pose ('stand', 'sit', 'lie_back', 'lie_belly'), hold it with the learned GA servo vector!
+      const savedHoldVec = (isDuck0 && this.brain.poseGoalHoldVectors)
         ? this.brain.poseGoalHoldVectors[this.brain.poseGoalKey]
         : null;
+      const holdPoseVec = savedHoldVec || (
+        isDuck0 && this.brain.poseGoalKey !== 'stand' && inDuckGoalPose
+          ? (c.lastAction && c.lastAction.length === this.brain.actDim ? c.lastAction : new Float64Array(this.brain.actDim))
+          : null
+      );
       if (holdPoseVec && holdPoseVec.length === this.brain.actDim) {
         const act = Float64Array.from(holdPoseVec);
         const { value } = this.brain.forwardCritic(obs, isLeader);
@@ -2145,7 +2113,8 @@ export class PPOTrainer {
     this._pendingStep = { isRightingStep: false, stepObs, stepAct, stepLogProb, stepVal };
   }
 
-  _completeRightingRecovery(recoveredComY = null) {
+  _completeRightingRecovery(recoveredComY = null, explicitHoldVec = null) {
+    const didComeFromGA = this.wasOverturned;
     this.wasOverturned = false;
     this.uprightHoldSteps = 0;
     this.overturnConfirmSteps = 0;
@@ -2161,9 +2130,11 @@ export class PPOTrainer {
       const cand = this.brain.getCurrentDuckGACandidate();
       const goalInfo = this.brain.getDuckPoseGoalInfo();
       this.metaState.poseGoalKey = goalInfo.key;
-      if (cand && cand.vec) {
+      if (didComeFromGA && cand && cand.vec) {
         this.brain.rememberDuckGAVector(cand.vec, 2.5, recoveredComY || 0.26);
         this.brain.rememberGoalHoldVector(goalInfo.key, cand.vec);
+      } else if (explicitHoldVec && goalInfo.key !== 'stand') {
+        this.brain.rememberGoalHoldVector(goalInfo.key, explicitHoldVec);
       }
       if (typeof recoveredComY === 'number') {
         this.metaState.competenceEMA = Number(Math.max(this.metaState.competenceEMA, recoveredComY).toFixed(3));
@@ -2398,48 +2369,32 @@ export class PPOTrainer {
     const rolloutLen = Math.max(1, this.bufObs.length || this.rolloutSteps);
 
     if (isDuck0) {
-      const meanRolloutComY = (this.epochVelSum || 0) / rolloutLen;
       const currentComY = c0.smoothedComY || c0.body.getCenterOfMass().y;
-      const approxComY = 0.6 * currentComY + 0.4 * (meanRolloutComY > 0 ? meanRolloutComY : currentComY);
       this.metaState.competenceEMA = Number(
-        (0.65 * this.metaState.competenceEMA + 0.35 * approxComY).toFixed(3)
+        (0.65 * this.metaState.competenceEMA + 0.35 * currentComY).toFixed(3)
       );
       this.metaState.surpriseEMA = Number(
         (0.75 * this.metaState.surpriseEMA + 0.25 * meanTdSurprise).toFixed(3)
       );
-      const comp = this.metaState.competenceEMA;
-      const target = this.metaState.targetCompetence || 0.215;
+      const goalInfo = this.brain.getDuckPoseGoalInfo();
+      this.metaState.poseGoalKey = goalInfo.key;
+      const inGoal = this.brain.isDuckInGoalPose(c0, currentComY);
 
-      if (this.minTrainEpochsRemaining > 0) {
-        this.minTrainEpochsRemaining -= 1;
-      }
-      if (this.manualFreeze) {
-        this.metaState.mode = 'CONSOLIDATED';
-        this.metaState.isLearningActive = false;
-        this.metaState.needToLearnPct = 0;
-        return;
-      }
-      if (this.alwaysLearn) {
-        this.metaState.mode = 'LEARNING_WALK';
-        this.metaState.isLearningActive = true;
-        this.metaState.needToLearnPct = 100;
-        this.metaState.modeTitle = '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ';
-        this.metaState.reasonText = `Непрерывная максимизация высоты центра масс (ЦМ=${comp.toFixed(2)} м)`;
-        return;
-      }
-      if (comp >= target && !(this.minTrainEpochsRemaining > 0)) {
+      if (this.manualFreeze || inGoal || this.metaState.mode === 'CONSOLIDATED') {
         this.metaState.mode = 'CONSOLIDATED';
         this.metaState.isLearningActive = false;
         this.metaState.stableEpochsCount += 1;
         this.metaState.needToLearnPct = 0;
-        this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
-        this.metaState.reasonText = `Утка справляется с задачей (высота ЦМ ${comp.toFixed(2)} м ≥ ${target.toFixed(2)} м) — обучение прекращено`;
+        if (!this.manualFreeze) {
+          this.metaState.modeTitle = `🛡️ ПОЗА ДОСТИГНУТА: УТКА УДЕРЖИВАЕТ «${goalInfo.labelRu}»`;
+          this.metaState.reasonText = `Утка удерживает целевую позу «${goalInfo.labelShortRu}» (выполнено целей: ${this.metaState.rightingSuccesses}) — обучение остановлено`;
+        }
       } else {
-        this.metaState.mode = 'LEARNING_WALK';
+        this.metaState.mode = 'LEARNING_RIGHTING';
         this.metaState.isLearningActive = true;
-        this.metaState.needToLearnPct = Math.round(Math.max(25, Math.min(95, ((target - comp) / target) * 200 + 35)));
-        this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ';
-        this.metaState.reasonText = `Утка стремится максимизировать высоту центра масс (ЦМ=${comp.toFixed(2)} м → ${target.toFixed(2)} м)`;
+        this.metaState.needToLearnPct = 100;
+        this.metaState.modeTitle = `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${goalInfo.labelRu}»`;
+        this.metaState.reasonText = `Поиск перехода в целевую позу «${goalInfo.labelShortRu}»`;
       }
       return;
     }
@@ -2898,21 +2853,23 @@ export class NESTrainer {
     this.modeBeforeOverturn = 'LEARNING_WALK';
 
     const isDuckBrain = brain.morphologyKey === 'duck';
+    const initGoalInfo = isDuckBrain ? brain.getDuckPoseGoalInfo() : null;
     this.metaState = {
-      mode: 'LEARNING_WALK',
+      mode: isDuckBrain ? 'LEARNING_RIGHTING' : 'LEARNING_WALK',
+      poseGoalKey: isDuckBrain ? initGoalInfo.key : undefined,
       isLearningActive: true,
       modeTitle: isDuckBrain
-        ? '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ'
+        ? `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${initGoalInfo.labelRu}»`
         : '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): ХОДЬБА К ЦЕЛИ',
       reasonText: isDuckBrain
-        ? 'Единая задача: максимизация высоты центра масс (ЦМ)'
+        ? `Задана целевая поза «${initGoalInfo.labelShortRu}» — ГА №1 ищет цепочку поз, ГА №2 подбирает команды сервоприводов`
         : 'Эволюционный поиск моторного навыка шага и руления',
       competenceEMA: isDuckBrain ? 0.265 : 0.03,
       targetCompetence: isDuckBrain ? 0.255 : 0.18,
       relearnThreshold: isDuckBrain ? 0.238 : 0.125,
       ambitionPreset: 'min',
       surpriseEMA: 0.20,
-      needToLearnPct: isDuckBrain ? 35 : 85,
+      needToLearnPct: isDuckBrain ? 100 : 85,
       stableEpochsCount: 0,
       lowVelEpochsCount: 0,
       stallStepsCount: 0,
@@ -2932,48 +2889,21 @@ export class NESTrainer {
     const isDuckBrain = this.brain.morphologyKey === 'duck';
     if (isDuckBrain) {
       this.minFoodsToConsolidate = 0;
-      if (presetOrTarget === 'min') {
-        this.alwaysLearn = false;
-        this.metaState.ambitionPreset = 'min';
-        this.metaState.targetCompetence = 0.255;
-        this.metaState.relearnThreshold = 0.238;
-      } else if (presetOrTarget === 'bound') {
-        this.alwaysLearn = false;
-        this.metaState.ambitionPreset = 'bound';
-        this.metaState.targetCompetence = 0.268;
-        this.metaState.relearnThreshold = 0.245;
-      } else if (presetOrTarget === 'turbo') {
-        this.alwaysLearn = false;
-        this.metaState.ambitionPreset = 'turbo';
-        this.metaState.targetCompetence = 0.280;
-        this.metaState.relearnThreshold = 0.252;
-      } else if (presetOrTarget === 'infinite') {
+      const goalInfo = this.brain.getDuckPoseGoalInfo();
+      this.metaState.poseGoalKey = goalInfo.key;
+      if (presetOrTarget === 'infinite' || (typeof presetOrTarget === 'number' && presetOrTarget >= 0.355)) {
         this.alwaysLearn = true;
         this.metaState.ambitionPreset = 'infinite';
-        this.metaState.targetCompetence = 0.360;
-        this.metaState.relearnThreshold = 0.280;
-      } else if (typeof presetOrTarget === 'number') {
-        const t = Math.max(0.22, Math.min(0.36, presetOrTarget));
-        this.alwaysLearn = t >= 0.355;
-        this.metaState.ambitionPreset = 'custom';
-        this.metaState.targetCompetence = Number(t.toFixed(3));
-        this.metaState.relearnThreshold = Number((t - 0.030).toFixed(3));
+      } else {
+        this.alwaysLearn = false;
+        this.metaState.ambitionPreset = typeof presetOrTarget === 'string' ? presetOrTarget : 'min';
       }
-      if (this.metaState.mode !== 'LEARNING_RIGHTING') {
-        if (this.alwaysLearn || this.metaState.competenceEMA < this.metaState.targetCompetence) {
-          this.metaState.mode = 'LEARNING_WALK';
-          this.metaState.isLearningActive = true;
-          this.metaState.stableEpochsCount = 0;
-          this.metaState.needToLearnPct = this.alwaysLearn ? 100 : 65;
-          this.metaState.modeTitle = '🟢 АКТИВНОЕ ОБУЧЕНИЕ (NES): ПОДЪЁМ ЦМ';
-          this.metaState.reasonText = `Утка стремится поднять и удерживать ЦМ ≥ ${this.metaState.targetCompetence.toFixed(2)} м`;
-        } else {
-          this.metaState.mode = 'CONSOLIDATED';
-          this.metaState.isLearningActive = false;
-          this.metaState.needToLearnPct = 0;
-          this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
-          this.metaState.reasonText = `Высота ЦМ (${this.metaState.competenceEMA.toFixed(2)} м) ≥ ${this.metaState.targetCompetence.toFixed(2)} м — обучение остановлено`;
-        }
+      if (this.metaState.mode !== 'LEARNING_RIGHTING' && this.metaState.mode !== 'CONSOLIDATED') {
+        this.metaState.mode = 'LEARNING_RIGHTING';
+        this.metaState.isLearningActive = true;
+        this.metaState.needToLearnPct = 100;
+        this.metaState.modeTitle = `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${goalInfo.labelRu}»`;
+        this.metaState.reasonText = `Задана целевая поза «${goalInfo.labelShortRu}» — ГА №1 ищет цепочку поз, ГА №2 подбирает команды сервоприводов`;
       }
       return;
     }
@@ -3106,23 +3036,14 @@ export class NESTrainer {
 
     let inDuckGoalPose = false;
     if (isDuck0) {
-      if (this.brain.poseGoalKey === 'stand') {
-        inDuckGoalPose =
-          comY0 >= targetCom0 &&
-          upY0 >= 0.70 &&
-          (!c0.torsoTop || !c0.torsoBottom || c0.torsoTop.pos.y > c0.torsoBottom.pos.y + 0.14);
-      } else {
-        inDuckGoalPose = this.brain.isDuckInGoalPose(c0, comY0);
-      }
+      inDuckGoalPose = this.brain.isDuckInGoalPose(c0, comY0);
     }
 
     const isPhysicallyTiltedOnBack =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
       (isDuck0
-        ? (this.brain.poseGoalKey === 'stand'
-            ? (((comY0 < (this.alwaysLearn ? (this.metaState.relearnThreshold || 0.238) : 0.205)) || upY0 < 0.45) && !this.manualFreeze)
-            : (!inDuckGoalPose && !this.manualFreeze))
+        ? (!inDuckGoalPose && !this.manualFreeze)
         : (upY0 < 0.22));
     const confirmDelay = isDuck0 ? 1 : 24;
 
@@ -3438,16 +3359,18 @@ export class NESTrainer {
       this.metaState.mode = 'LEARNING_WALK';
       this.metaState.isLearningActive = true;
       this.metaState.needToLearnPct = 100;
+    } else if (isDuck0) {
+      const goalInfo = this.brain.getDuckPoseGoalInfo();
+      this.metaState.poseGoalKey = goalInfo.key;
+      if (this.brain.isDuckInGoalPose(c0, comY0) || this.metaState.mode === 'CONSOLIDATED') {
+        this.metaState.mode = 'CONSOLIDATED';
+        this.metaState.isLearningActive = false;
+        this.metaState.needToLearnPct = 0;
+        this.metaState.modeTitle = `🛡️ ПОЗА ДОСТИГНУТА: УТКА УДЕРЖИВАЕТ «${goalInfo.labelRu}»`;
+        this.metaState.reasonText = `Утка удерживает целевую позу «${goalInfo.labelShortRu}» — обучение остановлено`;
+      }
     } else if (this.metaState.mode === 'LEARNING_WALK') {
-      if (isDuck0) {
-        if (this.metaState.competenceEMA >= (this.metaState.targetCompetence || 0.215)) {
-          this.metaState.mode = 'CONSOLIDATED';
-          this.metaState.isLearningActive = false;
-          this.metaState.needToLearnPct = 0;
-          this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
-          this.metaState.reasonText = `Высота ЦМ (${this.metaState.competenceEMA.toFixed(2)} м) стабильна — обучение прекращено`;
-        }
-      } else if (this.metaState.competenceEMA >= this.metaState.targetCompetence && c0.foodCollected >= (this.minFoodsToConsolidate || 4)) {
+      if (this.metaState.competenceEMA >= this.metaState.targetCompetence && c0.foodCollected >= (this.minFoodsToConsolidate || 4)) {
         this.metaState.stableEpochsCount += 1;
         if (this.metaState.stableEpochsCount >= 2) {
           this.metaState.mode = 'CONSOLIDATED';

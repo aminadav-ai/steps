@@ -461,6 +461,7 @@ if (
 }
 
 // 7г: Проверка переключения 4 целевых поз («Стоять», «Сидеть», «На спине», «На животе») с сохранением памяти переходов
+// и отсутствия возврата к устаревшей «Максимизации высоты ЦМ» после достижения позы «На спине»
 const memBeforeSwitch = duckSideSim.brain.poseTransitionMemory.size;
 for (const goalKey of ['sit', 'lie_back', 'lie_belly', 'stand']) {
   duckSideSim.setDuckPoseGoal(goalKey);
@@ -473,6 +474,60 @@ for (const goalKey of ['sit', 'lie_back', 'lie_belly', 'stand']) {
   }
 }
 const memAfterSwitch = duckSideSim.brain.poseTransitionMemory.size;
+
+// Проверим удержание достигнутой позы «На спине» (lie_back) более 80 шагов (2.5 эпохи PPO) без пробуждения «Максимизации высоты ЦМ»:
+const duckBackSim = new ArenaSimulation({
+  morphologyKey: 'duck',
+  algorithm: 'ppo',
+  populationSize: 1,
+  floorFriction: 1.0
+});
+const db = duckBackSim.creatures[0];
+const dbCom = db.body.getCenterOfMass();
+const { forward: dbFwd, up: dbUp } = db.getTorsoFrame();
+const backAngle = (85 * Math.PI) / 180;
+const cosB = Math.cos(backAngle);
+const sinB = Math.sin(backAngle);
+let minBackY = Infinity;
+for (const n of db.body.nodes) {
+  const rx = n.pos.x - dbCom.x;
+  const ry = n.pos.y - dbCom.y;
+  const rz = n.pos.z - dbCom.z;
+  const uCoord = rx * dbFwd.x + ry * dbFwd.y + rz * dbFwd.z;
+  const vCoord = rx * dbUp.x + ry * dbUp.y + rz * dbUp.z;
+  const fCoordX = rx - uCoord * dbFwd.x - vCoord * dbUp.x;
+  const fCoordY = ry - uCoord * dbFwd.y - vCoord * dbUp.y;
+  const fCoordZ = rz - uCoord * dbFwd.z - vCoord * dbUp.z;
+  const newU = uCoord * cosB - vCoord * sinB;
+  const newV = uCoord * sinB + vCoord * cosB;
+  n.pos.set(
+    dbCom.x + fCoordX + newU * dbFwd.x + newV * dbUp.x,
+    0.16 + fCoordY + newU * dbFwd.y + newV * dbUp.y,
+    dbCom.z + fCoordZ + newU * dbFwd.z + newV * dbUp.z
+  );
+  minBackY = Math.min(minBackY, n.pos.y - n.radius);
+}
+for (const n of db.body.nodes) {
+  n.pos.y += 0.005 - minBackY;
+  n.prevPos.copy(n.pos);
+}
+duckBackSim.setDuckPoseGoal('lie_back');
+for (let s = 0; s < 90; s++) {
+  duckBackSim.stepControl();
+}
+const lieBackMeta = duckBackSim.trainer.metaState;
+console.log(
+  `Удержание позы «На спине» (90 шагов): mode=${lieBackMeta.mode}, title="${lieBackMeta.modeTitle}"`
+);
+if (
+  lieBackMeta.mode !== 'CONSOLIDATED' ||
+  lieBackMeta.isLearningActive !== false ||
+  String(lieBackMeta.modeTitle).includes('МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ')
+) {
+  console.error('ОШИБКА: После достижения позы «На спине» Утка должна оставаться в CONSOLIDATED и НЕ включать «Максимизацию высоты ЦМ»!');
+  process.exit(1);
+}
+
 console.log(
   `Переключение 4 целевых поз Утки (stand / sit / lie_back / lie_belly): ` +
   `памятьПереходов=${memBeforeSwitch} -> ${memAfterSwitch}, активнаяЦель=${duckSideSim.brain.poseGoalKey}`
