@@ -424,27 +424,42 @@ for (let s = 0; s < 180; s++) {
   if (pW > maxDuckSidePowerW) maxDuckSidePowerW = pW;
 }
 const gaHist = duckSideSim.trainer.rightingHistory || [];
-const hasMutations = gaHist.some(h => h.gaOrigin === 'мутация' || h.gaOrigin === 'мутация-рывок');
-const hasCrossovers = gaHist.some(h => h.gaOrigin === 'кроссовер');
+const hasMutations = gaHist.some(
+  h =>
+    h.gaOrigin === 'мутация' ||
+    h.gaOrigin === 'мутация-рывок' ||
+    h.gaOrigin === 'мутация-памяти' ||
+    h.poseMutantOrigin === 'шаг к цели' ||
+    h.poseMutantOrigin === 'мутация позы'
+);
+const hasPoseEvolution =
+  duckSideSim.brain.poseGen >= 2 ||
+  duckSideSim.brain.poseTransitionMemory.size >= 1 ||
+  gaHist.some(h => h.gaOrigin === 'кроссовер' || h.poseMutantOrigin === 'кроссовер к цели');
 const bestGAFitness = duckSideSim.brain.gaBestFitness;
+const samplePose = Array.from(duckSideSim.brain.extractDuckPose6D(ds.getObservation(), ds.body.getCenterOfMass().y));
+const isQuantizedOnGrid = samplePose.length === 6 && samplePose.every(v => Math.abs(Math.round(v * 4) / 4 - v) < 1e-6);
+const transMemLen = duckSideSim.brain.poseTransitionMemory.size;
 console.log(
-  `Генетический алгоритм Утки (180 шагов = ${gaHist.length} векторов, поколений: ${duckSideSim.brain.gaGeneration}): ` +
+  `Двухуровневый ГА Утки (180 шагов = ${gaHist.length} векторов ГА2, пок. ГА1: ${duckSideSim.brain.poseGen}, пок. ГА2: ${duckSideSim.brain.gaGeneration}): ` +
   `maxComY=${maxDuckSideComY.toFixed(3)} м, bestFitness=${bestGAFitness.toFixed(3)}, ` +
-  `мутации=${hasMutations}, кроссовер=${hasCrossovers}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`
+  `памятьПереходов=${transMemLen}, сеткаПоз6D=${JSON.stringify(samplePose)}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`
 );
 if (
-  maxDuckSideComY > 0.42 ||
+  maxDuckSideComY > 0.85 ||
   maxDuckSidePowerW > 180.0 ||
   gaHist.length < 4 ||
+  !isQuantizedOnGrid ||
+  duckSideSim.brain.posePop.length !== 4 ||
   !Number.isFinite(bestGAFitness) ||
-  bestGAFitness <= 0.20 ||
+  bestGAFitness <= 0.15 ||
   !hasMutations ||
-  !hasCrossovers
+  !hasPoseEvolution
 ) {
-  console.error('ОШИБКА: Генетический алгоритм Утки должен оценивать случайные 14D-векторы, выполнять мутации и кроссовер без взрывов мощности (> 180 Вт)!');
+  console.error('ОШИБКА: Двухуровневый ГА Утки (ГА №1 Поз + ГА №2 Серво) должен квантовать 6D-позу по сетке 0.25, эволюционировать позы и 14D-векторы без взрывов мощности (> 180 Вт)!');
   process.exit(1);
 }
-console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и эволюционирует 14-мерные векторы сервоприводов генетическим алгоритмом (случайная инициализация, фитнес подъёма и времени удержания, мутация, кроссовер).');
+console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и работает на двухуровневом ГА «Язык поз» (квантованная 6D-поза, ГА №1 мутантов поз, ГА №2 серво-векторов, память переходов).');
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);

@@ -169,9 +169,16 @@ export class ActorCriticBrain {
     this.rightingH1 = null;
     this.rightingOut = null;
 
-    // Genetic Algorithm (GA) population over 14-dimensional servo vectors v in [-1, +1]^14 for the Duck:
-    // Each individual has { vec: Float64Array(actDim), steps: [Float64Array(actDim)], origin, fitness, maxComY, endComY, holdSec }
-    this.gaPopSize = 8;
+    // Two-Level Genetic Algorithm ("Language of Poses": GA #1 Poses + GA #2 Servo Commands + Quantized Memory) for the Duck:
+    // 6D Quantized Pose Vector P = [comY_norm, upY, pitchY, rollY, legExtL, legExtR], quantized with step 0.25
+    this.poseGoal = Float64Array.from([1.0, 1.0, 0.0, 0.0, 0.75, 0.75]); // Target pose: "Standing Duck"
+    this.poseCurrent = null;
+    this.poseGen = 1;
+    this.posePopSize = 4;
+    this.poseCursor = 0;
+    this.posePop = [];
+
+    this.gaPopSize = 4;
     this.gaGeneration = 1;
     this.gaCursor = 0;
     this.gaPopulation = [];
@@ -179,6 +186,11 @@ export class ActorCriticBrain {
     this.gaBestFitness = -Infinity;
     this.gaBestOrigin = 'случайный';
     this.gaArchive = [];
+    // Deduplicated cell-to-cell transition memory: Map("fromKey->toKey", { fromKey, toKey, pFrom, pTo, cmdVec, matchPct, goalPct, maxComY })
+    this.poseTransitionMemory = new Map();
+    // Unreachable pose-mutant memory: Set("fromKey->mutantKey")
+    this.poseUnreachableMemory = new Set();
+    this._winStartPose6D = null;
 
     this._waveBaseCrestUpY = null;
     this._waveBaseMeanUpY = null;
@@ -230,6 +242,9 @@ export class ActorCriticBrain {
       rightingPhase: this.rightingPhase,
       gaGeneration: this.gaGeneration,
       gaCursor: this.gaCursor,
+      poseGen: this.poseGen,
+      poseCursor: this.poseCursor,
+      poseCurrent: this.poseCurrent ? Array.from(this.poseCurrent) : null,
       gaBestVector: this.gaBestVector ? Array.from(this.gaBestVector) : null,
       gaBestFitness: Number.isFinite(this.gaBestFitness) ? this.gaBestFitness : null,
       gaBestOrigin: this.gaBestOrigin,
@@ -240,6 +255,19 @@ export class ActorCriticBrain {
             maxComY: item.maxComY
           }))
         : [],
+      poseTransitionMemory: this.poseTransitionMemory
+        ? Array.from(this.poseTransitionMemory.values()).map(item => ({
+            fromKey: item.fromKey,
+            toKey: item.toKey,
+            pFrom: Array.from(item.pFrom),
+            pTo: Array.from(item.pTo),
+            cmdVec: Array.from(item.cmdVec),
+            matchPct: item.matchPct,
+            goalPct: item.goalPct,
+            maxComY: item.maxComY
+          }))
+        : [],
+      poseUnreachableMemory: this.poseUnreachableMemory ? Array.from(this.poseUnreachableMemory) : [],
       adamStepCount: this.adamStepCount,
       maxSkipRowNorm: this.maxSkipRowNorm
     };
@@ -269,6 +297,10 @@ export class ActorCriticBrain {
     if (typeof data.rightingSuccesses === 'number') this.rightingSuccesses = data.rightingSuccesses;
     if (typeof data.rightingPhase === 'number') this.rightingPhase = data.rightingPhase;
     if (typeof data.gaGeneration === 'number') this.gaGeneration = data.gaGeneration;
+    if (typeof data.poseGen === 'number') this.poseGen = data.poseGen;
+    if (Array.isArray(data.poseCurrent) && data.poseCurrent.length === 6) {
+      this.poseCurrent = Float64Array.from(data.poseCurrent);
+    }
     if (Array.isArray(data.gaBestVector) && data.gaBestVector.length === this.actDim) {
       this.gaBestVector = Float64Array.from(data.gaBestVector);
     }
@@ -286,6 +318,26 @@ export class ActorCriticBrain {
           fitness: Number(item.fitness) || 0,
           maxComY: Number(item.maxComY) || 0
         }));
+    }
+    if (Array.isArray(data.poseTransitionMemory)) {
+      this.poseTransitionMemory = new Map();
+      for (const item of data.poseTransitionMemory) {
+        if (item && item.fromKey && item.toKey && Array.isArray(item.cmdVec) && item.cmdVec.length === this.actDim) {
+          this.poseTransitionMemory.set(`${item.fromKey}->${item.toKey}`, {
+            fromKey: item.fromKey,
+            toKey: item.toKey,
+            pFrom: Float64Array.from(item.pFrom || [0, 0, 0, 0, 0, 0]),
+            pTo: Float64Array.from(item.pTo || [0, 0, 0, 0, 0, 0]),
+            cmdVec: Float64Array.from(item.cmdVec),
+            matchPct: Number(item.matchPct) || 100,
+            goalPct: Number(item.goalPct) || 50,
+            maxComY: Number(item.maxComY) || 0.18
+          });
+        }
+      }
+    }
+    if (Array.isArray(data.poseUnreachableMemory)) {
+      this.poseUnreachableMemory = new Set(data.poseUnreachableMemory);
     }
     if (this.morphologyKey === 'duck') {
       this._initDuckGAPopulation();
@@ -394,6 +446,117 @@ export class ActorCriticBrain {
   }
 
   /**
+   * Quantizes a single normalized coordinate v in [-1, +1] to a coarse grid with step 0.25
+   * ({-1.0, -0.75, -0.5, -0.25, 0.0, +0.25, +0.5, +0.75, +1.0}) so memory never bloats with micro-jitter noise.
+   */
+  _quantizePoseCoord(v) {
+    const clamped = Math.max(-1.0, Math.min(1.0, Number(v) || 0));
+    const q = Math.round(clamped * 4) / 4;
+    return Object.is(q, -0) ? 0 : q;
+  }
+
+  /**
+   * Quantizes a 6D pose vector to the coarse 0.25 grid.
+   */
+  quantizePose6D(poseVec) {
+    const out = new Float64Array(6);
+    for (let i = 0; i < 6; i++) {
+      out[i] = this._quantizePoseCoord(poseVec ? poseVec[i] : 0);
+    }
+    return out;
+  }
+
+  /**
+   * Extracts the compact 6-dimensional quantized Pose Vector P in [-1, +1]^6 from the Duck's sensors:
+   *   [0] comY_norm : normalized Center of Mass height (0.12 m -> -1.0, 0.20 m -> 0.0, 0.28 m -> +1.0)
+   *   [1] upY       : torso vertical projection (+1 = upright, -1 = inverted)
+   *   [2] pitchY    : sagittal tilt (+1 = on back/nose up, -1 = on belly/nose down)
+   *   [3] rollY     : lateral tilt (+1 = right side down, -1 = left side down)
+   *   [4] legExtL   : left leg extension (-1 = tucked, +1 = extended)
+   *   [5] legExtR   : right leg extension (-1 = tucked, +1 = extended)
+   */
+  extractDuckPose6D(obs, comY = 0.15) {
+    const comNorm = (comY - 0.20) / 0.08;
+    const upY = obs && obs.length > 6 ? obs[6] : 0.0;
+    const pitchY = obs && obs.length > 7 ? obs[7] : 0.0;
+    const rollY = obs && obs.length > 8 ? obs[8] : 0.0;
+    const legExtL = obs && obs.length > 22 ? obs[22] * 2.4 : 0.0;
+    const legExtR = obs && obs.length > 32 ? obs[32] * 2.4 : 0.0;
+    return this.quantizePose6D([comNorm, upY, pitchY, rollY, legExtL, legExtR]);
+  }
+
+  /**
+   * Returns the canonical cell key string for a quantized 6D pose vector (for O(1) memory deduplication).
+   */
+  getPoseKey6D(poseVec) {
+    const q = this.quantizePose6D(poseVec);
+    return `${q[0].toFixed(2)}|${q[1].toFixed(2)}|${q[2].toFixed(2)}|${q[3].toFixed(2)}|${q[4].toFixed(2)}|${q[5].toFixed(2)}`;
+  }
+
+  /**
+   * Weighted Euclidean distance D(P_A, P_B) in [0, 2] between two 6D pose vectors.
+   * Weights prioritize Center of Mass height (comY) and torso uprightness (upY).
+   */
+  computePoseDistance6D(pA, pB) {
+    if (!pA || !pB) return 2.0;
+    const weights = [2.2, 2.0, 1.2, 1.2, 0.7, 0.7]; // sum = 8.0
+    let sumSq = 0;
+    for (let i = 0; i < 6; i++) {
+      const diff = (pA[i] || 0) - (pB[i] || 0);
+      sumSq += weights[i] * diff * diff;
+    }
+    return Math.sqrt(sumSq / 8.0);
+  }
+
+  /**
+   * Computes percentage similarity (0..100%) between an achieved pose and a target pose.
+   */
+  computePoseMatchPct6D(pActual, pTarget) {
+    const dist = this.computePoseDistance6D(pActual, pTarget);
+    return Math.max(0, Math.min(100, (1.0 - dist / 1.35) * 100));
+  }
+
+  /**
+   * Mutates a 6D quantized pose vector toward the goal pose P_goal by discrete 0.25 grid steps.
+   */
+  _mutatePose6D(basePose, goalPose, stepBias = 0.5) {
+    const child = Float64Array.from(basePose);
+    let changed = 0;
+    for (let i = 0; i < 6; i++) {
+      if (Math.random() < 0.65) {
+        const diff = goalPose[i] - basePose[i];
+        let delta = 0;
+        if (Math.abs(diff) >= 0.25 && Math.random() < stepBias) {
+          delta = Math.sign(diff) * (Math.random() < 0.5 ? 0.25 : 0.50);
+        } else {
+          delta = (Math.floor(Math.random() * 5) - 2) * 0.25;
+        }
+        const nextVal = this._quantizePoseCoord(child[i] + delta);
+        if (nextVal !== child[i]) changed += 1;
+        child[i] = nextVal;
+      }
+    }
+    if (changed === 0) {
+      const idx = Math.floor(Math.random() * 6);
+      const dir = goalPose[idx] >= child[idx] ? 0.25 : -0.25;
+      child[idx] = this._quantizePoseCoord(child[idx] + (child[idx] + dir <= 1.0 && child[idx] + dir >= -1.0 ? dir : -dir));
+    }
+    return child;
+  }
+
+  /**
+   * Crosses over two 6D quantized poses (e.g., current pose and goal pose).
+   */
+  _crossoverPose6D(poseA, poseB) {
+    const child = new Float64Array(6);
+    for (let i = 0; i < 6; i++) {
+      const blend = 0.5 * (poseA[i] + poseB[i]);
+      child[i] = this._quantizePoseCoord(Math.random() < 0.5 ? blend : (Math.random() < 0.5 ? poseA[i] : poseB[i]));
+    }
+    return child;
+  }
+
+  /**
    * Generates a random 14-dimensional servo command vector v in [-1.0, +1.0]^14 for the Duck.
    */
   _randomDuckVector() {
@@ -420,7 +583,6 @@ export class ActorCriticBrain {
         }
       }
     }
-    // Guarantee at least 2 servo channels mutate so the child vector is always distinct
     while (mutatedCount < 2) {
       const idx = Math.floor(Math.random() * this.actDim);
       child[idx] = Math.max(-1.0, Math.min(1.0, child[idx] + (Math.random() * 1.4 - 0.7)));
@@ -436,7 +598,6 @@ export class ActorCriticBrain {
   _crossoverDuckVectors(vecA, vecB) {
     const child = new Float64Array(this.actDim);
     if (Math.random() < 0.55) {
-      // Block crossover across Left Leg (0..4), Right Leg (5..9), and Neck/Head (10..13)
       const useALeft = Math.random() < 0.5;
       const useARight = Math.random() < 0.5;
       const useANeck = (useALeft === useARight) ? !useALeft : (Math.random() < 0.5);
@@ -444,12 +605,10 @@ export class ActorCriticBrain {
       for (let a = 5; a < 10; a++) child[a] = useARight ? vecA[a] : vecB[a];
       for (let a = 10; a < this.actDim; a++) child[a] = useANeck ? vecA[a] : vecB[a];
     } else {
-      // Uniform crossover per servo channel
       for (let a = 0; a < this.actDim; a++) {
         child[a] = Math.random() < 0.5 ? vecA[a] : vecB[a];
       }
     }
-    // Apply light mutation to 2 genes so crossover offspring explore around the recombined point
     const tweakIdx = Math.floor(Math.random() * this.actDim);
     child[tweakIdx] = Math.max(-1.0, Math.min(1.0, child[tweakIdx] + randn() * 0.22));
     return child;
@@ -459,37 +618,176 @@ export class ActorCriticBrain {
     const v = Float64Array.from(vec);
     return {
       vec: v,
-      steps: [v], // Ready for multi-vector "melodies" (Stage 2)
+      steps: [v],
       origin,
       fitness: null,
       maxComY: 0,
       endComY: 0,
-      holdSec: 0
+      holdSec: 0,
+      matchPct: 0
     };
   }
 
   /**
-   * Initializes the Genetic Algorithm population of 14D servo vectors for the Duck.
-   * Seeds from past successful vectors (gaArchive) if available; otherwise starts with pure random vectors in [-1, +1]^14.
+   * Records a verified transition (pFrom -> pTo via cmdVec) in the deduplicated cell memory.
+   * Only transitions between distinct quantized pose cells (D >= 0.22) are stored, preventing memory bloat.
    */
-  _initDuckGAPopulation() {
-    this.gaPopSize = 8;
-    this.gaGeneration = 1;
+  rememberPoseTransition(pFrom, pTo, cmdVec, maxComY = 0.20) {
+    if (!pFrom || !pTo || !cmdVec || cmdVec.length !== this.actDim) return false;
+    const qFrom = this.quantizePose6D(pFrom);
+    const qTo = this.quantizePose6D(pTo);
+    const fromKey = this.getPoseKey6D(qFrom);
+    const toKey = this.getPoseKey6D(qTo);
+    const shiftDist = this.computePoseDistance6D(qFrom, qTo);
+    if (fromKey === toKey || shiftDist < 0.22) {
+      return false; // Ignore micro-jitter within the same quantized pose cell
+    }
+
+    if (!this.poseTransitionMemory) this.poseTransitionMemory = new Map();
+    const transKey = `${fromKey}->${toKey}`;
+    const goalPct = this.computePoseMatchPct6D(qTo, this.poseGoal);
+    const existing = this.poseTransitionMemory.get(transKey);
+
+    if (!existing || maxComY >= existing.maxComY - 0.005 || goalPct >= existing.goalPct) {
+      this.poseTransitionMemory.set(transKey, {
+        fromKey,
+        toKey,
+        pFrom: qFrom,
+        pTo: qTo,
+        cmdVec: Float64Array.from(cmdVec),
+        matchPct: 100,
+        goalPct: Number(goalPct.toFixed(1)),
+        maxComY: Number(maxComY.toFixed(3))
+      });
+    }
+
+    // Cap transition memory at 80 unique cell-to-cell transitions (evict lowest goalPct if full)
+    if (this.poseTransitionMemory.size > 80) {
+      let worstKey = null;
+      let worstScore = Infinity;
+      for (const [k, val] of this.poseTransitionMemory.entries()) {
+        if (val.goalPct < worstScore) {
+          worstScore = val.goalPct;
+          worstKey = k;
+        }
+      }
+      if (worstKey) this.poseTransitionMemory.delete(worstKey);
+    }
+    return true;
+  }
+
+  /**
+   * Initializes GA #1 (Pose Population) anchored at the Duck's current quantized pose P_current.
+   * Applies Filter #1 (Memory screening) to immediately discard pose mutants known to be unreachable from P_current.
+   */
+  _initPoseGAPopulation(basePose = null) {
+    const startPose = this.quantizePose6D(basePose || this.poseCurrent || [-0.75, -0.25, 0.50, 0.0, 0.0, 0.0]);
+    this.poseCurrent = startPose;
+    const fromKey = this.getPoseKey6D(startPose);
+
+    this.posePopSize = 4;
+    this.poseCursor = 0;
+    this.posePop = [];
+
+    const origins = ['шаг к цели', 'мутация позы', 'кроссовер к цели', 'прямой шаг к цели'];
+    for (let m = 0; m < this.posePopSize; m++) {
+      let candidatePose = null;
+      // Filter #1 (Memory-based instant screening): avoid generating a mutant already marked unreachable from fromKey
+      for (let attempt = 0; attempt < 8; attempt++) {
+        if (m === 0) {
+          candidatePose = this._mutatePose6D(startPose, this.poseGoal, 0.70);
+        } else if (m === 1) {
+          candidatePose = this._mutatePose6D(startPose, this.poseGoal, 0.45);
+        } else if (m === 2) {
+          candidatePose = this._crossoverPose6D(startPose, this.poseGoal);
+        } else {
+          candidatePose = this._mutatePose6D(this._crossoverPose6D(startPose, this.poseGoal), this.poseGoal, 0.85);
+        }
+        const candKey = this.getPoseKey6D(candidatePose);
+        const isDistinct = candKey !== fromKey && this.computePoseDistance6D(startPose, candidatePose) >= 0.22;
+        const isKnownUnreachable = this.poseUnreachableMemory && this.poseUnreachableMemory.has(`${fromKey}->${candKey}`);
+        if (isDistinct && !isKnownUnreachable) {
+          break;
+        }
+      }
+      this.posePop.push({
+        pose: candidatePose,
+        poseKey: this.getPoseKey6D(candidatePose),
+        origin: origins[m],
+        fitness: null,
+        reachable: null,
+        matchPct: 0,
+        bestServoVec: null
+      });
+    }
+
+    this._initServoGAForCurrentPoseMutant();
+  }
+
+  /**
+   * Initializes GA #2 (Personal Servo Command Vector GA) for the active Pose Mutant in GA #1.
+   * Queries poseTransitionMemory for similar starting poses (P_from ~ P_current) and target poses (P_to ~ P_mutant).
+   */
+  _initServoGAForCurrentPoseMutant() {
+    if (!this.posePop || this.posePop.length === 0) {
+      this._initPoseGAPopulation();
+      return;
+    }
+    const pIdx = Math.max(0, Math.min(this.posePop.length - 1, this.poseCursor || 0));
+    const targetMutant = this.posePop[pIdx];
+    const curPose = this.poseCurrent || Float64Array.from([-0.75, -0.25, 0.50, 0.0, 0.0, 0.0]);
+
+    this.gaPopSize = 4;
     this.gaCursor = 0;
     this.gaPopulation = [];
 
-    if (this.gaArchive && this.gaArchive.length > 0) {
-      const bestMem = this.gaArchive[0].vec;
-      this.gaPopulation.push(this._makeGACandidate(bestMem, 'память'));
-      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMem, 0.40, 0.38), 'мутация'));
+    // Search transition memory for known transitions starting near curPose
+    const matchingMemories = [];
+    if (this.poseTransitionMemory && this.poseTransitionMemory.size > 0) {
+      for (const item of this.poseTransitionMemory.values()) {
+        const fromDist = this.computePoseDistance6D(item.pFrom, curPose);
+        if (fromDist <= 0.50) {
+          const toMutantMatch = this.computePoseMatchPct6D(item.pTo, targetMutant.pose);
+          const toGoalMatch = item.goalPct || this.computePoseMatchPct6D(item.pTo, this.poseGoal);
+          const score = 0.65 * toMutantMatch + 0.35 * toGoalMatch - 20.0 * fromDist;
+          matchingMemories.push({ item, score });
+        }
+      }
+      matchingMemories.sort((a, b) => b.score - a.score);
+    }
+
+    if (matchingMemories.length > 0) {
+      const bestMemVec = matchingMemories[0].item.cmdVec;
+      this.gaPopulation.push(this._makeGACandidate(bestMemVec, 'память'));
+      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.40, 0.38), 'мутация памяти'));
+      if (matchingMemories.length > 1) {
+        const secondMemVec = matchingMemories[1].item.cmdVec;
+        this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(bestMemVec, secondMemVec), 'кроссовер'));
+      } else {
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.60, 0.60), 'мутация'));
+      }
+    } else if (this.gaArchive && this.gaArchive.length > 0) {
+      const archVec = this.gaArchive[0].vec;
+      this.gaPopulation.push(this._makeGACandidate(archVec, 'память'));
+      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(archVec, 0.45, 0.45), 'мутация'));
+      if (this.gaBestVector && this.gaBestVector.length === this.actDim) {
+        this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(archVec, this.gaBestVector), 'кроссовер'));
+      }
     } else if (this.gaBestVector && this.gaBestVector.length === this.actDim) {
-      this.gaPopulation.push(this._makeGACandidate(this.gaBestVector, 'элита'));
-      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector, 0.45, 0.42), 'мутация'));
+      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector, 0.40, 0.40), 'мутация'));
+      const randPartner = this._randomDuckVector();
+      this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(this.gaBestVector, randPartner), 'кроссовер'));
     }
 
     while (this.gaPopulation.length < this.gaPopSize) {
       this.gaPopulation.push(this._makeGACandidate(this._randomDuckVector(), 'случайный'));
     }
+  }
+
+  _initDuckGAPopulation() {
+    this.poseGen = this.poseGen || 1;
+    this.gaGeneration = this.gaGeneration || 1;
+    this._initPoseGAPopulation(this.poseCurrent);
   }
 
   /**
@@ -510,53 +808,31 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Evolves the next generation of 14D vectors via Elitism + Mutation + Crossover + Random Immigrant.
-   */
-  _evolveDuckNextGeneration() {
-    const evaluated = this.gaPopulation
-      .filter(ind => typeof ind.fitness === 'number' && Number.isFinite(ind.fitness))
-      .sort((a, b) => b.fitness - a.fitness);
-
-    if (evaluated.length === 0) {
-      this._initDuckGAPopulation();
-      return;
-    }
-
-    const p1 = evaluated[0].vec;
-    const p2 = (evaluated[1] || evaluated[0]).vec;
-    const p3 = (evaluated[2] || evaluated[0]).vec;
-    const bestEver = (this.gaBestVector && this.gaBestVector.length === this.actDim) ? this.gaBestVector : p1;
-
-    this.gaGeneration += 1;
-    this.gaCursor = 0;
-    this.gaPopulation = [
-      this._makeGACandidate(bestEver, 'элита'),
-      this._makeGACandidate(this._mutateDuckVector(p1, 0.35, 0.35), 'мутация'),
-      this._makeGACandidate(this._mutateDuckVector(p1, 0.55, 0.52), 'мутация'),
-      this._makeGACandidate(this._mutateDuckVector(p2, 0.45, 0.45), 'мутация'),
-      this._makeGACandidate(this._crossoverDuckVectors(p1, p2), 'кроссовер'),
-      this._makeGACandidate(this._crossoverDuckVectors(p1, p3), 'кроссовер'),
-      this._makeGACandidate(this._mutateDuckVector(bestEver, 0.65, 0.78), 'мутация-рывок'),
-      this._makeGACandidate(this._randomDuckVector(), 'случайный')
-    ];
-  }
-
-  /**
-   * Returns the currently active 14D vector candidate in the GA population.
+   * Returns the currently active GA #2 servo vector candidate and GA #1 pose mutant metadata.
    */
   getCurrentDuckGACandidate() {
-    if (!this.gaPopulation || this.gaPopulation.length === 0) {
+    if (!this.posePop || this.posePop.length === 0 || !this.gaPopulation || this.gaPopulation.length === 0) {
       this._initDuckGAPopulation();
     }
-    const idx = Math.max(0, Math.min(this.gaPopulation.length - 1, this.gaCursor || 0));
-    const cand = this.gaPopulation[idx];
+    const pIdx = Math.max(0, Math.min(this.posePop.length - 1, this.poseCursor || 0));
+    const poseMutant = this.posePop[pIdx];
+    const sIdx = Math.max(0, Math.min(this.gaPopulation.length - 1, this.gaCursor || 0));
+    const servoCand = this.gaPopulation[sIdx];
+    const curGoalPct = this.poseCurrent ? Math.round(this.computePoseMatchPct6D(this.poseCurrent, this.poseGoal)) : 35;
+
     return {
-      vec: cand.vec,
-      steps: cand.steps,
-      origin: cand.origin || 'случайный',
+      vec: servoCand.vec,
+      steps: servoCand.steps,
+      origin: servoCand.origin || 'случайный',
       gen: this.gaGeneration || 1,
-      idx: idx + 1,
-      popSize: this.gaPopulation.length
+      idx: sIdx + 1,
+      popSize: this.gaPopulation.length,
+      poseGen: this.poseGen || 1,
+      poseIdx: pIdx + 1,
+      posePopSize: this.posePop.length,
+      poseOrigin: poseMutant ? poseMutant.origin : 'шаг к цели',
+      curGoalPct,
+      memSize: this.poseTransitionMemory ? this.poseTransitionMemory.size : 0
     };
   }
 
@@ -573,6 +849,7 @@ export class ActorCriticBrain {
     this._winMaxTopY = topY;
     this._winSumTopY = 0;
     this._winPrevTopY = topY;
+    this._winStartPose6D = null;
   }
 
   resetRightingWaveState(upY = 0, topY = 0.18) {
@@ -588,11 +865,17 @@ export class ActorCriticBrain {
 
   /**
    * Accumulates evaluation window statistics for the current vector:
-   * for the Duck, tracks Center of Mass height (comY) and how many steps (time) it stayed elevated.
+   * records the starting 6D quantized pose on step 1, and tracks Center of Mass height (comY) & hold duration.
    */
-  recordRightingStepTrace(_obs, _act, metricY) {
+  recordRightingStepTrace(obs, _act, metricY) {
     if (this._waveBaseCrestUpY === null) {
       this.resetRightingWaveState(metricY, 0);
+    }
+    if (this._winSteps === 0 && this.morphologyKey === 'duck' && obs) {
+      this._winStartPose6D = this.extractDuckPose6D(obs, metricY);
+      if (!this.poseCurrent) {
+        this._initPoseGAPopulation(this._winStartPose6D);
+      }
     }
     this._winSteps += 1;
     if (metricY < this._winMinUpY) this._winMinUpY = metricY;
@@ -600,27 +883,27 @@ export class ActorCriticBrain {
     this._winSumUpY += metricY;
     this._winPrevUpY = metricY;
 
-    // Count hold steps: how long the Duck kept its CoM raised above startComY + 0.8 cm or >= 0.20 m
     if (metricY >= this._winStartUpY + 0.008 || metricY >= 0.20) {
       this._winHoldSteps = (this._winHoldSteps || 0) + 1;
     }
   }
 
   /**
-   * Applies the active 14-dimensional servo command vector from the Genetic Algorithm population
-   * directly to the Duck's 14 servos (zero hand-crafted waves, zero neural network complexity).
+   * Applies the active 14-dimensional servo command vector from GA #2 directly to the Duck's 14 servos.
    */
-  forwardRightingReflex(obs, dt = 0.05, recordVis = true, _currentComY = 0.15) {
+  forwardRightingReflex(obs, dt = 0.05, recordVis = true, currentComY = 0.15) {
     this.rightingPhase = (this.rightingPhase + dt * 8.4) % (Math.PI * 2);
     const mu = new Float64Array(this.actDim);
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
+      if (!this.poseCurrent && obs) {
+        this._initPoseGAPopulation(this.extractDuckPose6D(obs, currentComY));
+      }
       const cand = this.getCurrentDuckGACandidate();
       mu.set(cand.vec);
     } else {
       const zRight = new Float64Array(this.actDim);
       this.rightingLayer.forward(obs, zRight);
-      // Keep roll direction consistent throughout the attempt for radial Tripod/Quadruped walkers
       const upY = obs[6];
       const rollTilt = obs[8];
       if (Math.abs(rollTilt) > 0.18) {
@@ -679,9 +962,15 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Evaluates the fitness of the active 14D vector at the end of the evaluation window:
-   * measures how much the Duck rose (maxComY - startComY, endComY - startComY, meanComY)
-   * and for how much time (holdSteps / holdSec), then advances to the next GA candidate or evolves the next generation.
+   * Evaluates the outcome of GA #2's 14D servo vector on the Duck's 6D quantized pose:
+   * - Measures start pose P_start and resulting pose P_after.
+   * - Checks how close P_after is to the target Pose Mutant P_mutant (matchPct) and to P_goal (goalPct).
+   * - If the Duck's physical pose genuinely changed (D(P_start, P_after) >= 0.22):
+   *     1. Stores the verified transition (P_start -> P_after, U) in deduplicated poseTransitionMemory.
+   *     2. Immediately updates GA #1's base pose P_current = P_after, generates fresh pose mutants around P_after,
+   *        and restarts the climb toward P_goal from the new physical posture!
+   * - If the pose did NOT change and all GA #2 candidates failed to reach P_mutant (bestMatchPct < 68%):
+   *     marks P_mutant as unreachable (fitness = 0), stores it in poseUnreachableMemory, and moves to the next pose mutant.
    */
   updateRightingReflex({
     startUpY,
@@ -698,11 +987,22 @@ export class ActorCriticBrain {
     const progress = Math.max(0, maxUpY - startUpY) + Math.max(0, endUpY - startUpY);
 
     if (this.morphologyKey === 'duck' && this.actDim === 14) {
-      if (!this.gaPopulation || this.gaPopulation.length === 0) {
+      if (!this.posePop || this.posePop.length === 0 || !this.gaPopulation || this.gaPopulation.length === 0) {
         this._initDuckGAPopulation();
       }
-      const idx = Math.max(0, Math.min(this.gaPopulation.length - 1, this.gaCursor || 0));
-      const cand = this.gaPopulation[idx];
+      const pIdx = Math.max(0, Math.min(this.posePop.length - 1, this.poseCursor || 0));
+      const targetMutant = this.posePop[pIdx];
+      const sIdx = Math.max(0, Math.min(this.gaPopulation.length - 1, this.gaCursor || 0));
+      const cand = this.gaPopulation[sIdx];
+
+      const pStart = this._winStartPose6D || this.poseCurrent || this.extractDuckPose6D(lastObs, startComY);
+      const pAfter = this.extractDuckPose6D(lastObs, endComY);
+
+      const poseShiftDist = this.computePoseDistance6D(pStart, pAfter);
+      const poseChanged = (this.getPoseKey6D(pStart) !== this.getPoseKey6D(pAfter)) && (poseShiftDist >= 0.22);
+
+      const matchPct = this.computePoseMatchPct6D(pAfter, targetMutant.pose);
+      const goalPct = this.computePoseMatchPct6D(pAfter, this.poseGoal);
 
       const steps = Math.max(1, this._winSteps || 1);
       const minComY = Number.isFinite(this._winMinUpY) ? Math.min(this._winMinUpY, startComY, endComY) : Math.min(startComY, endComY);
@@ -710,24 +1010,27 @@ export class ActorCriticBrain {
       const holdSteps = this._winHoldSteps || 0;
       const holdRatio = holdSteps / steps;
       const holdSec = holdSteps * 0.05;
-
       const risePeak = Math.max(0, maxComY - startComY);
       const riseNet = Math.max(0, endComY - startComY);
-      const waveSpanCom = Math.max(0, maxComY - minComY);
 
-      // Genetic Algorithm Fitness Function:
-      // Evaluates how much the Duck rose (risePeak, riseNet, meanComY) and for how long (holdRatio * maxComY)
+      // GA #2 fitness: rewards closeness to target pose mutant + closeness to goal pose + physical CoM lift
       const fitness =
-        4.0 * risePeak +
-        3.0 * riseNet +
-        2.0 * meanComY +
-        1.5 * holdRatio * maxComY +
-        0.8 * waveSpanCom;
+        0.012 * matchPct +
+        0.015 * goalPct +
+        3.0 * risePeak +
+        2.0 * riseNet +
+        1.2 * holdRatio * maxComY;
 
       cand.fitness = fitness;
       cand.maxComY = maxComY;
       cand.endComY = endComY;
       cand.holdSec = holdSec;
+      cand.matchPct = matchPct;
+
+      if (matchPct > (targetMutant.matchPct || 0)) {
+        targetMutant.matchPct = matchPct;
+        targetMutant.bestServoVec = Float64Array.from(cand.vec);
+      }
 
       if (fitness > this.gaBestFitness) {
         this.gaBestFitness = fitness;
@@ -743,11 +1046,29 @@ export class ActorCriticBrain {
         this.duckRightingBestProgress = normProgress;
       }
 
+      // If the Duck's physical pose actually changed to a new quantized cell:
+      // 1. Save transition (pStart -> pAfter, cand.vec) into deduplicated memory
+      if (poseChanged) {
+        this.rememberPoseTransition(pStart, pAfter, cand.vec, maxComY);
+      }
+
       this.lastRightingWaveMetrics = {
         gaGen: this.gaGeneration,
-        gaIdx: idx + 1,
+        gaIdx: sIdx + 1,
         gaPopSize: this.gaPopulation.length,
         gaOrigin: cand.origin,
+        poseGen: this.poseGen,
+        poseIdx: pIdx + 1,
+        poseOrigin: targetMutant.origin,
+        poseChanged,
+        poseShiftDist: Number(poseShiftDist.toFixed(3)),
+        poseMatchPct: Number(matchPct.toFixed(1)),
+        goalMatchPct: Number(goalPct.toFixed(1)),
+        memTransitions: this.poseTransitionMemory ? this.poseTransitionMemory.size : 0,
+        memUnreachable: this.poseUnreachableMemory ? this.poseUnreachableMemory.size : 0,
+        pStart: Array.from(pStart),
+        pAfter: Array.from(pAfter),
+        pMutant: Array.from(targetMutant.pose),
         fitness: Number(fitness.toFixed(3)),
         bestFitness: Number(this.gaBestFitness.toFixed(3)),
         riseCm: Number((risePeak * 100).toFixed(1)),
@@ -760,29 +1081,47 @@ export class ActorCriticBrain {
         vec: Array.from(cand.vec, v => Number(v.toFixed(2)))
       };
 
-      this.gaCursor = idx + 1;
-
-      // In Generation 1, once the first 4 random vectors (#1..#4) are evaluated,
-      // immediately synthesize #5 (mutation of best) and #6 (crossover of top 2) so evolution starts right away!
-      if (this.gaGeneration === 1 && this.gaCursor === 4 && this.gaPopulation.length >= 6) {
-        const earlyEval = this.gaPopulation
-          .slice(0, 4)
-          .filter(it => typeof it.fitness === 'number')
-          .sort((a, b) => b.fitness - a.fitness);
-        if (earlyEval.length >= 2) {
-          this.gaPopulation[4] = this._makeGACandidate(
-            this._mutateDuckVector(earlyEval[0].vec, 0.45, 0.42),
-            'мутация'
-          );
-          this.gaPopulation[5] = this._makeGACandidate(
-            this._crossoverDuckVectors(earlyEval[0].vec, earlyEval[1].vec),
-            'кроссовер'
-          );
-        }
+      // Live System Rule: if the Duck's pose genuinely changed during GA #2,
+      // immediately update P_current = pAfter, rebuild GA #1 pose mutants around pAfter, and strive toward P_goal from the new pose!
+      if (poseChanged) {
+        this.poseGen += 1;
+        this.gaGeneration += 1;
+        this._initPoseGAPopulation(pAfter);
+        this._resetRightingWindow(endComY, 0);
+        return this.getRightingSkillPct();
       }
 
+      // Otherwise (Duck remained in the same quantized pose cell), advance GA #2 cursor
+      this.gaCursor = sIdx + 1;
       if (this.gaCursor >= this.gaPopulation.length) {
-        this._evolveDuckNextGeneration();
+        this.gaGeneration += 1;
+        const bestMatch = targetMutant.matchPct || 0;
+        const fromKey = this.getPoseKey6D(this.poseCurrent || pStart);
+        // Filter #2 (Physical trial outcome): if GA #2 could not reach targetMutant (bestMatch < 68%),
+        // reject this pose mutant as unreachable and record in poseUnreachableMemory!
+        if (bestMatch < 68.0) {
+          targetMutant.reachable = false;
+          targetMutant.fitness = 0;
+          if (!this.poseUnreachableMemory) this.poseUnreachableMemory = new Set();
+          this.poseUnreachableMemory.add(`${fromKey}->${targetMutant.poseKey}`);
+          if (this.poseUnreachableMemory.size > 120) {
+            const firstKey = this.poseUnreachableMemory.values().next().value;
+            this.poseUnreachableMemory.delete(firstKey);
+          }
+        } else {
+          targetMutant.reachable = true;
+          const mGoalPct = this.computePoseMatchPct6D(targetMutant.pose, this.poseGoal);
+          targetMutant.fitness = mGoalPct * Math.pow(bestMatch / 100.0, 2);
+        }
+
+        // Advance to next Pose Mutant in GA #1
+        this.poseCursor = pIdx + 1;
+        if (this.poseCursor >= this.posePop.length) {
+          this.poseGen += 1;
+          this._initPoseGAPopulation(pAfter);
+        } else {
+          this._initServoGAForCurrentPoseMutant();
+        }
       }
 
       this._resetRightingWindow(endComY, 0);
@@ -1122,8 +1461,8 @@ export class PPOTrainer {
         ? 'Единая задача: максимизация высоты центра масс (ЦМ)'
         : 'Формирование стабильного базового навыка ходьбы и наведения на цель',
       competenceEMA: isDuckBrain ? 0.265 : 0.04,
-      targetCompetence: isDuckBrain ? 0.255 : 0.18,
-      relearnThreshold: isDuckBrain ? 0.238 : 0.125,
+      targetCompetence: isDuckBrain ? 0.235 : 0.18,
+      relearnThreshold: isDuckBrain ? 0.205 : 0.125,
       surpriseEMA: 0.25,
       needToLearnPct: isDuckBrain ? 35 : 88,
       stableEpochsCount: 0,
@@ -1195,8 +1534,8 @@ export class PPOTrainer {
       this.minFoodsToConsolidate = 0;
       if (presetOrTarget === 'min') {
         this.metaState.ambitionPreset = 'min';
-        this.metaState.targetCompetence = 0.255;
-        this.metaState.relearnThreshold = 0.238;
+        this.metaState.targetCompetence = 0.235;
+        this.metaState.relearnThreshold = 0.205;
         this.alwaysLearn = false;
       } else if (presetOrTarget === 'bound') {
         this.metaState.ambitionPreset = 'bound';
@@ -1432,7 +1771,9 @@ export class PPOTrainer {
     const isPhysicallyTiltedOnBack =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      (isDuck0 ? ((comY0 < (this.metaState.relearnThreshold || 0.238) || upY0 < 0.45) && !this.manualFreeze) : (upY0 < 0.22));
+      (isDuck0
+        ? (((comY0 < (this.alwaysLearn ? (this.metaState.relearnThreshold || 0.238) : 0.205)) || upY0 < 0.45) && !this.manualFreeze)
+        : (upY0 < 0.22));
     const confirmDelay = isDuck0 ? 1 : (this.overturnConfirmDelay || 20);
 
     if (!this.wasOverturned) {
@@ -1489,10 +1830,12 @@ export class PPOTrainer {
         this.rightingContactSteps = 0;
         this.rightingBottomContactSteps = 0;
         this.rightingHeadContactSteps = 0;
-        this.rightingMinFootClearanceY = Infinity;
         this.brain.rightingPhase = 0;
         this.brain._duckInHighHeadstand = false;
         this.brain.resetRightingWaveState(isDuck0 ? comY0 : upY0, topY0);
+        if (isDuck0) {
+          this.brain._initPoseGAPopulation(this.brain.extractDuckPose6D(c0.getObservation(), comY0));
+        }
       }
 
       this.metaState.mode = 'LEARNING_RIGHTING';
@@ -1501,7 +1844,7 @@ export class PPOTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = isDuck0
-        ? '🧬 ГЕНЕТИЧЕСКИЙ АЛГОРИТМ: ПОИСК 14D-ВЕКТОРА'
+        ? '🧬 ДВУХУРОВНЕВЫЙ ГА: ЯЗЫК ПОЗ (ГА №1 Поз + ГА №2 Серво)'
         : '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
@@ -1518,8 +1861,7 @@ export class PPOTrainer {
 
       if (isDuck0) {
         const cand = this.brain.getCurrentDuckGACandidate();
-        const bestFitStr = Number.isFinite(this.brain.gaBestFitness) ? this.brain.gaBestFitness.toFixed(2) : '—';
-        this.metaState.reasonText = `Поколение #${cand.gen}, вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | ЦМ=${comY0.toFixed(3)} м → цель ${targetCom0.toFixed(3)} м | рекорд фитнеса: ${bestFitStr}`;
+        this.metaState.reasonText = `ГА1 Поза #${cand.poseGen}.${cand.poseIdx} (${cand.poseOrigin}, к цели ${cand.curGoalPct}%) | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех. | ЦМ=${comY0.toFixed(3)} м`;
       } else {
         this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка подняться #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
       }
@@ -1698,7 +2040,7 @@ export class PPOTrainer {
         this.rightingMinFootClearanceY = stepMinFootClearance;
       }
 
-      const horizon = isDuck0 ? 20 : this.rightingHorizon;
+      const horizon = isDuck0 ? 16 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
         const startTopY = this.rightingStartTopY ?? topY0;
         const maxTopY = this.rightingMaxTopY ?? topY0;
@@ -2522,7 +2864,9 @@ export class NESTrainer {
     const isPhysicallyTiltedOnBack =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
-      (isDuck0 ? ((comY0 < (this.metaState.relearnThreshold || 0.238) || upY0 < 0.45) && !this.manualFreeze) : (upY0 < 0.22));
+      (isDuck0
+        ? (((comY0 < (this.alwaysLearn ? (this.metaState.relearnThreshold || 0.238) : 0.205)) || upY0 < 0.45) && !this.manualFreeze)
+        : (upY0 < 0.22));
     const confirmDelay = isDuck0 ? 1 : 24;
 
     if (!this.wasOverturned) {
@@ -2575,6 +2919,9 @@ export class NESTrainer {
         this.brain.rightingPhase = 0;
         this.brain._duckInHighHeadstand = false;
         this.brain.resetRightingWaveState(isDuck0 ? comY0 : upY0, topY0);
+        if (isDuck0) {
+          this.brain._initPoseGAPopulation(this.brain.extractDuckPose6D(c0.getObservation(), comY0));
+        }
       }
       this.metaState.mode = 'LEARNING_RIGHTING';
       this.metaState.isLearningActive = true;
@@ -2582,7 +2929,7 @@ export class NESTrainer {
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = isDuck0
-        ? '🧬 ГЕНЕТИЧЕСКИЙ АЛГОРИТМ: ПОИСК 14D-ВЕКТОРА'
+        ? '🧬 ДВУХУРОВНЕВЫЙ ГА: ЯЗЫК ПОЗ (ГА №1 Поз + ГА №2 Серво)'
         : '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
@@ -2598,8 +2945,7 @@ export class NESTrainer {
 
       if (isDuck0) {
         const cand = this.brain.getCurrentDuckGACandidate();
-        const bestFitStr = Number.isFinite(this.brain.gaBestFitness) ? this.brain.gaBestFitness.toFixed(2) : '—';
-        this.metaState.reasonText = `Поколение #${cand.gen}, вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | ЦМ=${comY0.toFixed(3)} м → цель ${targetCom0.toFixed(3)} м | рекорд фитнеса: ${bestFitStr}`;
+        this.metaState.reasonText = `ГА1 Поза #${cand.poseGen}.${cand.poseIdx} (${cand.poseOrigin}, к цели ${cand.curGoalPct}%) | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех. | ЦМ=${comY0.toFixed(3)} м`;
       } else {
         this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка подняться #${this.metaState.rightingAttempts}`;
       }
@@ -2707,7 +3053,7 @@ export class NESTrainer {
       if (stepMinFootClearance < (this.rightingMinFootClearanceY ?? Infinity)) {
         this.rightingMinFootClearanceY = stepMinFootClearance;
       }
-      const horizon = isDuck0 ? 20 : this.rightingHorizon;
+      const horizon = isDuck0 ? 16 : this.rightingHorizon;
       if (this.rightingStepCursor >= horizon) {
         const startTopY = this.rightingStartTopY ?? topY0;
         const maxTopY = this.rightingMaxTopY ?? topY0;
