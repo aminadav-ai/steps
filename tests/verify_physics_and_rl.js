@@ -438,25 +438,40 @@ const hasPoseEvolution =
   gaHist.some(h => h.gaOrigin === 'кроссовер' || h.poseMutantOrigin === 'кроссовер к цели');
 const bestGAFitness = duckSideSim.brain.gaBestFitness;
 const samplePose = Array.from(duckSideSim.brain.extractDuckPose6D(ds.getObservation(), ds.body.getCenterOfMass().y));
-const isQuantizedOnGrid = samplePose.length === 6 && samplePose.every(v => Math.abs(Math.round(v * 4) / 4 - v) < 1e-6);
+const quantizedKeyPose = Array.from(duckSideSim.brain.quantizePose6D(samplePose));
+const isQuantizedOnGrid = quantizedKeyPose.length === 6 && quantizedKeyPose.every(v => Math.abs(Math.round(v * 4) / 4 - v) < 1e-6);
+
+// Проверим точечную мутацию 1 числа в пределах [-5%, +5%] для вектора сервоприводов (14D) и вектора позы (6D):
+const testParent14 = new Float64Array([0.6, -0.5, 0.4, -0.3, 0.2, 0.5, -0.4, 0.3, -0.6, 0.2, 0.4, -0.4, 0.2, -0.2]);
+const testMut14 = duckSideSim.brain._mutateDuckVector(testParent14);
+const changedIndices14 = [];
+for (let i = 0; i < 14; i++) {
+  if (Math.abs(testMut14[i] - testParent14[i]) > 1e-7) changedIndices14.push(i);
+}
+const singleGeneOk14 =
+  changedIndices14.length === 1 &&
+  Math.abs(testMut14[changedIndices14[0]] - testParent14[changedIndices14[0]]) <=
+    Math.max(0.05, Math.abs(testParent14[changedIndices14[0]])) * 0.0505;
+
 const transMemLen = duckSideSim.brain.poseTransitionMemory.size;
 console.log(
   `Двухуровневый ГА Утки (180 шагов = ${gaHist.length} векторов ГА2, пок. ГА1: ${duckSideSim.brain.poseGen}, пок. ГА2: ${duckSideSim.brain.gaGeneration}): ` +
   `maxComY=${maxDuckSideComY.toFixed(3)} м, bestFitness=${bestGAFitness.toFixed(3)}, ` +
-  `памятьПереходов=${transMemLen}, сеткаПоз6D=${JSON.stringify(samplePose)}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`
+  `памятьПереходов=${transMemLen}, поза6D=${JSON.stringify(samplePose)}, maxPowerW=${maxDuckSidePowerW.toFixed(1)} Вт`
 );
 if (
   maxDuckSideComY > 0.85 ||
   maxDuckSidePowerW > 180.0 ||
   gaHist.length < 4 ||
   !isQuantizedOnGrid ||
+  !singleGeneOk14 ||
   duckSideSim.brain.posePop.length !== 4 ||
   !Number.isFinite(bestGAFitness) ||
   bestGAFitness <= 0.15 ||
   !hasMutations ||
   !hasPoseEvolution
 ) {
-  console.error('ОШИБКА: Двухуровневый ГА Утки (ГА №1 Поз + ГА №2 Серво) должен квантовать 6D-позу по сетке 0.25, эволюционировать позы и 14D-векторы без взрывов мощности (> 180 Вт)!');
+  console.error('ОШИБКА: Двухуровневый ГА Утки (ГА №1 Поз + ГА №2 Серво) должен мутировать по 1 числу на ±5%, эволюционировать позы и 14D-векторы без взрывов мощности (> 180 Вт)!');
   process.exit(1);
 }
 

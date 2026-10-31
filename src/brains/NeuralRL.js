@@ -505,7 +505,19 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Quantizes a 6D pose vector to the coarse 0.25 grid.
+   * Clamps a 6D pose vector to [-1, +1]^6 without coarse grid rounding so 5% single-gene mutations are preserved.
+   */
+  _clampPose6D(poseVec) {
+    const out = new Float64Array(6);
+    for (let i = 0; i < 6; i++) {
+      const v = Number.isFinite(poseVec ? poseVec[i] : 0) ? poseVec[i] : 0;
+      out[i] = Math.max(-1.0, Math.min(1.0, Number(v.toFixed(4))));
+    }
+    return out;
+  }
+
+  /**
+   * Quantizes a 6D pose vector to the 0.25 grid (used ONLY for memory cell keys / deduplication).
    */
   quantizePose6D(poseVec) {
     const out = new Float64Array(6);
@@ -516,7 +528,7 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Extracts the compact 6-dimensional quantized Pose Vector P in [-1, +1]^6 from the Duck's sensors:
+   * Extracts the continuous 6-dimensional Pose Vector P in [-1, +1]^6 from the Duck's sensors:
    *   [0] comY_norm : normalized Center of Mass height (0.12 m -> -1.0, 0.20 m -> 0.0, 0.28 m -> +1.0)
    *   [1] upY       : torso vertical projection (+1 = upright, -1 = inverted)
    *   [2] pitchY    : sagittal tilt (+1 = on back/nose up, -1 = on belly/nose down)
@@ -531,7 +543,7 @@ export class ActorCriticBrain {
     const rollY = obs && obs.length > 8 ? obs[8] : 0.0;
     const legExtL = obs && obs.length > 22 ? obs[22] * 2.4 : 0.0;
     const legExtR = obs && obs.length > 32 ? obs[32] * 2.4 : 0.0;
-    return this.quantizePose6D([comNorm, upY, pitchY, rollY, legExtL, legExtR]);
+    return this._clampPose6D([comNorm, upY, pitchY, rollY, legExtL, legExtR]);
   }
 
   /**
@@ -600,10 +612,17 @@ export class ActorCriticBrain {
    */
   setDuckPoseGoal(goalKey, currentPose6D = null) {
     const info = this.getDuckPoseGoalInfo(goalKey);
+    const prevKey = this.poseGoalKey;
     this.poseGoalKey = info.key;
     this.poseGoal = Float64Array.from(info.vec);
     this._prevPoseKey = null;
     this._recentPoseKeys = [];
+    if (prevKey !== this.poseGoalKey) {
+      // Clear goal-specific elite vector so a vector for a previous goal doesn't pull away from the new goal
+      this.gaBestFitness = 0;
+      this.gaBestVector = null;
+      this.gaSecondBestVector = null;
+    }
     if (this.poseUnreachableMemory) {
       this.poseUnreachableMemory.clear();
     }
@@ -641,23 +660,23 @@ export class ActorCriticBrain {
           upY >= 0.65 &&
           bottomY <= 0.135 &&
           comY <= 0.215 &&
-          pose6D[4] <= -0.25 &&
-          pose6D[5] <= -0.25 &&
-          goalMatchPct >= 68
+          pose6D[4] <= -0.20 &&
+          pose6D[5] <= -0.20 &&
+          goalMatchPct >= 60
         );
       case 'lie_back':
         return (
           pitchY >= 0.55 &&
           Math.abs(rollY) <= 0.48 &&
           comY <= 0.205 &&
-          goalMatchPct >= 68
+          goalMatchPct >= 60
         );
       case 'lie_belly':
         return (
           pitchY <= -0.55 &&
           Math.abs(rollY) <= 0.48 &&
           comY <= 0.195 &&
-          goalMatchPct >= 68
+          goalMatchPct >= 60
         );
       case 'stand':
       default:
@@ -671,51 +690,48 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Mutates a 6D quantized pose vector toward the goal pose P_goal by discrete 0.25 grid steps.
-   * Guarantees at least one torso coordinate [comY, upY, pitchY, rollY] (0..3) shifts so pose mutants
-   * never represent mere leg-twitching in place.
+   * Single-gene ±5% mutation: picks ONE random coordinate of the vector and modifies it
+   * by a random amount in [-5%, +5%] of that coordinate's value (with a 0.05 floor when near 0.0).
    */
-  _mutatePose6D(basePose, goalPose, stepBias = 0.5) {
-    const child = Float64Array.from(basePose);
-    let torsoChanged = 0;
-    for (let i = 0; i < 6; i++) {
-      if (Math.random() < 0.65) {
-        const diff = goalPose[i] - basePose[i];
-        let delta = 0;
-        if (Math.abs(diff) >= 0.25 && Math.random() < stepBias) {
-          delta = Math.sign(diff) * (Math.random() < 0.45 ? 0.25 : 0.50);
-        } else {
-          delta = (Math.floor(Math.random() * 5) - 2) * 0.25;
-        }
-        const nextVal = this._quantizePoseCoord(child[i] + delta);
-        if (i < 4 && nextVal !== child[i]) torsoChanged += 1;
-        child[i] = nextVal;
-      }
+  _mutateSingleGene5Pct(parentVec, maxIndex = null, targetVec = null, stepBias = 0.0) {
+    const child = Float64Array.from(parentVec);
+    const len = maxIndex !== null ? Math.min(child.length, maxIndex) : child.length;
+    const idx = Math.floor(Math.random() * len);
+    const curVal = Number(child[idx]) || 0.0;
+    const refMag = Math.max(0.05, Math.abs(curVal));
+    // Random magnitude in (0 .. 5%] of refMag, with random sign in [-5%, +5%] (or biased toward targetVec if specified)
+    const pctMag = (0.15 + 0.85 * Math.random()) * 0.05;
+    let sign = Math.random() < 0.5 ? -1.0 : 1.0;
+    if (targetVec && stepBias > 0 && Math.random() < stepBias) {
+      const diff = (Number(targetVec[idx]) || 0.0) - curVal;
+      if (Math.abs(diff) > 1e-4) sign = Math.sign(diff);
     }
-    if (torsoChanged === 0) {
-      // Force at least one torso coordinate (0..3) to step toward goalPose (or explore roll/pitch)
-      const torsoDiffs = [0, 1, 2, 3].filter(idx => Math.abs(goalPose[idx] - child[idx]) >= 0.25);
-      const idx = torsoDiffs.length > 0
-        ? torsoDiffs[Math.floor(Math.random() * torsoDiffs.length)]
-        : Math.floor(Math.random() * 4);
-      const rawDiff = goalPose[idx] - child[idx];
-      const stepMag = Math.random() < 0.6 ? 0.50 : 0.25;
-      const dir = Math.abs(rawDiff) >= 0.25 ? Math.sign(rawDiff) * stepMag : (Math.random() < 0.5 ? 0.50 : -0.50);
-      child[idx] = this._quantizePoseCoord(
-        child[idx] + (child[idx] + dir <= 1.0 && child[idx] + dir >= -1.0 ? dir : -dir)
-      );
+    let nextVal = curVal + sign * refMag * pctMag;
+    if (nextVal > 1.0 || nextVal < -1.0) {
+      nextVal = curVal - sign * refMag * pctMag;
     }
+    child[idx] = Math.max(-1.0, Math.min(1.0, Number(nextVal.toFixed(4))));
     return child;
   }
 
   /**
-   * Crosses over two 6D quantized poses (e.g., current pose and goal pose).
+   * Mutates a 6D pose vector by changing ONE coordinate by [-5%, +5%] of its value (without coarse 0.25 rounding).
+   */
+  _mutatePose6D(basePose, goalPose, stepBias = 0.5) {
+    return this._mutateSingleGene5Pct(basePose, 6, goalPose, stepBias);
+  }
+
+  /**
+   * Crosses over two 6D continuous poses (without coarse 0.25 rounding).
    */
   _crossoverPose6D(poseA, poseB) {
     const child = new Float64Array(6);
     for (let i = 0; i < 6; i++) {
-      const blend = 0.5 * (poseA[i] + poseB[i]);
-      child[i] = this._quantizePoseCoord(Math.random() < 0.5 ? blend : (Math.random() < 0.5 ? poseA[i] : poseB[i]));
+      const a = Number(poseA[i]) || 0;
+      const b = Number(poseB[i]) || 0;
+      const blend = 0.5 * (a + b);
+      const val = Math.random() < 0.5 ? blend : (Math.random() < 0.5 ? a : b);
+      child[i] = Math.max(-1.0, Math.min(1.0, Number(val.toFixed(4))));
     }
     return child;
   }
@@ -732,62 +748,15 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Generates a coordinated, biomechanically contrastive 14D servo vector (asymmetric roll push,
-   * deep leg tuck + neck lever, or symmetric extension) to help GA #2 break out of dead postures.
+   * Mutates a 14D servo vector by changing ONE random coordinate in [-5%, +5%] of its value.
    */
-  _contrastiveDuckVector() {
-    const v = new Float64Array(this.actDim);
-    const mode = Math.floor(Math.random() * 3);
-    if (mode === 0) {
-      // Asymmetric lateral roll + neck swing (helps roll from back -> side -> belly/feet)
-      const side = Math.random() < 0.5 ? 1.0 : -1.0;
-      for (let a = 0; a < 5; a++) v[a] = Math.max(-1, Math.min(1, side * (0.35 + 0.35 * Math.random()) * (a % 2 === 0 ? 1 : -0.5)));
-      for (let a = 5; a < 10; a++) v[a] = Math.max(-1, Math.min(1, -side * (0.35 + 0.35 * Math.random()) * (a % 2 === 0 ? 1 : -0.5)));
-      for (let a = 10; a < this.actDim; a++) v[a] = Math.max(-1, Math.min(1, side * (a % 2 === 0 ? 0.55 : -0.45) + randn() * 0.15));
-    } else if (mode === 1) {
-      // Coordinated forward/backward pitch lever using both legs + neck column
-      const pitchDir = this.poseGoalKey === 'lie_belly' ? -1.0 : (this.poseGoalKey === 'lie_back' ? 1.0 : (Math.random() < 0.5 ? 1.0 : -1.0));
-      for (let a = 0; a < 5; a++) {
-        const val = pitchDir * (a === 1 || a === 2 ? 0.55 : -0.40) + randn() * 0.15;
-        v[a] = Math.max(-1, Math.min(1, val));
-        v[a + 5] = Math.max(-1, Math.min(1, val + randn() * 0.12));
-      }
-      for (let a = 10; a < this.actDim; a++) {
-        v[a] = Math.max(-1, Math.min(1, pitchDir * 0.60 + randn() * 0.15));
-      }
-    } else {
-      return this._randomDuckVector();
-    }
-    return v;
-  }
-
-  /**
-   * Mutates a 14D servo vector by perturbing genes with Gaussian noise N(0, sigma) or occasional full gene replacement.
-   */
-  _mutateDuckVector(parentVec, mutationRate = 0.45, sigma = 0.45) {
-    const child = Float64Array.from(parentVec);
-    let mutatedCount = 0;
-    for (let a = 0; a < this.actDim; a++) {
-      if (Math.random() < mutationRate) {
-        mutatedCount += 1;
-        if (Math.random() < 0.25) {
-          child[a] = Math.random() * 2.0 - 1.0;
-        } else {
-          child[a] = Math.max(-1.0, Math.min(1.0, child[a] + randn() * sigma));
-        }
-      }
-    }
-    while (mutatedCount < 2) {
-      const idx = Math.floor(Math.random() * this.actDim);
-      child[idx] = Math.max(-1.0, Math.min(1.0, child[idx] + (Math.random() * 1.4 - 0.7)));
-      mutatedCount += 1;
-    }
-    return child;
+  _mutateDuckVector(parentVec) {
+    return this._mutateSingleGene5Pct(parentVec, this.actDim, null, 0.0);
   }
 
   /**
    * Crosses over two 14D parent vectors (either by functional limb blocks: Left Leg [0..4], Right Leg [5..9],
-   * Neck/Head [10..13], or by uniform gene-wise crossover) with a small mutation tweak.
+   * Neck/Head [10..13], or by uniform gene-wise crossover) + a single-gene ±5% mutation tweak.
    */
   _crossoverDuckVectors(vecA, vecB) {
     const child = new Float64Array(this.actDim);
@@ -803,9 +772,7 @@ export class ActorCriticBrain {
         child[a] = Math.random() < 0.5 ? vecA[a] : vecB[a];
       }
     }
-    const tweakIdx = Math.floor(Math.random() * this.actDim);
-    child[tweakIdx] = Math.max(-1.0, Math.min(1.0, child[tweakIdx] + randn() * 0.22));
-    return child;
+    return this._mutateSingleGene5Pct(child, this.actDim, null, 0.0);
   }
 
   _makeGACandidate(vec, origin = 'случайный') {
@@ -824,31 +791,31 @@ export class ActorCriticBrain {
 
   /**
    * Records a verified transition (pFrom -> pTo via cmdVec) in the deduplicated cell memory.
-   * Requires a genuine 4D torso posture shift (computeTorsoDistance4D >= 0.18), preventing memory bloat from leg waving.
+   * Uses quantized keys only for memory deduplication so close poses do not bloat memory.
    */
   rememberPoseTransition(pFrom, pTo, cmdVec, maxComY = 0.20) {
     if (!pFrom || !pTo || !cmdVec || cmdVec.length !== this.actDim) return false;
-    const qFrom = this.quantizePose6D(pFrom);
-    const qTo = this.quantizePose6D(pTo);
-    const fromKey = this.getPoseKey6D(qFrom);
-    const toKey = this.getPoseKey6D(qTo);
-    const shiftDist = this.computePoseDistance6D(qFrom, qTo);
-    const torsoShiftDist = this.computeTorsoDistance4D(qFrom, qTo);
-    if (fromKey === toKey || shiftDist < 0.22 || torsoShiftDist < 0.18) {
-      return false; // Ignore micro-jitter or leg-only waving that did not move the torso
+    const cFrom = this._clampPose6D(pFrom);
+    const cTo = this._clampPose6D(pTo);
+    const fromKey = this.getPoseKey6D(cFrom);
+    const toKey = this.getPoseKey6D(cTo);
+    const shiftDist = this.computePoseDistance6D(cFrom, cTo);
+    const torsoShiftDist = this.computeTorsoDistance4D(cFrom, cTo);
+    if (shiftDist < 0.02 || torsoShiftDist < 0.015) {
+      return false; // Ignore zero-movement or leg-only micro-jitter
     }
 
     if (!this.poseTransitionMemory) this.poseTransitionMemory = new Map();
     const transKey = `${fromKey}->${toKey}`;
-    const goalPct = this.computePoseMatchPct6D(qTo, this.poseGoal);
+    const goalPct = this.computePoseMatchPct6D(cTo, this.poseGoal);
     const existing = this.poseTransitionMemory.get(transKey);
 
     if (!existing || maxComY >= existing.maxComY - 0.005 || goalPct >= existing.goalPct) {
       this.poseTransitionMemory.set(transKey, {
         fromKey,
         toKey,
-        pFrom: qFrom,
-        pTo: qTo,
+        pFrom: cFrom,
+        pTo: cTo,
         cmdVec: Float64Array.from(cmdVec),
         matchPct: 100,
         goalPct: Number(goalPct.toFixed(1)),
@@ -872,11 +839,11 @@ export class ActorCriticBrain {
   }
 
   /**
-   * Initializes GA #1 (Pose Population) anchored at the Duck's current quantized pose P_current.
-   * Applies Filter #1 (Memory screening) to immediately discard pose mutants known to be unreachable from P_current.
+   * Initializes GA #1 (Pose Population) anchored at the Duck's current continuous pose P_current.
+   * Uses single-gene ±5% mutations (_mutatePose6D) and crossover (_crossoverPose6D).
    */
   _initPoseGAPopulation(basePose = null) {
-    const startPose = this.quantizePose6D(basePose || this.poseCurrent || [-0.75, -0.25, 0.50, 0.0, 0.0, 0.0]);
+    const startPose = this._clampPose6D(basePose || this.poseCurrent || [-0.75, -0.25, 0.50, 0.0, 0.0, 0.0]);
     this.poseCurrent = startPose;
     const fromKey = this.getPoseKey6D(startPose);
 
@@ -887,23 +854,22 @@ export class ActorCriticBrain {
     const origins = ['шаг к цели', 'мутация позы', 'кроссовер к цели', 'прямой шаг к цели'];
     for (let m = 0; m < this.posePopSize; m++) {
       let candidatePose = null;
-      // Filter #1 (Memory-based instant screening): avoid generating a mutant already marked unreachable from fromKey
       for (let attempt = 0; attempt < 8; attempt++) {
         if (m === 0) {
           candidatePose = this._mutatePose6D(startPose, this.poseGoal, 0.70);
         } else if (m === 1) {
-          candidatePose = this._mutatePose6D(startPose, this.poseGoal, 0.45);
+          candidatePose = this._mutatePose6D(startPose, this.poseGoal, 0.0);
         } else if (m === 2) {
           candidatePose = this._crossoverPose6D(startPose, this.poseGoal);
         } else {
           candidatePose = this._mutatePose6D(this._crossoverPose6D(startPose, this.poseGoal), this.poseGoal, 0.85);
         }
         const candKey = this.getPoseKey6D(candidatePose);
-        const isDistinct =
+        const isDistinct = this.computePoseDistance6D(startPose, candidatePose) >= 1e-4;
+        const isKnownUnreachable =
           candKey !== fromKey &&
-          this.computePoseDistance6D(startPose, candidatePose) >= 0.22 &&
-          this.computeTorsoDistance4D(startPose, candidatePose) >= 0.18;
-        const isKnownUnreachable = this.poseUnreachableMemory && this.poseUnreachableMemory.has(`${fromKey}->${candKey}`);
+          this.poseUnreachableMemory &&
+          this.poseUnreachableMemory.has(`${fromKey}->${candKey}`);
         if (isDistinct && !isKnownUnreachable) {
           break;
         }
@@ -924,7 +890,7 @@ export class ActorCriticBrain {
 
   /**
    * Initializes GA #2 (Personal Servo Command Vector GA) for the active Pose Mutant in GA #1.
-   * Queries poseTransitionMemory for similar starting poses (P_from ~ P_current) and target poses (P_to ~ P_mutant).
+   * Uses elitism + single-gene ±5% mutations ('мутация') + crossover ('кроссовер') so 5% steps accumulate smoothly.
    */
   _initServoGAForCurrentPoseMutant() {
     if (!this.posePop || this.posePop.length === 0) {
@@ -939,8 +905,6 @@ export class ActorCriticBrain {
     this.gaCursor = 0;
     this.gaPopulation = [];
 
-    // Search transition memory for known transitions starting near curPose that genuinely shift away from curPose
-    // toward targetMutant / poseGoal without oscillating back into recently visited poses.
     const curKey = this.getPoseKey6D(curPose);
     const curMutantMatch = this.computePoseMatchPct6D(curPose, targetMutant.pose);
     const curGoalMatch = this.computePoseMatchPct6D(curPose, this.poseGoal);
@@ -949,20 +913,18 @@ export class ActorCriticBrain {
     if (this.poseTransitionMemory && this.poseTransitionMemory.size > 0) {
       for (const item of this.poseTransitionMemory.values()) {
         if (
-          item.toKey === curKey ||
           (this._prevPoseKey && item.toKey === this._prevPoseKey) ||
           recentKeys.includes(item.toKey)
         ) {
-          continue; // Prevent staying in the same posture or A <-> B <-> C ping-pong loops
+          continue;
         }
         const fromDist = this.computePoseDistance6D(item.pFrom, curPose);
         const shiftFromCur = this.computePoseDistance6D(item.pTo, curPose);
-        const torsoShiftFromCur = this.computeTorsoDistance4D(item.pTo, curPose);
-        if (fromDist <= 0.45 && shiftFromCur >= 0.22 && torsoShiftFromCur >= 0.18) {
+        if (fromDist <= 0.45 && shiftFromCur >= 0.02) {
           const toMutantMatch = this.computePoseMatchPct6D(item.pTo, targetMutant.pose);
           const toGoalMatch = this.computePoseMatchPct6D(item.pTo, this.poseGoal);
-          const approachesMutant = toMutantMatch >= curMutantMatch + 4.0 && toGoalMatch >= curGoalMatch - 2.0;
-          const approachesGoal = toGoalMatch >= curGoalMatch + 4.0 && toMutantMatch >= curMutantMatch - 2.0;
+          const approachesMutant = toMutantMatch >= curMutantMatch + 0.5 && toGoalMatch >= curGoalMatch - 2.0;
+          const approachesGoal = toGoalMatch >= curGoalMatch + 0.5 && toMutantMatch >= curMutantMatch - 2.0;
           if (approachesMutant || approachesGoal) {
             const score = 0.60 * toMutantMatch + 0.40 * toGoalMatch - 18.0 * fromDist;
             matchingMemories.push({ item, score });
@@ -983,45 +945,35 @@ export class ActorCriticBrain {
         this.gaPopulation.push(this._makeGACandidate(bestMemVec, 'память'));
       }
       if (this.gaPopulation.length < this.gaPopSize) {
-        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.40, 0.38), 'мутация памяти'));
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec), 'мутация'));
       }
       if (this.gaPopulation.length < this.gaPopSize) {
-        if (matchingMemories.length > 1) {
-          const secondMemVec = matchingMemories[1].item.cmdVec;
-          this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(bestMemVec, secondMemVec), 'кроссовер'));
-        } else {
-          this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.60, 0.60), 'мутация'));
-        }
-      }
-    } else if (this.poseGoalKey === 'stand' && this.gaArchive && this.gaArchive.length > 0) {
-      const archVec = this.gaArchive[0].vec;
-      if (this.gaPopulation.length < this.gaPopSize) {
-        this.gaPopulation.push(this._makeGACandidate(archVec, 'память'));
+        const partnerVec = matchingMemories.length > 1
+          ? matchingMemories[1].item.cmdVec
+          : (this.gaBestVector || this._mutateDuckVector(bestMemVec));
+        this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(bestMemVec, partnerVec), 'кроссовер'));
       }
       if (this.gaPopulation.length < this.gaPopSize) {
-        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(archVec, 0.45, 0.45), 'мутация'));
-      }
-      if (this.gaPopulation.length < this.gaPopSize && this.gaBestVector && this.gaBestVector.length === this.actDim) {
-        this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(archVec, this.gaBestVector), 'кроссовер'));
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec), 'мутация'));
       }
     } else if (this.gaBestVector && this.gaBestVector.length === this.actDim) {
+      // Accumulate 5% single-gene mutations around the best vector + crossover with second best
       if (this.gaPopulation.length < this.gaPopSize) {
-        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector, 0.45, 0.48), 'мутация'));
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector), 'мутация'));
       }
       if (this.gaPopulation.length < this.gaPopSize) {
-        const randPartner = this._contrastiveDuckVector();
-        this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(this.gaBestVector, randPartner), 'кроссовер'));
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector), 'мутация'));
+      }
+      if (this.gaPopulation.length < this.gaPopSize) {
+        const partner = (this.gaSecondBestVector && this.gaSecondBestVector.length === this.actDim)
+          ? this.gaSecondBestVector
+          : this._randomDuckVector();
+        this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(this.gaBestVector, partner), 'кроссовер'));
       }
     }
 
     while (this.gaPopulation.length < this.gaPopSize) {
-      const useContrast = this.gaPopulation.length === this.gaPopSize - 2;
-      this.gaPopulation.push(
-        this._makeGACandidate(
-          useContrast ? this._contrastiveDuckVector() : this._randomDuckVector(),
-          useContrast ? 'мутация-рывок' : 'случайный'
-        )
-      );
+      this.gaPopulation.push(this._makeGACandidate(this._randomDuckVector(), 'случайный'));
     }
   }
 
@@ -1241,12 +1193,11 @@ export class ActorCriticBrain {
 
       const poseShiftDist = this.computePoseDistance6D(pStart, pAfter);
       const torsoShiftDist = this.computeTorsoDistance4D(pStart, pAfter);
-      // A physical pose transition requires both 6D shift >= 0.22 AND 4D torso shift >= 0.18
-      // so waving legs in the air while lying on the back does not count as a pose transition!
+      // A physical pose transition requires torso shift >= 0.015 and 6D shift >= 0.02
+      // (matching the scale of single-gene ±5% mutations while ignoring pure leg-waving)
       const poseChanged =
-        this.getPoseKey6D(pStart) !== this.getPoseKey6D(pAfter) &&
-        poseShiftDist >= 0.22 &&
-        torsoShiftDist >= 0.18;
+        poseShiftDist >= 0.02 &&
+        torsoShiftDist >= 0.015;
 
       const rawMatchPct = this.computePoseMatchPct6D(pAfter, targetMutant.pose);
       const startMutantDist = this.computePoseDistance6D(pStart, targetMutant.pose);
@@ -1254,8 +1205,8 @@ export class ActorCriticBrain {
       const startTorsoMutantDist = this.computeTorsoDistance4D(pStart, targetMutant.pose);
       const afterTorsoMutantDist = this.computeTorsoDistance4D(pAfter, targetMutant.pose);
       const didApproachMutant =
-        torsoShiftDist >= 0.18 &&
-        (afterMutantDist < startMutantDist - 0.04 || afterTorsoMutantDist < startTorsoMutantDist - 0.04);
+        torsoShiftDist >= 0.015 &&
+        (afterMutantDist < startMutantDist - 0.002 || afterTorsoMutantDist < startTorsoMutantDist - 0.002);
       // Require actual physical approach toward targetMutant (D(P_after, P_mutant) < D(P_start, P_mutant))
       // so standing still near a mutant never falsely scores >= 68% reachable!
       const matchPct = didApproachMutant ? rawMatchPct : Math.min(rawMatchPct, 52.0);
@@ -1295,9 +1246,14 @@ export class ActorCriticBrain {
       }
 
       if (fitness > this.gaBestFitness) {
+        if (this.gaBestVector && this.gaBestVector.length === this.actDim) {
+          this.gaSecondBestVector = Float64Array.from(this.gaBestVector);
+        }
         this.gaBestFitness = fitness;
         this.gaBestVector = Float64Array.from(cand.vec);
         this.gaBestOrigin = cand.origin;
+      } else if (!this.gaSecondBestVector) {
+        this.gaSecondBestVector = Float64Array.from(cand.vec);
       }
       if (goalPct >= 75 || (this.poseGoalKey === 'stand' && maxComY >= 0.235)) {
         this.rememberDuckGAVector(cand.vec, fitness, maxComY);
@@ -1308,7 +1264,7 @@ export class ActorCriticBrain {
         this.duckRightingBestProgress = normProgress;
       }
 
-      // If the Duck's physical pose actually changed to a new quantized cell:
+      // If the Duck's physical pose actually shifted:
       // 1. Save transition (pStart -> pAfter, cand.vec) into deduplicated memory
       if (poseChanged) {
         this.rememberPoseTransition(pStart, pAfter, cand.vec, maxComY);
@@ -1319,7 +1275,7 @@ export class ActorCriticBrain {
           this._recentPoseKeys.push(startKey);
           if (this._recentPoseKeys.length > 3) this._recentPoseKeys.shift();
         }
-        this.poseCurrent = this.quantizePose6D(pAfter);
+        this.poseCurrent = this._clampPose6D(pAfter);
       }
 
       this.lastRightingWaveMetrics = {
@@ -1356,10 +1312,10 @@ export class ActorCriticBrain {
       };
 
       // Live System Rule: if the Duck's pose genuinely changed AND moved constructively toward the mutant or goal
-      // (not an accidental random recoil away from the goal), immediately re-anchor GA #1 around pAfter!
+      // (not an accidental recoil away from the goal), immediately re-anchor GA #1 around pAfter!
       const isConstructivePoseShift =
         poseChanged &&
-        (matchPct >= 66.0 || goalPct >= startGoalPct + 2.0);
+        (matchPct >= 66.0 || goalPct >= startGoalPct + 0.3);
       if (isConstructivePoseShift) {
         this.poseGen += 1;
         this.gaGeneration += 1;
