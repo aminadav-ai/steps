@@ -289,7 +289,17 @@
           Формирование базового моторного навыка шага и наведения на цель
         </div>
 
-        <div class="control-field" style="margin-block-start: 4px;">
+        <div class="control-field" id="duckPoseGoalField" style="margin-block-start: 4px;" hidden>
+          <label data-i18n="duckPoseGoalLabel">Целевая поза Утки (Язык поз):</label>
+          <div class="speed-row" id="duckPoseGoalButtons">
+            <button type="button" class="btn active" data-pose-goal="stand" data-i18n="poseBtnStand">🧍 Стоять</button>
+            <button type="button" class="btn" data-pose-goal="sit" data-i18n="poseBtnSit">🪑 Сидеть</button>
+            <button type="button" class="btn" data-pose-goal="lie_back" data-i18n="poseBtnLieBack">🛌 На спине</button>
+            <button type="button" class="btn" data-pose-goal="lie_belly" data-i18n="poseBtnLieBelly">🦆 На животе</button>
+          </div>
+        </div>
+
+        <div class="control-field" id="ambitionControlField" style="margin-block-start: 4px;">
           <label data-i18n="ambitionFieldLabel">Амбиция обучения (баланс минимум / скачок / максимум):</label>
           <div class="speed-row" id="ambitionButtons">
             <button class="btn active" data-ambition="min" data-i18n="ambBtnMin">🐢 Минимум</button>
@@ -299,7 +309,7 @@
           </div>
         </div>
 
-        <div class="control-field">
+        <div class="control-field" id="ambitionRangeField">
           <label for="rangeAmbition">
             <span data-i18n="ambMasteryLabel">Порог мастерства (откл. обучения):</span>
             <strong id="labelAmbitionVal">0.18 м/с (Минимум / Шаг)</strong>

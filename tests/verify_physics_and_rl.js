@@ -459,7 +459,29 @@ if (
   console.error('ОШИБКА: Двухуровневый ГА Утки (ГА №1 Поз + ГА №2 Серво) должен квантовать 6D-позу по сетке 0.25, эволюционировать позы и 14D-векторы без взрывов мощности (> 180 Вт)!');
   process.exit(1);
 }
-console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу и работает на двухуровневом ГА «Язык поз» (квантованная 6D-поза, ГА №1 мутантов поз, ГА №2 серво-векторов, память переходов).');
+
+// 7г: Проверка переключения 4 целевых поз («Стоять», «Сидеть», «На спине», «На животе») с сохранением памяти переходов
+const memBeforeSwitch = duckSideSim.brain.poseTransitionMemory.size;
+for (const goalKey of ['sit', 'lie_back', 'lie_belly', 'stand']) {
+  duckSideSim.setDuckPoseGoal(goalKey);
+  for (let s = 0; s < 20; s++) {
+    duckSideSim.stepControl();
+  }
+  if (duckSideSim.brain.poseGoalKey !== goalKey || duckSideSim.trainer.metaState.poseGoalKey !== goalKey) {
+    console.error(`ОШИБКА: Не переключилась целевая поза Утки на ${goalKey}!`);
+    process.exit(1);
+  }
+}
+const memAfterSwitch = duckSideSim.brain.poseTransitionMemory.size;
+console.log(
+  `Переключение 4 целевых поз Утки (stand / sit / lie_back / lie_belly): ` +
+  `памятьПереходов=${memBeforeSwitch} -> ${memAfterSwitch}, активнаяЦель=${duckSideSim.brain.poseGoalKey}`
+);
+if (memAfterSwitch < memBeforeSwitch) {
+  console.error('ОШИБКА: При смене целевой позы память переходов poseTransitionMemory должна сохраняться!');
+  process.exit(1);
+}
+console.log('ОК: 14-DoF Утка (Duck) сохраняет импульс, умеет садиться на попу, переключает 4 целевые позы («Стоять», «Сидеть», «На спине», «На животе») и работает на двухуровневом ГА «Язык поз».');
 
 console.log('\nИтог проверки обучения:');
 console.log(`Старт: Vel=${firstMetrics.meanVelocity.toFixed(3)} m/s, Food=${firstMetrics.c0Food}`);

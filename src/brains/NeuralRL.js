@@ -171,7 +171,36 @@ export class ActorCriticBrain {
 
     // Two-Level Genetic Algorithm ("Language of Poses": GA #1 Poses + GA #2 Servo Commands + Quantized Memory) for the Duck:
     // 6D Quantized Pose Vector P = [comY_norm, upY, pitchY, rollY, legExtL, legExtR], quantized with step 0.25
-    this.poseGoal = Float64Array.from([1.0, 1.0, 0.0, 0.0, 0.75, 0.75]); // Target pose: "Standing Duck"
+    this.poseGoalPresets = {
+      stand: {
+        key: 'stand',
+        labelRu: 'СТОЯТЬ',
+        labelShortRu: 'Стоять',
+        vec: [1.0, 1.0, 0.0, 0.0, 0.50, 0.50]
+      },
+      sit: {
+        key: 'sit',
+        labelRu: 'СИДЕТЬ',
+        labelShortRu: 'Сидеть',
+        vec: [-0.50, 1.0, 0.0, 0.0, -1.0, -1.0]
+      },
+      lie_back: {
+        key: 'lie_back',
+        labelRu: 'ЛЕЖАТЬ НА СПИНЕ',
+        labelShortRu: 'На спине',
+        vec: [-0.50, 0.0, 1.0, 0.0, -0.50, -0.50]
+      },
+      lie_belly: {
+        key: 'lie_belly',
+        labelRu: 'ЛЕЖАТЬ НА ЖИВОТЕ',
+        labelShortRu: 'На животе',
+        vec: [-0.75, 0.25, -1.0, 0.0, -0.75, -0.75]
+      }
+    };
+    this.poseGoalKey = 'stand';
+    this.poseGoal = Float64Array.from(this.poseGoalPresets.stand.vec);
+    this.poseGoalHoldVectors = {};
+    this._prevPoseKey = null;
     this.poseCurrent = null;
     this.poseGen = 1;
     this.posePopSize = 4;
@@ -242,6 +271,13 @@ export class ActorCriticBrain {
       rightingPhase: this.rightingPhase,
       gaGeneration: this.gaGeneration,
       gaCursor: this.gaCursor,
+      poseGoalKey: this.poseGoalKey,
+      poseGoal: this.poseGoal ? Array.from(this.poseGoal) : null,
+      poseGoalHoldVectors: this.poseGoalHoldVectors
+        ? Object.fromEntries(
+            Object.entries(this.poseGoalHoldVectors).map(([k, v]) => [k, Array.from(v)])
+          )
+        : {},
       poseGen: this.poseGen,
       poseCursor: this.poseCursor,
       poseCurrent: this.poseCurrent ? Array.from(this.poseCurrent) : null,
@@ -297,6 +333,18 @@ export class ActorCriticBrain {
     if (typeof data.rightingSuccesses === 'number') this.rightingSuccesses = data.rightingSuccesses;
     if (typeof data.rightingPhase === 'number') this.rightingPhase = data.rightingPhase;
     if (typeof data.gaGeneration === 'number') this.gaGeneration = data.gaGeneration;
+    if (typeof data.poseGoalKey === 'string' && this.poseGoalPresets && this.poseGoalPresets[data.poseGoalKey]) {
+      this.poseGoalKey = data.poseGoalKey;
+      this.poseGoal = Float64Array.from(this.poseGoalPresets[data.poseGoalKey].vec);
+    }
+    if (data.poseGoalHoldVectors && typeof data.poseGoalHoldVectors === 'object') {
+      this.poseGoalHoldVectors = {};
+      for (const [k, v] of Object.entries(data.poseGoalHoldVectors)) {
+        if (Array.isArray(v) && v.length === this.actDim) {
+          this.poseGoalHoldVectors[k] = Float64Array.from(v);
+        }
+      }
+    }
     if (typeof data.poseGen === 'number') this.poseGen = data.poseGen;
     if (Array.isArray(data.poseCurrent) && data.poseCurrent.length === 6) {
       this.poseCurrent = Float64Array.from(data.poseCurrent);
@@ -514,6 +562,95 @@ export class ActorCriticBrain {
   computePoseMatchPct6D(pActual, pTarget) {
     const dist = this.computePoseDistance6D(pActual, pTarget);
     return Math.max(0, Math.min(100, (1.0 - dist / 1.35) * 100));
+  }
+
+  /**
+   * Returns metadata for the active (or specified) Duck target pose preset ('stand' | 'sit' | 'lie_back' | 'lie_belly').
+   */
+  getDuckPoseGoalInfo(goalKey = this.poseGoalKey) {
+    const presets = this.poseGoalPresets || {};
+    return presets[goalKey] || presets.stand || {
+      key: 'stand',
+      labelRu: 'СТОЯТЬ',
+      labelShortRu: 'Стоять',
+      vec: [1.0, 1.0, 0.0, 0.0, 0.50, 0.50]
+    };
+  }
+
+  /**
+   * Switches the Duck's target pose ('stand' | 'sit' | 'lie_back' | 'lie_belly').
+   * Preserves all discovered transitions in poseTransitionMemory while resetting unreachable mutant flags
+   * and re-anchoring GA #1 around the current pose toward the new goal.
+   */
+  setDuckPoseGoal(goalKey, currentPose6D = null) {
+    const info = this.getDuckPoseGoalInfo(goalKey);
+    this.poseGoalKey = info.key;
+    this.poseGoal = Float64Array.from(info.vec);
+    this._prevPoseKey = null;
+    if (this.poseUnreachableMemory) {
+      this.poseUnreachableMemory.clear();
+    }
+    this.poseGen = (this.poseGen || 1) + 1;
+    this._initPoseGAPopulation(currentPose6D || this.poseCurrent);
+    return info;
+  }
+
+  /**
+   * Saves a verified 14D servo vector that successfully holds the given goal pose.
+   */
+  rememberGoalHoldVector(goalKey, vec) {
+    if (!vec || vec.length !== this.actDim) return;
+    if (!this.poseGoalHoldVectors) this.poseGoalHoldVectors = {};
+    this.poseGoalHoldVectors[goalKey || this.poseGoalKey] = Float64Array.from(vec);
+  }
+
+  /**
+   * Checks whether the Duck physically satisfies the currently selected target pose ('stand' | 'sit' | 'lie_back' | 'lie_belly').
+   */
+  isDuckInGoalPose(creature, comY, obs = null) {
+    if (!creature) return false;
+    const tf = creature.getTorsoFrame();
+    const upY = tf.up.y;
+    const pitchY = tf.forward.y;
+    const rollY = tf.right.y;
+    const bottomY = creature.torsoBottom ? creature.torsoBottom.pos.y : comY - 0.08;
+    const topY = creature.torsoTop ? creature.torsoTop.pos.y : comY + 0.08;
+    const pose6D = this.extractDuckPose6D(obs || creature.getObservation(), comY);
+    const goalMatchPct = this.computePoseMatchPct6D(pose6D, this.poseGoal);
+
+    switch (this.poseGoalKey) {
+      case 'sit':
+        return (
+          upY >= 0.65 &&
+          bottomY <= 0.135 &&
+          comY <= 0.215 &&
+          pose6D[4] <= -0.25 &&
+          pose6D[5] <= -0.25 &&
+          goalMatchPct >= 68
+        );
+      case 'lie_back':
+        return (
+          pitchY >= 0.55 &&
+          Math.abs(rollY) <= 0.48 &&
+          comY <= 0.205 &&
+          goalMatchPct >= 68
+        );
+      case 'lie_belly':
+        return (
+          pitchY <= -0.55 &&
+          Math.abs(rollY) <= 0.48 &&
+          comY <= 0.195 &&
+          goalMatchPct >= 68
+        );
+      case 'stand':
+      default:
+        return (
+          comY >= 0.225 &&
+          upY >= 0.70 &&
+          Math.abs(rollY) <= 0.35 &&
+          topY > bottomY + 0.14
+        );
+    }
   }
 
   /**
@@ -741,42 +878,69 @@ export class ActorCriticBrain {
     this.gaCursor = 0;
     this.gaPopulation = [];
 
-    // Search transition memory for known transitions starting near curPose
+    // Search transition memory for known transitions starting near curPose that move toward targetMutant / poseGoal
+    // without oscillating back into _prevPoseKey.
+    const curMutantMatch = this.computePoseMatchPct6D(curPose, targetMutant.pose);
+    const curGoalMatch = this.computePoseMatchPct6D(curPose, this.poseGoal);
     const matchingMemories = [];
     if (this.poseTransitionMemory && this.poseTransitionMemory.size > 0) {
       for (const item of this.poseTransitionMemory.values()) {
+        if (this._prevPoseKey && item.toKey === this._prevPoseKey) {
+          continue; // Prevent A <-> B <-> A ping-pong oscillation
+        }
         const fromDist = this.computePoseDistance6D(item.pFrom, curPose);
         if (fromDist <= 0.50) {
           const toMutantMatch = this.computePoseMatchPct6D(item.pTo, targetMutant.pose);
-          const toGoalMatch = item.goalPct || this.computePoseMatchPct6D(item.pTo, this.poseGoal);
-          const score = 0.65 * toMutantMatch + 0.35 * toGoalMatch - 20.0 * fromDist;
-          matchingMemories.push({ item, score });
+          const toGoalMatch = this.computePoseMatchPct6D(item.pTo, this.poseGoal);
+          if (toMutantMatch > curMutantMatch + 1.0 || toGoalMatch > curGoalMatch + 1.0) {
+            const score = 0.60 * toMutantMatch + 0.40 * toGoalMatch - 18.0 * fromDist;
+            matchingMemories.push({ item, score });
+          }
         }
       }
       matchingMemories.sort((a, b) => b.score - a.score);
     }
 
+    const holdVecForGoal = this.poseGoalHoldVectors && this.poseGoalHoldVectors[this.poseGoalKey];
+    if (holdVecForGoal && holdVecForGoal.length === this.actDim && curGoalMatch >= 50) {
+      this.gaPopulation.push(this._makeGACandidate(holdVecForGoal, 'память цели'));
+    }
+
     if (matchingMemories.length > 0) {
       const bestMemVec = matchingMemories[0].item.cmdVec;
-      this.gaPopulation.push(this._makeGACandidate(bestMemVec, 'память'));
-      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.40, 0.38), 'мутация памяти'));
-      if (matchingMemories.length > 1) {
-        const secondMemVec = matchingMemories[1].item.cmdVec;
-        this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(bestMemVec, secondMemVec), 'кроссовер'));
-      } else {
-        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.60, 0.60), 'мутация'));
+      if (this.gaPopulation.length < this.gaPopSize) {
+        this.gaPopulation.push(this._makeGACandidate(bestMemVec, 'память'));
+      }
+      if (this.gaPopulation.length < this.gaPopSize) {
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.40, 0.38), 'мутация памяти'));
+      }
+      if (this.gaPopulation.length < this.gaPopSize) {
+        if (matchingMemories.length > 1) {
+          const secondMemVec = matchingMemories[1].item.cmdVec;
+          this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(bestMemVec, secondMemVec), 'кроссовер'));
+        } else {
+          this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(bestMemVec, 0.60, 0.60), 'мутация'));
+        }
       }
     } else if (this.gaArchive && this.gaArchive.length > 0) {
       const archVec = this.gaArchive[0].vec;
-      this.gaPopulation.push(this._makeGACandidate(archVec, 'память'));
-      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(archVec, 0.45, 0.45), 'мутация'));
-      if (this.gaBestVector && this.gaBestVector.length === this.actDim) {
+      if (this.gaPopulation.length < this.gaPopSize) {
+        this.gaPopulation.push(this._makeGACandidate(archVec, 'память'));
+      }
+      if (this.gaPopulation.length < this.gaPopSize) {
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(archVec, 0.45, 0.45), 'мутация'));
+      }
+      if (this.gaPopulation.length < this.gaPopSize && this.gaBestVector && this.gaBestVector.length === this.actDim) {
         this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(archVec, this.gaBestVector), 'кроссовер'));
       }
     } else if (this.gaBestVector && this.gaBestVector.length === this.actDim) {
-      this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector, 0.40, 0.40), 'мутация'));
-      const randPartner = this._randomDuckVector();
-      this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(this.gaBestVector, randPartner), 'кроссовер'));
+      if (this.gaPopulation.length < this.gaPopSize) {
+        this.gaPopulation.push(this._makeGACandidate(this._mutateDuckVector(this.gaBestVector, 0.40, 0.40), 'мутация'));
+      }
+      if (this.gaPopulation.length < this.gaPopSize) {
+        const randPartner = this._randomDuckVector();
+        this.gaPopulation.push(this._makeGACandidate(this._crossoverDuckVectors(this.gaBestVector, randPartner), 'кроссовер'));
+      }
     }
 
     while (this.gaPopulation.length < this.gaPopSize) {
@@ -1002,7 +1166,9 @@ export class ActorCriticBrain {
       const poseChanged = (this.getPoseKey6D(pStart) !== this.getPoseKey6D(pAfter)) && (poseShiftDist >= 0.22);
 
       const matchPct = this.computePoseMatchPct6D(pAfter, targetMutant.pose);
+      const startGoalPct = this.computePoseMatchPct6D(pStart, this.poseGoal);
       const goalPct = this.computePoseMatchPct6D(pAfter, this.poseGoal);
+      const goalGain = Math.max(0, goalPct - startGoalPct);
 
       const steps = Math.max(1, this._winSteps || 1);
       const minComY = Number.isFinite(this._winMinUpY) ? Math.min(this._winMinUpY, startComY, endComY) : Math.min(startComY, endComY);
@@ -1013,13 +1179,16 @@ export class ActorCriticBrain {
       const risePeak = Math.max(0, maxComY - startComY);
       const riseNet = Math.max(0, endComY - startComY);
 
-      // GA #2 fitness: rewards closeness to target pose mutant + closeness to goal pose + physical CoM lift
+      // GA #2 fitness: rewards closeness to target pose mutant + closeness & progress toward active goal pose
+      // (plus CoM lift bonus when goal pose is 'stand')
+      const standLiftBonus = this.poseGoalKey === 'stand'
+        ? (2.5 * risePeak + 1.8 * riseNet + 1.0 * holdRatio * maxComY)
+        : (0.018 * goalGain);
       const fitness =
         0.012 * matchPct +
-        0.015 * goalPct +
-        3.0 * risePeak +
-        2.0 * riseNet +
-        1.2 * holdRatio * maxComY;
+        0.016 * goalPct +
+        0.014 * goalGain +
+        standLiftBonus;
 
       cand.fitness = fitness;
       cand.maxComY = maxComY;
@@ -1037,11 +1206,11 @@ export class ActorCriticBrain {
         this.gaBestVector = Float64Array.from(cand.vec);
         this.gaBestOrigin = cand.origin;
       }
-      if (maxComY >= 0.235) {
+      if (goalPct >= 75 || (this.poseGoalKey === 'stand' && maxComY >= 0.235)) {
         this.rememberDuckGAVector(cand.vec, fitness, maxComY);
       }
 
-      const normProgress = Math.max(0, (maxComY - 0.145) * 6.0) + risePeak * 4.0;
+      const normProgress = Math.max(0, (goalPct - 25.0) * 0.03) + risePeak * 3.0;
       if (normProgress > this.duckRightingBestProgress) {
         this.duckRightingBestProgress = normProgress;
       }
@@ -1050,16 +1219,21 @@ export class ActorCriticBrain {
       // 1. Save transition (pStart -> pAfter, cand.vec) into deduplicated memory
       if (poseChanged) {
         this.rememberPoseTransition(pStart, pAfter, cand.vec, maxComY);
+        this._prevPoseKey = this.getPoseKey6D(pStart);
       }
 
       this.lastRightingWaveMetrics = {
+        poseGoalKey: this.poseGoalKey,
         gaGen: this.gaGeneration,
         gaIdx: sIdx + 1,
+        gaCandidateIdx: sIdx + 1,
         gaPopSize: this.gaPopulation.length,
         gaOrigin: cand.origin,
         poseGen: this.poseGen,
         poseIdx: pIdx + 1,
+        poseMutantIdx: pIdx + 1,
         poseOrigin: targetMutant.origin,
+        poseMutantOrigin: targetMutant.origin,
         poseChanged,
         poseShiftDist: Number(poseShiftDist.toFixed(3)),
         poseMatchPct: Number(matchPct.toFixed(1)),
@@ -1453,6 +1627,7 @@ export class PPOTrainer {
     this.metaState = {
       mode: 'LEARNING_WALK', // 'LEARNING_WALK' | 'CONSOLIDATED' | 'LEARNING_RIGHTING'
       ambitionPreset: 'min',
+      poseGoalKey: isDuckBrain ? (brain.poseGoalKey || 'stand') : undefined,
       isLearningActive: true,
       modeTitle: isDuckBrain
         ? '🟢 АКТИВНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ'
@@ -1665,6 +1840,24 @@ export class PPOTrainer {
   }
 
   /**
+   * Switches the Duck's target pose in the Two-Level Pose + Servo GA ('stand' | 'sit' | 'lie_back' | 'lie_belly').
+   */
+  setDuckPoseGoal(goalKey) {
+    if (this.brain.morphologyKey !== 'duck') return;
+    this.manualFreeze = false;
+    const info = this.brain.setDuckPoseGoal(goalKey);
+    this.metaState.poseGoalKey = info.key;
+    this.duckComHoldSteps = 0;
+    this.wasOverturned = false;
+    this.overturnConfirmSteps = 0;
+    this.metaState.mode = 'LEARNING_RIGHTING';
+    this.metaState.isLearningActive = true;
+    this.metaState.needToLearnPct = 100;
+    this.metaState.modeTitle = `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${info.labelRu}»`;
+    this.metaState.reasonText = `Задана новая целевая поза «${info.labelShortRu}» — ГА №1 ищет цепочку поз, ГА №2 подбирает команды сервоприводов`;
+  }
+
+  /**
    * Manual toggle to either freeze weights immediately or force active learning
    */
   toggleManualFreeze() {
@@ -1765,14 +1958,27 @@ export class PPOTrainer {
     const upY0 = c0.getTorsoFrame().up.y;
     const comY0 = c0.body.getCenterOfMass().y;
     const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : comY0;
+    const targetCom0 = this.metaState.targetCompetence || 0.235;
 
-    // For the Duck, only Center of Mass height (comY0) determines whether it has fallen (< 0.195 m)
-    // or is coping with the task (>= targetCompetence ~0.215 m). Torso tilt and upper-torso height are ignored!
+    let inDuckGoalPose = false;
+    if (isDuck0) {
+      if (this.brain.poseGoalKey === 'stand') {
+        inDuckGoalPose =
+          comY0 >= targetCom0 &&
+          upY0 >= 0.70 &&
+          (!c0.torsoTop || !c0.torsoBottom || c0.torsoTop.pos.y > c0.torsoBottom.pos.y + 0.14);
+      } else {
+        inDuckGoalPose = this.brain.isDuckInGoalPose(c0, comY0);
+      }
+    }
+
     const isPhysicallyTiltedOnBack =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
       (isDuck0
-        ? (((comY0 < (this.alwaysLearn ? (this.metaState.relearnThreshold || 0.238) : 0.205)) || upY0 < 0.45) && !this.manualFreeze)
+        ? (this.brain.poseGoalKey === 'stand'
+            ? (((comY0 < (this.alwaysLearn ? (this.metaState.relearnThreshold || 0.238) : 0.205)) || upY0 < 0.45) && !this.manualFreeze)
+            : (!inDuckGoalPose && !this.manualFreeze))
         : (upY0 < 0.22));
     const confirmDelay = isDuck0 ? 1 : (this.overturnConfirmDelay || 20);
 
@@ -1798,10 +2004,8 @@ export class PPOTrainer {
     }
 
     this.uprightHoldSteps = 0;
-    const targetCom0 = this.metaState.targetCompetence || 0.255;
     if (isDuck0) {
-      const isTrueHighCom = comY0 >= targetCom0 && (!c0.torsoTop || !c0.torsoBottom || c0.torsoTop.pos.y > c0.torsoBottom.pos.y + 0.15);
-      this.duckComHoldSteps = isTrueHighCom ? (this.duckComHoldSteps || 0) + 1 : 0;
+      this.duckComHoldSteps = inDuckGoalPose ? (this.duckComHoldSteps || 0) + 1 : 0;
     }
     const isRecoveredUpright = isDuck0
       ? (this.duckComHoldSteps >= 8)
@@ -1838,13 +2042,17 @@ export class PPOTrainer {
         }
       }
 
+      const goalInfo = isDuck0 ? this.brain.getDuckPoseGoalInfo() : null;
+      if (goalInfo) {
+        this.metaState.poseGoalKey = goalInfo.key;
+      }
       this.metaState.mode = 'LEARNING_RIGHTING';
       this.metaState.isLearningActive = true;
       this.metaState.needToLearnPct = 100;
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = isDuck0
-        ? '🧬 ДВУХУРОВНЕВЫЙ ГА: ЯЗЫК ПОЗ (ГА №1 Поз + ГА №2 Серво)'
+        ? `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${goalInfo.labelRu}»`
         : '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
@@ -1861,7 +2069,7 @@ export class PPOTrainer {
 
       if (isDuck0) {
         const cand = this.brain.getCurrentDuckGACandidate();
-        this.metaState.reasonText = `ГА1 Поза #${cand.poseGen}.${cand.poseIdx} (${cand.poseOrigin}, к цели ${cand.curGoalPct}%) | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех. | ЦМ=${comY0.toFixed(3)} м`;
+        this.metaState.reasonText = `Цель: «${goalInfo.labelShortRu}» (${cand.curGoalPct}%) | ГА1 Поза #${cand.poseGen}.${cand.poseIdx} (${cand.poseOrigin}) | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех.`;
       } else {
         this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена, о еде не думает — попытка подняться #${this.metaState.rightingAttempts} (навык ${this.metaState.rightingSkillPct}%)`;
       }
@@ -1886,6 +2094,23 @@ export class PPOTrainer {
       const c = creatures[w];
       const obs = c.getObservation();
       const isLeader = w === 0;
+
+      // If the Duck achieved a non-standing target pose ('sit', 'lie_back', 'lie_belly'), hold it with the learned GA servo vector!
+      const holdPoseVec = (isDuck0 && this.brain.poseGoalKey !== 'stand' && this.brain.poseGoalHoldVectors)
+        ? this.brain.poseGoalHoldVectors[this.brain.poseGoalKey]
+        : null;
+      if (holdPoseVec && holdPoseVec.length === this.brain.actDim) {
+        const act = Float64Array.from(holdPoseVec);
+        const { value } = this.brain.forwardCritic(obs, isLeader);
+        stepObs[w] = obs;
+        stepAct[w] = act;
+        stepLogProb[w] = 0;
+        stepVal[w] = value;
+        c.lastState = obs;
+        c.lastAction = act;
+        c.applyActionVector(act, false);
+        continue;
+      }
 
       // Evaluate base policy mean for PPO logProb
       const { mu: baseMu } = this.brain.forwardActor(obs, isLeader, null);
@@ -1934,10 +2159,12 @@ export class PPOTrainer {
 
     if (this.brain.morphologyKey === 'duck') {
       const cand = this.brain.getCurrentDuckGACandidate();
+      const goalInfo = this.brain.getDuckPoseGoalInfo();
+      this.metaState.poseGoalKey = goalInfo.key;
       if (cand && cand.vec) {
         this.brain.rememberDuckGAVector(cand.vec, 2.5, recoveredComY || 0.26);
+        this.brain.rememberGoalHoldVector(goalInfo.key, cand.vec);
       }
-      const target = this.metaState.targetCompetence || 0.215;
       if (typeof recoveredComY === 'number') {
         this.metaState.competenceEMA = Number(Math.max(this.metaState.competenceEMA, recoveredComY).toFixed(3));
       }
@@ -1945,13 +2172,13 @@ export class PPOTrainer {
         this.metaState.mode = 'CONSOLIDATED';
         this.metaState.isLearningActive = false;
         this.metaState.needToLearnPct = 0;
-        this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
-        this.metaState.reasonText = `Утка подняла центр масс выше ${target.toFixed(2)} м (подъёмов: ${this.metaState.rightingSuccesses}) — вектор сохранён в память ГА`;
+        this.metaState.modeTitle = `🛡️ ПОЗА ДОСТИГНУТА: УТКА УДЕРЖИВАЕТ «${goalInfo.labelRu}»`;
+        this.metaState.reasonText = `Утка перешла в целевую позу «${goalInfo.labelShortRu}» (выполнено целей: ${this.metaState.rightingSuccesses}) — вектор сохранён в память ГА`;
       } else {
         this.metaState.mode = 'LEARNING_WALK';
         this.metaState.isLearningActive = true;
-        this.metaState.modeTitle = '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: МАКСИМИЗАЦИЯ ВЫСОТЫ ЦМ';
-        this.metaState.reasonText = `Утка подняла центр масс (подъёмов: ${this.metaState.rightingSuccesses}) и продолжает максимизировать ЦМ`;
+        this.metaState.modeTitle = '♾️ ВЕЧНОЕ ОБУЧЕНИЕ: ЯЗЫК ПОЗ УТКИ';
+        this.metaState.reasonText = `Утка достигла позы «${goalInfo.labelShortRu}» (выполнено: ${this.metaState.rightingSuccesses}) и продолжает поиск`;
       }
       return;
     }
@@ -1984,9 +2211,8 @@ export class PPOTrainer {
 
     // Handle Self-Righting / Low-CoM Learning step:
     if (this._pendingStep.isRightingStep) {
-      const targetCom0 = this.metaState.targetCompetence || 0.255;
       const canCompleteNow = isDuck0
-        ? ((this.duckComHoldSteps || 0) >= 8 && comY0 >= targetCom0)
+        ? ((this.duckComHoldSteps || 0) >= 8)
         : (upY0 >= 0.65 && !c0.hasInvertedLeg());
       if (this.wasOverturned && canCompleteNow) {
         this._completeRightingRecovery(comY0);
@@ -2804,6 +3030,21 @@ export class NESTrainer {
     }
   }
 
+  setDuckPoseGoal(goalKey) {
+    if (this.brain.morphologyKey !== 'duck') return;
+    this.manualFreeze = false;
+    const info = this.brain.setDuckPoseGoal(goalKey);
+    this.metaState.poseGoalKey = info.key;
+    this.duckComHoldSteps = 0;
+    this.wasOverturned = false;
+    this.overturnConfirmSteps = 0;
+    this.metaState.mode = 'LEARNING_RIGHTING';
+    this.metaState.isLearningActive = true;
+    this.metaState.needToLearnPct = 100;
+    this.metaState.modeTitle = `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${info.labelRu}»`;
+    this.metaState.reasonText = `Задана новая целевая поза «${info.labelShortRu}» — ГА №1 ищет цепочку поз, ГА №2 подбирает команды сервоприводов`;
+  }
+
   toggleManualFreeze() {
     if (this.metaState.mode === 'CONSOLIDATED') {
       this.manualFreeze = false;
@@ -2861,11 +3102,27 @@ export class NESTrainer {
     const upY0 = c0.getTorsoFrame().up.y;
     const comY0 = c0.body.getCenterOfMass().y;
     const topY0 = c0.torsoTop ? c0.torsoTop.pos.y : comY0;
+    const targetCom0 = this.metaState.targetCompetence || 0.235;
+
+    let inDuckGoalPose = false;
+    if (isDuck0) {
+      if (this.brain.poseGoalKey === 'stand') {
+        inDuckGoalPose =
+          comY0 >= targetCom0 &&
+          upY0 >= 0.70 &&
+          (!c0.torsoTop || !c0.torsoBottom || c0.torsoTop.pos.y > c0.torsoBottom.pos.y + 0.14);
+      } else {
+        inDuckGoalPose = this.brain.isDuckInGoalPose(c0, comY0);
+      }
+    }
+
     const isPhysicallyTiltedOnBack =
       !c0.isGrabbed &&
       !(c0.postThrowTimer > 0) &&
       (isDuck0
-        ? (((comY0 < (this.alwaysLearn ? (this.metaState.relearnThreshold || 0.238) : 0.205)) || upY0 < 0.45) && !this.manualFreeze)
+        ? (this.brain.poseGoalKey === 'stand'
+            ? (((comY0 < (this.alwaysLearn ? (this.metaState.relearnThreshold || 0.238) : 0.205)) || upY0 < 0.45) && !this.manualFreeze)
+            : (!inDuckGoalPose && !this.manualFreeze))
         : (upY0 < 0.22));
     const confirmDelay = isDuck0 ? 1 : 24;
 
@@ -2887,10 +3144,8 @@ export class NESTrainer {
     }
 
     this.uprightHoldSteps = 0;
-    const targetCom0 = this.metaState.targetCompetence || 0.255;
     if (isDuck0) {
-      const isTrueHighCom = comY0 >= targetCom0 && (!c0.torsoTop || !c0.torsoBottom || c0.torsoTop.pos.y > c0.torsoBottom.pos.y + 0.15);
-      this.duckComHoldSteps = isTrueHighCom ? (this.duckComHoldSteps || 0) + 1 : 0;
+      this.duckComHoldSteps = inDuckGoalPose ? (this.duckComHoldSteps || 0) + 1 : 0;
     }
     const isRecoveredUpright = isDuck0
       ? (this.duckComHoldSteps >= 8)
@@ -2923,13 +3178,17 @@ export class NESTrainer {
           this.brain._initPoseGAPopulation(this.brain.extractDuckPose6D(c0.getObservation(), comY0));
         }
       }
+      const goalInfo = isDuck0 ? this.brain.getDuckPoseGoalInfo() : null;
+      if (goalInfo) {
+        this.metaState.poseGoalKey = goalInfo.key;
+      }
       this.metaState.mode = 'LEARNING_RIGHTING';
       this.metaState.isLearningActive = true;
       this.metaState.needToLearnPct = 100;
       this.metaState.rightingAttempts = this.brain.rightingAttempts + 1;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       this.metaState.modeTitle = isDuck0
-        ? '🧬 ДВУХУРОВНЕВЫЙ ГА: ЯЗЫК ПОЗ (ГА №1 Поз + ГА №2 Серво)'
+        ? `🧬 ДВУХУРОВНЕВЫЙ ГА: ЦЕЛЬ «${goalInfo.labelRu}»`
         : '🔄 ПОПЫТКА ПОДНЯТЬСЯ: УЧИТСЯ ВСТАВАТЬ НА НОГИ';
 
       const obs = c0.getObservation();
@@ -2945,7 +3204,7 @@ export class NESTrainer {
 
       if (isDuck0) {
         const cand = this.brain.getCurrentDuckGACandidate();
-        this.metaState.reasonText = `ГА1 Поза #${cand.poseGen}.${cand.poseIdx} (${cand.poseOrigin}, к цели ${cand.curGoalPct}%) | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех. | ЦМ=${comY0.toFixed(3)} м`;
+        this.metaState.reasonText = `Цель: «${goalInfo.labelShortRu}» (${cand.curGoalPct}%) | ГА1 Поза #${cand.poseGen}.${cand.poseIdx} (${cand.poseOrigin}) | ГА2 Вектор #${cand.idx}/${cand.popSize} (${cand.origin}) | память: ${cand.memSize} перех.`;
       } else {
         this.metaState.reasonText = `Корпус перевёрнут/наклонён (up.y=${upY0.toFixed(2)}): память ходьбы защищена — попытка подняться #${this.metaState.rightingAttempts}`;
       }
@@ -2967,12 +3226,18 @@ export class NESTrainer {
       this.metaState.rightingSuccesses = this.brain.rightingSuccesses;
       this.metaState.rightingSkillPct = this.brain.getRightingSkillPct();
       if (isDuck0 && !this.alwaysLearn) {
+        const goalInfo = this.brain.getDuckPoseGoalInfo();
+        this.metaState.poseGoalKey = goalInfo.key;
+        const cand = this.brain.getCurrentDuckGACandidate();
+        if (cand && cand.vec) {
+          this.brain.rememberGoalHoldVector(goalInfo.key, cand.vec);
+        }
         this.metaState.mode = 'CONSOLIDATED';
         this.metaState.isLearningActive = false;
         this.metaState.needToLearnPct = 0;
         this.metaState.competenceEMA = Number(Math.max(this.metaState.competenceEMA, comY0).toFixed(3));
-        this.metaState.modeTitle = '🛡️ ЗАДАЧА ВЫПОЛНЕНА: ВЫСОТА ЦМ УДЕРЖИВАЕТСЯ';
-        this.metaState.reasonText = `Утка подняла центр масс выше ${targetCom0.toFixed(2)} м — обучение остановлено`;
+        this.metaState.modeTitle = `🛡️ ПОЗА ДОСТИГНУТА: УТКА УДЕРЖИВАЕТ «${goalInfo.labelRu}»`;
+        this.metaState.reasonText = `Утка перешла в целевую позу «${goalInfo.labelShortRu}» — обучение остановлено`;
       } else {
         this.metaState.mode = this.modeBeforeOverturn || 'LEARNING_WALK';
         this.metaState.isLearningActive = this.metaState.mode === 'LEARNING_WALK';

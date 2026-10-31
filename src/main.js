@@ -155,8 +155,23 @@ const ambitionButtons = document.getElementById('ambitionButtons');
 const rangeAmbition = document.getElementById('rangeAmbition');
 const labelAmbitionVal = document.getElementById('labelAmbitionVal');
 const btnToggleFreeze = document.getElementById('btnToggleFreeze');
+const duckPoseGoalField = document.getElementById('duckPoseGoalField');
+const duckPoseGoalButtons = document.getElementById('duckPoseGoalButtons');
 
 let currentAmbitionPreset = 'min';
+let currentDuckPoseGoal = 'stand';
+
+function syncDuckPoseGoalUI(morphKey, poseGoalKey = currentDuckPoseGoal) {
+  currentDuckPoseGoal = poseGoalKey || 'stand';
+  if (duckPoseGoalField) {
+    duckPoseGoalField.hidden = morphKey !== 'duck';
+  }
+  if (duckPoseGoalButtons) {
+    for (const b of duckPoseGoalButtons.querySelectorAll('button[data-pose-goal]')) {
+      b.classList.toggle('active', b.dataset.poseGoal === currentDuckPoseGoal);
+    }
+  }
+}
 
 function formatAmbitionLabel(val, preset) {
   const t = getT();
@@ -380,6 +395,8 @@ function applyRestoredUIState(ckpt) {
       }
     }
   }
+  const restoredPoseGoal = (ckpt.brain && ckpt.brain.poseGoalKey) || (m && m.poseGoalKey) || 'stand';
+  syncDuckPoseGoalUI(selectMorphology.value, restoredPoseGoal);
 }
 
 async function startNewExperiment({ clearSaved = false, resetDefaults = clearSaved } = {}) {
@@ -392,6 +409,7 @@ async function startNewExperiment({ clearSaved = false, resetDefaults = clearSav
   }
   if (resetDefaults) {
     currentAmbitionPreset = 'min';
+    currentDuckPoseGoal = 'stand';
     if (rangeAmbition) {
       rangeAmbition.value = '0.18';
     }
@@ -414,6 +432,7 @@ async function startNewExperiment({ clearSaved = false, resetDefaults = clearSav
     }
   }
   const morphologyKey = selectMorphology.value;
+  syncDuckPoseGoalUI(morphologyKey, currentDuckPoseGoal);
   const actuatorMode = 'servo';
   const algorithm = selectAlgorithm.value;
   const floorFriction = parseFloat(rangeFriction.value);
@@ -436,6 +455,9 @@ async function startNewExperiment({ clearSaved = false, resetDefaults = clearSav
     } else {
       sim.trainer.setLearningAmbition(currentAmbitionPreset);
     }
+  }
+  if (morphologyKey === 'duck' && currentDuckPoseGoal !== 'stand') {
+    sim.setDuckPoseGoal(currentDuckPoseGoal);
   }
   renderer3D.lockedFoodPos.set(NaN, NaN, NaN);
 
@@ -523,7 +545,8 @@ function getUIState() {
     followLeader: chkFollowLeader.checked,
     morphology: selectMorphology.value,
     actuatorMode: 'servo',
-    algorithm: selectAlgorithm.value
+    algorithm: selectAlgorithm.value,
+    duckPoseGoal: currentDuckPoseGoal
   };
 }
 
@@ -914,6 +937,24 @@ chkFollowLeader.addEventListener('change', () => {
   }
   logger.recordUserEvent('toggle_follow_camera', { followLeader: chkFollowLeader.checked }, sim, renderer3D, getUIState());
 });
+
+if (duckPoseGoalButtons) {
+  duckPoseGoalButtons.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-pose-goal]');
+    if (!btn) return;
+    const goalKey = btn.dataset.poseGoal;
+    syncDuckPoseGoalUI(selectMorphology.value, goalKey);
+    if (sim && typeof sim.setDuckPoseGoal === 'function') {
+      sim.setDuckPoseGoal(goalKey);
+    }
+    if (paused) {
+      setPausedState(false, 'duck_pose_goal_auto_resume');
+    }
+    saveCreatureCheckpoint();
+    logger.recordUserEvent('set_duck_pose_goal', { poseGoalKey: goalKey }, sim, renderer3D, getUIState());
+    updateHUD();
+  });
+}
 
 if (ambitionButtons) {
   ambitionButtons.addEventListener('click', e => {

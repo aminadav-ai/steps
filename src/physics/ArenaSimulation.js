@@ -912,9 +912,32 @@ export class ArenaSimulation {
       },
       c0FoodEvents: this.c0FoodEvents,
       c0OverturnEvents: this.c0OverturnEvents,
+      duckPoseGA: this.morphologyKey === 'duck' && this.brain ? {
+        poseGoalKey: this.brain.poseGoalKey || 'stand',
+        poseGoal: this.brain.poseGoal ? Array.from(this.brain.poseGoal) : null,
+        poseCurrent: this.brain.poseCurrent ? Array.from(this.brain.poseCurrent) : null,
+        poseGen: this.brain.poseGen || 1,
+        gaGeneration: this.brain.gaGeneration || 1,
+        poseTransitionMemoryCount: this.brain.poseTransitionMemory ? this.brain.poseTransitionMemory.size : 0,
+        poseUnreachableMemoryCount: this.brain.poseUnreachableMemory ? this.brain.poseUnreachableMemory.size : 0,
+        poseTransitions: this.brain.poseTransitionMemory
+          ? Array.from(this.brain.poseTransitionMemory.values()).slice(0, 20).map(t => ({
+              fromKey: t.fromKey,
+              toKey: t.toKey,
+              goalPct: t.goalPct,
+              maxComY: t.maxComY
+            }))
+          : []
+      } : null,
       rightingHistory: this.trainer.rightingHistory ? this.trainer.rightingHistory.slice(-60) : [],
       recentTrajectory: this.c0Trajectory.slice(-120)
     };
+  }
+
+  setDuckPoseGoal(goalKey) {
+    if (this.trainer && typeof this.trainer.setDuckPoseGoal === 'function') {
+      this.trainer.setDuckPoseGoal(goalKey);
+    }
   }
 
   /**
